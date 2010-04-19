@@ -438,7 +438,7 @@ UInt32 AgereET131x::outputPacket(mbuf_t m, void * param)
 		 packet under Linux; if we just send an error up to the netif
 		 layer, it will resend the skb to us.
          *********************************************************************/
-        IOLog("TCB Resources Not Available\n" );
+       // IOLog("TCB Resources Not Available\n" );
 		freePacket(m);
 		netStats->outputErrors += 1;
 		return kIOReturnOutputDropped;

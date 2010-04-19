@@ -931,7 +931,7 @@ bool ViaVelocity::_phySetMedium(mediumType_t medium)
 		}
 	}
 	int stat = velocity_set_media_mode(&velocity.hw, velocity.hw.sOpts.spd_dpx);
-	return (stat == 0);
+	return stat == VELOCITY_LINK_CHANGE;
 }
 
 //---------------------------------------------------------------------------
@@ -1098,8 +1098,8 @@ IOWorkLoop * ViaVelocity::getWorkLoop() const
 
 IOReturn ViaVelocity::selectMedium(const IONetworkMedium * medium)
 {
-	bool  r;
 	
+	//IOLog("%s::%s(%p)\n",getName(),__FUNCTION__,medium);
 	if ( OSDynamicCast(IONetworkMedium, medium) == 0 )
 	{
 		// Defaults to Auto.
@@ -1109,14 +1109,15 @@ IOReturn ViaVelocity::selectMedium(const IONetworkMedium * medium)
 	
 	// Program PHY to select the desired medium.
 	//
-	r = _phySetMedium( (mediumType_t) medium->getIndex() );
+	_phySetMedium( (mediumType_t) medium->getIndex() );
 	
 	// Update the current medium property.
 	//
-	if ( r && !setSelectedMedium(medium) )
-		IOLog("%s: setCurrentMedium error\n", getName());
-	
-	return ( r ? kIOReturnSuccess : kIOReturnIOError );
+	if (  !setSelectedMedium(medium) ){
+		IOLog("%s::%s error\n", getName(), __FUNCTION__);
+		return kIOReturnIOError;
+	}
+	return kIOReturnSuccess;
 }
 
 
