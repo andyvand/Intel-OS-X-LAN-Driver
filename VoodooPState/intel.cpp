@@ -184,6 +184,8 @@ bool intel_probe(VoodooPState* vp)
 			vp->IndividualCoreControl = true;
 			vp->ConstantTSC = true;
 			vp->MobileCpu = (rdmsr64(MSR_IA32_PLATFORM_ID) & (1 << 28));
+			// it's safe not to support.
+			return false;
 			break;
 
 		case IntelCore:

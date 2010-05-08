@@ -90,6 +90,7 @@ typedef struct {
 	UInt32 plllock; /* pll lock time, units 1 us */
 } K8_ACPI_DATA;
 static K8_ACPI_DATA k8_data;
+static UInt32 pStateOffset;
 
 static int find_psb_table(PStateClass*);
 static int find_acpi_pss_table(PStateClass*);
@@ -134,6 +135,13 @@ inline UInt32 AMDGetK10Voltage(UInt8 vid) {
 	return (3100 - (vid * 25)) >> 1;
 }
 
+
+static UInt64 readIOConfig(UInt32 bus, UInt32 func, UInt32 reg )
+{
+	// Thermal read (F3xA4[21:31] + ?)/8
+	outl(CONF_ADR_REG, 0x80000000 | (bus << 11) | (func << 8) | reg);
+	return inl(CONF_DATA_REG);
+}
 
 // if ml_phys_read_byte does not fail to link...
 #define	USE_PSB	0
@@ -220,12 +228,14 @@ bool amd_probe(VoodooPState* vp)
 			vp->CpuCoreTech = AMDK10;
 			vp->VoodooFrequencyProc = AmdK10FrequencyProc;
 		}
+		pStateOffset = (rdmsr64(MSR_AMD_COFVID_STS) >> 32) & 0x07;
 		// Create P-States
 		vp->PStateCount = ((rdmsr64(MSR_AMD_PSTATE_LIMIT) >> 4) & 0x7) + 1;
 		for (UInt8 i = 0; i < vp->PStateCount; i++) {
-			vp->PState[i].fid = (rdmsr64(MSR_AMD_PSTATE_BASE + i)) & HW_PSTATE_FID_MASK;
-			vp->PState[i].did = (rdmsr64(MSR_AMD_PSTATE_BASE + i) >> HW_PSTATE_DID_SHIFT) & (HW_PSTATE_DID_MASK>>HW_PSTATE_DID_SHIFT);
-			vp->PState[i].vid = (rdmsr64(MSR_AMD_PSTATE_BASE + i) >> HW_PSTATE_VID_SHIFT) & (HW_PSTATE_VID_MASK>>HW_PSTATE_VID_SHIFT);
+			UInt64 val64 = rdmsr64(MSR_AMD_PSTATE_BASE + pStateOffset + i);
+			vp->PState[i].fid = (val64) & HW_PSTATE_FID_MASK;
+			vp->PState[i].did = (val64 >> HW_PSTATE_DID_SHIFT) & (HW_PSTATE_DID_MASK>>HW_PSTATE_DID_SHIFT);
+			vp->PState[i].vid = (val64 >> HW_PSTATE_VID_SHIFT) & (HW_PSTATE_VID_MASK>>HW_PSTATE_VID_SHIFT);
 			vp->PState[i].cid = i;
 		}
 	}
@@ -458,9 +468,7 @@ void AmdK8Read(void* magic)
 	GlobalCurrent.fid = lo & MSR_S_LO_CURRENT_FID;
 	GlobalCurrent.vid = hi & MSR_S_HI_CURRENT_VID;
 	// Thermal read F3xE4[14:23]/4 - 49 : revision F/G only
-	outl(CONF_ADR_REG, 0x80000000 | (24 << 11) | (3 << 8) | 0xe4);
-	// outl(CONF_DATA_REG,(i<<2)); // if sensor1, use |(1<<6)
-	UInt32 val = inl(CONF_DATA_REG);
+	UInt32 val = readIOConfig(24,3,0xe4);
 	vp->Thermal = ((val >> 16) & 0xff) - 49; // ignore 0.25
 }
 
@@ -485,8 +493,7 @@ static void AmdK10Read(void* magic)
 	GlobalCurrent.vid = (msr >> HW_PSTATE_VID_SHIFT) & (HW_PSTATE_VID_MASK>>HW_PSTATE_VID_SHIFT);
 	
 	// Thermal read (F3xA4[21:31] + ?)/8
-	outl(CONF_ADR_REG, 0x80000000 | (24 << 11) | (3 << 8) | 0xa4);
-	UInt32 curTmp = (inl(CONF_DATA_REG) >> 21) & 0x7ff;
+	UInt32 curTmp = readIOConfig(24,3,0xa4)  >> 21;
 	curTmp /= 8;	// 0.125 c/t
 	vp->Thermal = curTmp;
 }
