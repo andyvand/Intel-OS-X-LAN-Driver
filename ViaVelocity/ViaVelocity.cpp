@@ -1751,6 +1751,18 @@ void ViaVelocity::timeoutOccurred( IOTimerEventSource * /*timer*/ )
 			setLinkStatus( kIONetworkLinkValid | kIONetworkLinkActive, getCurrentMedium(), speed );
 		}
 	}
+	if (!netif_running()){
+		if(velocity.hw.mii_status & VELOCITY_LINK_FAIL){
+			IOLog("%s::%s tx stopped for VELOCITY_LINK_FAIL",getName(),__FUNCTION__);
+		} else {
+			int n = AVAIL_TD(&velocity.hw, 0);
+			IOLog("%s::%s AVAIL_TD(%d)\n",getName(),__FUNCTION__,n);
+			if (n >= 1 ) {
+				netif_start_queue();
+			}
+		}
+    }
+	
 }
 
 void ViaVelocity::timeoutHandler( OSObject * target, IOTimerEventSource * src )
