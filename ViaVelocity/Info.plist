@@ -21,7 +21,7 @@
 	<key>CFBundleVersion</key>
 	<string>1.0.0</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.0a</string>
+	<string>1.0.0b</string>
 	<key>IOKitPersonalities</key>
 	<dict>
 		<key>ViaVelocity</key>
