@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2009 Intel Corporation.
+  Copyright(c) 1999 - 2010 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -53,7 +53,7 @@
 #define E1000_IAM      0x000E0  /* Interrupt Acknowledge Auto Mask */
 #define E1000_IVAR     0x000E4  /* Interrupt Vector Allocation Register - RW */
 #define E1000_SVCR     0x000F0
-#define E1000_SVT       0x000F4
+#define E1000_SVT      0x000F4
 #define E1000_RCTL     0x00100  /* Rx Control - RW */
 #define E1000_FCTTV    0x00170  /* Flow Control Transmit Timer Value - RW */
 #define E1000_TXCW     0x00178  /* Tx Configuration Word - RW */
@@ -292,6 +292,7 @@
 #define E1000_KMRNCTRLSTA 0x00034 /* MAC-PHY interface - RW */
 #define E1000_MDPHYA      0x0003C /* PHY address - RW */
 #define E1000_MANC2H      0x05860 /* Management Control To Host - RW */
+#define E1000_MDEF(_n)    (0x05890 + (4 * (_n))) /* Mngmt Decision Filters */
 #define E1000_SW_FW_SYNC  0x05B5C /* Software-Firmware Synchronization - RW */
 #define E1000_CCMCTL      0x05B48 /* CCM Control Register */
 #define E1000_GIOCTL      0x05B44 /* GIO Analog Control Register */

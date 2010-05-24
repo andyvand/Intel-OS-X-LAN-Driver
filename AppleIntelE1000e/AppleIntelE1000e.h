@@ -133,6 +133,7 @@ private:
 	bool suspend;
 	
 	struct e1000_adapter adapter;
+	struct pci_dev priv_pdev;
 	
 	struct e1000_ring rx_ring;
 	struct e1000_ring tx_ring;
@@ -152,7 +153,7 @@ private:
 	void e1000_free_tx_resources();
 	void e1000_clean_tx_ring();
 	void e1000e_reset();
-	bool e1000_has_link();
+	bool e1000e_has_link();
 	void e1000e_enable_receives();
 	bool e1000_clean_tx_irq();
 	bool e1000_clean_rx_irq();
@@ -160,7 +161,7 @@ private:
 	int  e1000_desc_unused(struct e1000_ring *ring);
 	void e1000_configure_rx();
 	void e1000_setup_rctl();
-	void e1000_init_manageability();
+	void e1000_init_manageability_pt();
 	void e1000_configure_tx();
 	void e1000_set_multi();
 	bool e1000_tx_csum(mbuf_t skb);

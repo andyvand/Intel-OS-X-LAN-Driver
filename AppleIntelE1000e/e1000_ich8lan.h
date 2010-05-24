@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2009 Intel Corporation.
+  Copyright(c) 1999 - 2010 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -157,6 +157,13 @@
 
 #define LCD_CFG_PHY_ADDR_BIT   0x0020 /* Phy address bit from LCD Config word */
 
+/* KMRN Mode Control */
+#define HV_KMRN_MODE_CTRL	PHY_REG(769, 16)
+#define HV_KMRN_MDIO_SLOW	0x0400
+
+/* PHY Power Management Control */
+#define HV_PM_CTRL		PHY_REG(770, 17)
+
 #define SW_FLAG_TIMEOUT    1000 /* SW Semaphore flag timeout in milliseconds */
 
 /*
@@ -181,7 +188,6 @@
 #define E1000_RXDEXT_LINKSEC_ERROR_NO_SA_MATCH  0x20000000
 #define E1000_RXDEXT_LINKSEC_ERROR_REPLAY_ERROR 0x40000000
 #define E1000_RXDEXT_LINKSEC_ERROR_BAD_SIG      0x60000000
-
 
 void e1000e_set_kmrn_lock_loss_workaround_ich8lan(struct e1000_hw *hw,
                                                  bool state);

@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2009 Intel Corporation.
+  Copyright(c) 1999 - 2010 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -109,32 +109,9 @@ s32 e1000e_get_phy_id(struct e1000_hw *hw)
 		if (phy->id != 0 && phy->id != PHY_REVISION_MASK)
 			goto out;
 
-		/*
-		 * If the PHY ID is still unknown, we may have an 82577
-		 * without link.  We will try again after setting Slow MDIC
-		 * mode. No harm in trying again in this case since the PHY
-		 * ID is unknown at this point anyway.
-		 */
-		ret_val = phy->ops.acquire(hw);
-		if (ret_val)
-			goto out;
-		ret_val = e1000_set_mdio_slow_mode_hv(hw, true);
-		if (ret_val)
-			goto out;
-		phy->ops.release(hw);
-
 		retry_count++;
 	}
 out:
-	/* Revert to MDIO fast mode, if applicable */
-	if (retry_count) {
-		ret_val = phy->ops.acquire(hw);
-		if (ret_val)
-			return ret_val;
-		ret_val = e1000_set_mdio_slow_mode_hv(hw, false);
-		phy->ops.release(hw);
-	}
-
 	return ret_val;
 }
 
@@ -147,9 +124,6 @@ out:
 s32 e1000e_phy_reset_dsp(struct e1000_hw *hw)
 {
 	s32 ret_val = E1000_SUCCESS;
-
-	if (!(hw->phy.ops.write_reg))
-		goto out;
 
 	ret_val = e1e_wphy(hw, M88E1000_PHY_GEN_CONTROL, 0xC1);
 	if (ret_val)
@@ -175,6 +149,11 @@ s32 e1000e_read_phy_reg_mdic(struct e1000_hw *hw, u32 offset, u16 *data)
 	struct e1000_phy_info *phy = &hw->phy;
 	u32 i, mdic = 0;
 	s32 ret_val = E1000_SUCCESS;
+
+	if (offset > MAX_PHY_REG_ADDRESS) {
+		e_dbg("PHY Address %d is out of range\n", offset);
+		return -E1000_ERR_PARAM;
+	}
 
 	/*
 	 * Set up Op-code, Phy Address, and register offset in the MDI
@@ -228,6 +207,11 @@ s32 e1000e_write_phy_reg_mdic(struct e1000_hw *hw, u32 offset, u16 data)
 	u32 i, mdic = 0;
 	s32 ret_val = E1000_SUCCESS;
 
+	if (offset > MAX_PHY_REG_ADDRESS) {
+		e_dbg("PHY Address %d is out of range\n", offset);
+		return -E1000_ERR_PARAM;
+	}
+
 	/*
 	 * Set up Op-code, Phy Address, and register offset in the MDI
 	 * Control register.  The MAC will take care of interfacing with the
@@ -280,9 +264,6 @@ s32 e1000e_read_phy_reg_m88(struct e1000_hw *hw, u32 offset, u16 *data)
 {
 	s32 ret_val = E1000_SUCCESS;
 
-	if (!(hw->phy.ops.acquire))
-		goto out;
-
 	ret_val = hw->phy.ops.acquire(hw);
 	if (ret_val)
 		goto out;
@@ -308,9 +289,6 @@ out:
 s32 e1000e_write_phy_reg_m88(struct e1000_hw *hw, u32 offset, u16 data)
 {
 	s32 ret_val = E1000_SUCCESS;
-
-	if (!(hw->phy.ops.acquire))
-		goto out;
 
 	ret_val = hw->phy.ops.acquire(hw);
 	if (ret_val)
@@ -367,6 +345,7 @@ release:
 out:
 	return ret_val;
 }
+
 /**
  *  e1000e_read_phy_reg_igp - Read igp PHY register
  *  @hw: pointer to the HW structure
@@ -614,14 +593,8 @@ s32 e1000e_write_kmrn_reg_locked(struct e1000_hw *hw, u32 offset, u16 data)
  **/
 s32 e1000_copper_link_setup_82577(struct e1000_hw *hw)
 {
-	struct e1000_phy_info *phy = &hw->phy;
 	s32 ret_val;
 	u16 phy_data;
-
-	if (phy->reset_disable) {
-		ret_val = E1000_SUCCESS;
-		goto out;
-	}
 
 	/* Enable CRS on TX. This must be set for half-duplex operation. */
 	ret_val = e1e_rphy(hw, I82577_CFG_REG, &phy_data);
@@ -652,12 +625,7 @@ s32 e1000e_copper_link_setup_m88(struct e1000_hw *hw)
 	s32 ret_val;
 	u16 phy_data;
 
-	if (phy->reset_disable) {
-		ret_val = E1000_SUCCESS;
-		goto out;
-	}
-
-	/* Enable CRS on TX. This must be set for half-duplex operation. */
+	/* Enable CRS on Tx. This must be set for half-duplex operation. */
 	ret_val = e1e_rphy(hw, M88E1000_PHY_SPEC_CTRL, &phy_data);
 	if (ret_val)
 		goto out;
@@ -794,11 +762,6 @@ s32 e1000e_copper_link_setup_igp(struct e1000_hw *hw)
 	s32 ret_val;
 	u16 data;
 
-	if (phy->reset_disable) {
-		ret_val = E1000_SUCCESS;
-		goto out;
-	}
-
 	ret_val = e1000_phy_hw_reset(hw);
 	if (ret_val) {
 		e_dbg("Error resetting the PHY.\n");
@@ -810,19 +773,6 @@ s32 e1000e_copper_link_setup_igp(struct e1000_hw *hw)
 	 * timeout issues when LFS is enabled.
 	 */
 	msleep(100);
-
-	/*
-	 * The NVM settings will configure LPLU in D3 for
-	 * non-IGP1 PHYs.
-	 */
-	if (phy->type == e1000_phy_igp) {
-		/* disable lplu d3 during driver init */
-		ret_val = hw->phy.ops.set_d3_lplu_state(hw, false);
-		if (ret_val) {
-			e_dbg("Error Disabling LPLU D3\n");
-			goto out;
-		}
-	}
 
 	/* disable lplu d0 during driver init */
 	if (hw->phy.ops.set_d0_lplu_state) {
@@ -1337,18 +1287,22 @@ s32 e1000e_phy_force_speed_duplex_m88(struct e1000_hw *hw)
 			goto out;
 
 		if (!link) {
-			/*
-			 * We didn't get link.
-			 * Reset the DSP and cross our fingers.
-			 */
-			ret_val = e1e_wphy(hw,
-			                              M88E1000_PHY_PAGE_SELECT,
-			                              0x001d);
-			if (ret_val)
-				goto out;
-			ret_val = e1000e_phy_reset_dsp(hw);
-			if (ret_val)
-				goto out;
+			if (hw->phy.type != e1000_phy_m88) {
+				e_dbg("Link taking longer than expected.\n");
+			} else {
+				/*
+				 * We didn't get link.
+				 * Reset the DSP and cross our fingers.
+				 */
+				ret_val = e1e_wphy(hw,
+						M88E1000_PHY_PAGE_SELECT,
+						0x001d);
+				if (ret_val)
+					goto out;
+				ret_val = e1000e_phy_reset_dsp(hw);
+				if (ret_val)
+					goto out;
+			}
 		}
 
 		/* Try once more */
@@ -1357,6 +1311,9 @@ s32 e1000e_phy_force_speed_duplex_m88(struct e1000_hw *hw)
 		if (ret_val)
 			goto out;
 	}
+
+	if (hw->phy.type != e1000_phy_m88)
+		goto out;
 
 	ret_val = e1e_rphy(hw, M88E1000_EXT_PHY_SPEC_CTRL, &phy_data);
 	if (ret_val)
@@ -1401,11 +1358,6 @@ s32 e1000_phy_force_speed_duplex_ife(struct e1000_hw *hw)
 	s32 ret_val;
 	u16 data;
 	bool link;
-
-	if (phy->type != e1000_phy_ife) {
-		ret_val = e1000e_phy_force_speed_duplex_igp(hw);
-		goto out;
-	}
 
 	ret_val = e1e_rphy(hw, PHY_CONTROL, &data);
 	if (ret_val)
@@ -1539,9 +1491,6 @@ s32 e1000e_set_d3_lplu_state(struct e1000_hw *hw, bool active)
 	s32 ret_val = E1000_SUCCESS;
 	u16 data;
 
-	if (!(hw->phy.ops.read_reg))
-		goto out;
-
 	ret_val = e1e_rphy(hw, IGP02E1000_PHY_POWER_MGMT, &data);
 	if (ret_val)
 		goto out;
@@ -1632,7 +1581,6 @@ s32 e1000e_check_downshift(struct e1000_hw *hw)
 		mask	= M88E1000_PSSR_DOWNSHIFT;
 		break;
 	case e1000_phy_igp_2:
-	case e1000_phy_igp:
 	case e1000_phy_igp_3:
 		offset	= IGP01E1000_PHY_LINK_HEALTH;
 		mask	= IGP01E1000_PLHR_SS_DOWNGRADE;
@@ -1769,9 +1717,6 @@ s32 e1000_wait_autoneg(struct e1000_hw *hw)
 	s32 ret_val = E1000_SUCCESS;
 	u16 i, phy_status;
 
-	if (!(hw->phy.ops.read_reg))
-		return E1000_SUCCESS;
-
 	/* Break after autoneg completes or PHY_AUTO_NEG_LIMIT expires. */
 	for (i = PHY_AUTO_NEG_LIMIT; i > 0; i--) {
 		ret_val = e1e_rphy(hw, PHY_STATUS, &phy_status);
@@ -1807,9 +1752,6 @@ s32 e1000e_phy_has_link_generic(struct e1000_hw *hw, u32 iterations,
 	s32 ret_val = E1000_SUCCESS;
 	u16 i, phy_status;
 
-	if (!(hw->phy.ops.read_reg))
-		return E1000_SUCCESS;
-
 	for (i = 0; i < iterations; i++) {
 		/*
 		 * Some PHYs require the PHY_STATUS register to be read
@@ -1817,14 +1759,13 @@ s32 e1000e_phy_has_link_generic(struct e1000_hw *hw, u32 iterations,
 		 * it across the board.
 		 */
 		ret_val = e1e_rphy(hw, PHY_STATUS, &phy_status);
-		if (ret_val) {
+		if (ret_val)
 			/*
 			 * If the first read fails, another entity may have
 			 * ownership of the resources, wait and try again to
 			 * see if they have relinquished the resources yet.
 			 */
 			udelay(usec_interval);
-		}
 		ret_val = e1e_rphy(hw, PHY_STATUS, &phy_status);
 		if (ret_val)
 			break;
@@ -2097,6 +2038,61 @@ out:
 }
 
 /**
+ *  e1000_get_phy_info_ife - Retrieves various IFE PHY states
+ *  @hw: pointer to the HW structure
+ *
+ *  Populates "phy" structure with various feature states.
+ **/
+s32 e1000_get_phy_info_ife(struct e1000_hw *hw)
+{
+	struct e1000_phy_info *phy = &hw->phy;
+	s32 ret_val;
+	u16 data;
+	bool link;
+
+	ret_val = e1000e_phy_has_link_generic(hw, 1, 0, &link);
+	if (ret_val)
+		goto out;
+
+	if (!link) {
+		e_dbg("Phy info is only valid if link is up\n");
+		ret_val = -E1000_ERR_CONFIG;
+		goto out;
+	}
+
+	ret_val = e1e_rphy(hw, IFE_PHY_SPECIAL_CONTROL, &data);
+	if (ret_val)
+		goto out;
+	phy->polarity_correction = (data & IFE_PSC_AUTO_POLARITY_DISABLE)
+	                           ? false : true;
+
+	if (phy->polarity_correction) {
+		ret_val = e1000_check_polarity_ife(hw);
+		if (ret_val)
+			goto out;
+	} else {
+		/* Polarity is forced */
+		phy->cable_polarity = (data & IFE_PSC_FORCE_POLARITY)
+		                      ? e1000_rev_polarity_reversed
+		                      : e1000_rev_polarity_normal;
+	}
+
+	ret_val = e1e_rphy(hw, IFE_PHY_MDIX_CONTROL, &data);
+	if (ret_val)
+		goto out;
+
+	phy->is_mdix = (data & IFE_PMC_MDIX_STATUS) ? true : false;
+
+	/* The following parameters are undefined for 10/100 operation. */
+	phy->cable_length = E1000_CABLE_LENGTH_UNDEFINED;
+	phy->local_rx = e1000_1000t_rx_status_undefined;
+	phy->remote_rx = e1000_1000t_rx_status_undefined;
+
+out:
+	return ret_val;
+}
+
+/**
  *  e1000e_phy_sw_reset - PHY software reset
  *  @hw: pointer to the HW structure
  *
@@ -2107,9 +2103,6 @@ s32 e1000e_phy_sw_reset(struct e1000_hw *hw)
 {
 	s32 ret_val = E1000_SUCCESS;
 	u16 phy_ctrl;
-
-	if (!(hw->phy.ops.read_reg))
-		goto out;
 
 	ret_val = e1e_rphy(hw, PHY_CONTROL, &phy_ctrl);
 	if (ret_val)
@@ -2185,12 +2178,12 @@ s32 e1000e_get_cfg_done(struct e1000_hw *hw)
 }
 
 /**
- *  e1000_phy_init_script_igp3 - Inits the IGP3 PHY
+ *  e1000e_phy_init_script_igp3 - Inits the IGP3 PHY
  *  @hw: pointer to the HW structure
  *
  *  Initializes a Intel Gigabit PHY3 when an EEPROM is not present.
  **/
-s32 e1000_phy_init_script_igp3(struct e1000_hw *hw)
+s32 e1000e_phy_init_script_igp3(struct e1000_hw *hw)
 {
 	e_dbg("Running IGP 3 PHY init script\n");
 
@@ -2279,7 +2272,7 @@ enum e1000_phy_type e1000e_get_phy_type_from_id(u32 phy_id)
 {
 	enum e1000_phy_type phy_type = e1000_phy_unknown;
 
-	switch (phy_id)	{
+	switch (phy_id) {
 	case M88E1000_I_PHY_ID:
 	case M88E1000_E_PHY_ID:
 	case M88E1111_I_PHY_ID:
@@ -2580,7 +2573,6 @@ out:
 	return ret_val;
 }
 
-
 /**
  *  e1000_access_phy_wakeup_reg_bm - Read BM PHY wakeup register
  *  @hw: pointer to the HW structure
@@ -2724,38 +2716,6 @@ void e1000_power_down_phy_copper(struct e1000_hw *hw)
 }
 
 /**
- *  e1000_set_mdio_slow_mode_hv - Set slow MDIO access mode
- *  @hw:   pointer to the HW structure
- *  @slow: true for slow mode, false for normal mode
- *
- *  Assumes semaphore already acquired.
- **/
-s32 e1000_set_mdio_slow_mode_hv(struct e1000_hw *hw, bool slow)
-{
-	s32 ret_val = E1000_SUCCESS;
-	u16 data = 0;
-
-	/* Set MDIO mode - page 769, register 16: 0x2580==slow, 0x2180==fast */
-	hw->phy.addr = 1;
-	ret_val = e1000e_write_phy_reg_mdic(hw, IGP01E1000_PHY_PAGE_SELECT,
-				         (BM_PORT_CTRL_PAGE << IGP_PAGE_SHIFT));
-	if (ret_val)
-		goto out;
-
-	ret_val = e1000e_write_phy_reg_mdic(hw, BM_CS_CTRL1,
-	                                   (0x2180 | (slow << 10)));
-	if (ret_val)
-		goto out;
-
-	/* dummy read when reverting to fast mode - throw away result */
-	if (!slow)
-		ret_val = e1000e_read_phy_reg_mdic(hw, BM_CS_CTRL1, &data);
-
-out:
-	return ret_val;
-}
-
-/**
  *  __e1000_read_phy_reg_hv -  Read HV PHY register
  *  @hw: pointer to the HW structure
  *  @offset: register offset to be read
@@ -2772,22 +2732,11 @@ static s32 __e1000_read_phy_reg_hv(struct e1000_hw *hw, u32 offset, u16 *data,
 	s32 ret_val;
 	u16 page = BM_PHY_REG_PAGE(offset);
 	u16 reg = BM_PHY_REG_NUM(offset);
-	bool in_slow_mode = false;
 
 	if (!locked) {
 		ret_val = hw->phy.ops.acquire(hw);
 		if (ret_val)
 			return ret_val;
-	}
-
-	/* Workaround failure in MDIO access while cable is disconnected */
-	if ((hw->phy.type == e1000_phy_82577) &&
-	    !(er32(STATUS) & E1000_STATUS_LU)) {
-		ret_val = e1000_set_mdio_slow_mode_hv(hw, true);
-		if (ret_val)
-			goto out;
-
-		in_slow_mode = true;
 	}
 
 	/* Page 800 works differently than the rest so it has its own func */
@@ -2826,10 +2775,6 @@ static s32 __e1000_read_phy_reg_hv(struct e1000_hw *hw, u32 offset, u16 *data,
 	ret_val = e1000e_read_phy_reg_mdic(hw, MAX_PHY_REG_ADDRESS & reg,
 	                                  data);
 out:
-	/* Revert to MDIO fast mode, if applicable */
-	if ((hw->phy.type == e1000_phy_82577) && in_slow_mode)
-		ret_val |= e1000_set_mdio_slow_mode_hv(hw, false);
-
 	if (!locked)
 		hw->phy.ops.release(hw);
 
@@ -2881,22 +2826,11 @@ static s32 __e1000_write_phy_reg_hv(struct e1000_hw *hw, u32 offset, u16 data,
 	s32 ret_val;
 	u16 page = BM_PHY_REG_PAGE(offset);
 	u16 reg = BM_PHY_REG_NUM(offset);
-	bool in_slow_mode = false;
 
 	if (!locked) {
 		ret_val = hw->phy.ops.acquire(hw);
 		if (ret_val)
 			return ret_val;
-	}
-
-	/* Workaround failure in MDIO access while cable is disconnected */
-	if ((hw->phy.type == e1000_phy_82577) &&
-	    !(er32(STATUS) & E1000_STATUS_LU)) {
-		ret_val = e1000_set_mdio_slow_mode_hv(hw, true);
-		if (ret_val)
-			goto out;
-
-		in_slow_mode = true;
 	}
 
 	/* Page 800 works differently than the rest so it has its own func */
@@ -2952,10 +2886,6 @@ static s32 __e1000_write_phy_reg_hv(struct e1000_hw *hw, u32 offset, u16 data,
 	                                  data);
 
 out:
-	/* Revert to MDIO fast mode, if applicable */
-	if ((hw->phy.type == e1000_phy_82577) && in_slow_mode)
-		ret_val |= e1000_set_mdio_slow_mode_hv(hw, false);
-
 	if (!locked)
 		hw->phy.ops.release(hw);
 
@@ -3075,7 +3005,7 @@ s32 e1000_link_stall_workaround_hv(struct e1000_hw *hw)
 	e1e_rphy(hw, PHY_CONTROL, &data);
 	if (data & PHY_CONTROL_LB)
 		goto out;
-		
+
 	/* check if link is up and at 1Gbps */
 	ret_val = e1e_rphy(hw, BM_CS_STATUS, &data);
 	if (ret_val)
@@ -3134,9 +3064,7 @@ s32 e1000_check_polarity_82577(struct e1000_hw *hw)
  *  e1000_phy_force_speed_duplex_82577 - Force speed/duplex for I82577 PHY
  *  @hw: pointer to the HW structure
  *
- *  Calls the PHY setup function to force speed and duplex.  Clears the
- *  auto-crossover to force MDI manually.  Waits for link and returns
- *  successful if link up is successful, else -E1000_ERR_PHY (-2).
+ *  Calls the PHY setup function to force speed and duplex.
  **/
 s32 e1000_phy_force_speed_duplex_82577(struct e1000_hw *hw)
 {
@@ -3154,23 +3082,6 @@ s32 e1000_phy_force_speed_duplex_82577(struct e1000_hw *hw)
 	ret_val = e1e_wphy(hw, PHY_CONTROL, phy_data);
 	if (ret_val)
 		goto out;
-
-	/*
-	 * Clear Auto-Crossover to force MDI manually.  82577 requires MDI
-	 * forced whenever speed and duplex are forced.
-	 */
-	ret_val = e1e_rphy(hw, I82577_PHY_CTRL_2, &phy_data);
-	if (ret_val)
-		goto out;
-
-	phy_data &= ~I82577_PHY_CTRL2_AUTO_MDIX;
-	phy_data &= ~I82577_PHY_CTRL2_FORCE_MDI_MDIX;
-
-	ret_val = e1e_wphy(hw, I82577_PHY_CTRL_2, phy_data);
-	if (ret_val)
-		goto out;
-
-	e_dbg("I82577_PHY_CTRL_2: %X\n", phy_data);
 
 	udelay(1);
 

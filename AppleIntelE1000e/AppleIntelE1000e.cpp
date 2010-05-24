@@ -23,6 +23,7 @@ extern "C" {
 
 
 #define TBDS_PER_TCB 12
+#define COPYBREAK_DEFAULT 256
 #define super IOEthernetController
 
 static inline void RELEASE(OSObject* x)
@@ -407,6 +408,8 @@ bool AppleIntelE1000e::init(OSDictionary *properties)
 	// for ich8lan
 	init_mutex();
 
+	adapter.pdev = &priv_pdev;
+	
 	suspend = false;
 	return true;
 }
@@ -469,8 +472,8 @@ bool AppleIntelE1000e::start(IOService* provider)
 			break;
 		
 		// adapter.hw.device_id will be used later
-		adapter.hw.device_id = pciDevice->configRead16(kIOPCIConfigDeviceID);
-		IOLog("vendor:device: 0x%x:0x%x.\n", pciDevice->configRead16(kIOPCIConfigVendorID), adapter.hw.device_id);
+		adapter.pdev->device = pciDevice->configRead16(kIOPCIConfigDeviceID);
+		IOLog("vendor:device: 0x%x:0x%x.\n", pciDevice->configRead16(kIOPCIConfigVendorID), adapter.pdev->device);
 		
 		csrPCIAddress = pciDevice->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress0);
 		if (csrPCIAddress == NULL) {
@@ -491,7 +494,7 @@ bool AppleIntelE1000e::start(IOService* provider)
             break;
 		
 
-		adapter.ei = e1000_probe(adapter.hw.device_id);
+		adapter.ei = e1000_probe(adapter.pdev->device);
 		if (adapter.ei == NULL) {
 			break;
 		}
@@ -691,7 +694,15 @@ IOReturn AppleIntelE1000e::enable(IONetworkInterface * netif)
 	}
 	
 	//pciDevice->open(this);
-
+	/*
+	 * If AMT is enabled, let the firmware know that the network
+	 * interface is now open
+	 */
+	if (adapter.flags & FLAG_HAS_AMT){
+		e1000_get_hw_control(&adapter);
+		e1000e_reset();
+	}
+	
 	e1000e_power_up_phy(&adapter);
 
 #if		1
@@ -729,18 +740,11 @@ IOReturn AppleIntelE1000e::enable(IONetworkInterface * netif)
 		
 		e1000e_reset();
 
-		e1000_init_manageability();
+		e1000_init_manageability_pt();
 	}
 #endif
 	adapter.mng_vlan_id = E1000_MNG_VLAN_NONE;
 	
-	/*
-	 * If AMT is enabled, let the firmware know that the network
-	 * interface is now open
-	 */
-	if (adapter.flags & FLAG_HAS_AMT)
-		e1000_get_hw_control(&adapter);
-
 	/*
 	 * before we allocate an interrupt, we must be ready to handle it.
 	 * Setting DEBUG_SHIRQ in the kernel makes it fire an interrupt
@@ -1247,12 +1251,10 @@ bool AppleIntelE1000e::interruptFilter(OSObject * target, IOFilterInterruptEvent
 	return true;
 }
 
-
-
-void AppleIntelE1000e::e1000_init_manageability()
+void AppleIntelE1000e::e1000_init_manageability_pt()
 {
 	struct e1000_hw *hw = &adapter.hw;
-	u32 manc, manc2h;
+	u32 manc, manc2h, mdef, i, j;
 	
 	if (!(adapter.flags & FLAG_MNG_PT_ENABLED))
 		return;
@@ -1266,13 +1268,53 @@ void AppleIntelE1000e::e1000_init_manageability()
 	 */
 	manc |= E1000_MANC_EN_MNG2HOST;
 	manc2h = er32(MANC2H);
-#define E1000_MNG2HOST_PORT_623 (1 << 5)
-#define E1000_MNG2HOST_PORT_664 (1 << 6)
-	manc2h |= E1000_MNG2HOST_PORT_623;
-	manc2h |= E1000_MNG2HOST_PORT_664;
+	
+	switch (hw->mac.type) {
+		default:
+			manc2h |= (E1000_MANC2H_PORT_623 | E1000_MANC2H_PORT_664);
+			break;
+		case e1000_82574:
+		case e1000_82583:
+			/*
+			 * Check if IPMI pass-through decision filter already exists;
+			 * if so, enable it.
+			 */
+			for (i = 0, j = 0; i < 8; i++) {
+				mdef = er32(MDEF(i));
+				
+				/* Ignore filters with anything other than IPMI ports */
+				if (mdef & !(E1000_MDEF_PORT_623 | E1000_MDEF_PORT_664))
+					continue;
+				
+				/* Enable this decision filter in MANC2H */
+				if (mdef)
+					manc2h |= (1 << i);
+				
+				j |= mdef;
+			}
+			
+			if (j == (E1000_MDEF_PORT_623 | E1000_MDEF_PORT_664))
+				break;
+			
+			/* Create new decision filter in an empty filter */
+			for (i = 0, j = 0; i < 8; i++)
+				if (er32(MDEF(i)) == 0) {
+					ew32(MDEF(i), (E1000_MDEF_PORT_623 |
+								   E1000_MDEF_PORT_664));
+					manc2h |= (1 << 1);
+					j++;
+					break;
+				}
+			
+			if (!j)
+				e_warn("Unable to create IPMI pass-through filter\n");
+			break;
+	}
+	
 	ew32(MANC2H, manc2h);
 	ew32(MANC, manc);
 }
+
 
 /**
  * e1000_configure_tx - Configure 8254x Transmit Unit after Reset
@@ -1333,8 +1375,6 @@ void AppleIntelE1000e::e1000_configure_tx()
 	adapter.txd_cmd |= E1000_TXD_CMD_RS;
 	
 	E1000_WRITE_REG(hw, E1000_TCTL, tctl);
-	
-	//adapter.tx_queue_len = adapter.netdev->tx_queue_len;
 }
 
 /**
@@ -1393,18 +1433,6 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	rctl &= ~E1000_RCTL_SZ_4096;
 	rctl |= E1000_RCTL_BSEX;
 	switch (adapter.rx_buffer_len) {
-		case 256:
-			rctl |= E1000_RCTL_SZ_256;
-			rctl &= ~E1000_RCTL_BSEX;
-			break;
-		case 512:
-			rctl |= E1000_RCTL_SZ_512;
-			rctl &= ~E1000_RCTL_BSEX;
-			break;
-		case 1024:
-			rctl |= E1000_RCTL_SZ_1024;
-			rctl &= ~E1000_RCTL_BSEX;
-			break;
 		case 2048:
 		default:
 			rctl |= E1000_RCTL_SZ_2048;
@@ -1690,13 +1718,23 @@ bool AppleIntelE1000e::e1000_clean_rx_irq()
 			goto next_desc;
 		}
 #endif
-		/* !EOP means multiple descriptors were used to store a single
-		 * packet, also make sure the frame isn't just CRC only */
-		if (!(status & E1000_RXD_STAT_EOP) || (length <= 4)) {
+		/*
+		 * !EOP means multiple descriptors were used to store a single
+		 * packet, if that's the case we need to toss it.  In fact, we
+		 * need to toss every packet with the EOP bit clear and the
+		 * next frame that _does_ have the EOP bit set, as it is by
+		 * definition only a frame fragment
+		 */
+		if (!(status & E1000_RXD_STAT_EOP))
+			adapter.flags2 |= FLAG2_IS_DISCARDING;
+
+		if (adapter.flags2 & FLAG2_IS_DISCARDING) {
 			/* All receives must fit into a single buffer */
 			e_dbg("Receive packet consumed multiple buffers\n");
 			/* recycle */
 			buffer_info->skb = skb;
+			if (status & E1000_RXD_STAT_EOP)
+				adapter.flags2 &= ~FLAG2_IS_DISCARDING;
 			goto next_desc;
 		}
 
@@ -1713,6 +1751,24 @@ bool AppleIntelE1000e::e1000_clean_rx_irq()
 		total_rx_bytes += length;
 		total_rx_packets++;
 
+		/*
+		 * code added for copybreak, this should improve
+		 * performance for small packets with large amounts
+		 * of reassembly being done in the stack
+		 */
+		if (length < COPYBREAK_DEFAULT) {
+			mbuf_t skb_in = copyPacket(skb);
+			if (skb_in) {
+				skb = skb_in;
+			} else {
+				/* else just continue with the old one */
+				buffer_info->skb = NULL;
+			}
+		} else {
+			/* else just continue with the old one */
+			buffer_info->skb = NULL;
+		}
+		/* end copybreak code */
 		// skb_put(skb, length);
 
 		/* Receive Checksum Offload */
@@ -1837,7 +1893,7 @@ void AppleIntelE1000e::e1000e_enable_receives()
 	}
 }
 
-bool AppleIntelE1000e::e1000_has_link()
+bool AppleIntelE1000e::e1000e_has_link()
 {
 	struct e1000_hw *hw = &adapter.hw;
 	bool link_active = 0;
@@ -1975,6 +2031,7 @@ void AppleIntelE1000e::e1000e_reset()
 			fc->high_water = 0x5000;
 			fc->low_water  = 0x3000;
 		}
+		fc->refresh_time = 0x1000;
 	} else {
 		if ((adapter.flags & FLAG_HAS_ERT) &&
 		    (mtu > ETH_DATA_LEN))
@@ -2012,10 +2069,6 @@ void AppleIntelE1000e::e1000e_reset()
 	
 	if (mac->ops.init_hw(hw))
 		e_err("Hardware Error\n");
-	
-	/* additional part of the flow-control workaround above */
-	if (hw->mac.type == e1000_pchlan)
-		ew32(FCRTV_PCH, 0x1000);
 	
 #ifdef NETIF_F_HW_VLAN_TX
 	e1000_update_mng_vlan(adapter);
@@ -2101,6 +2154,7 @@ void AppleIntelE1000e::e1000_clean_rx_ring()
 	
 	adapter.rx_ring->next_to_use = 0;
 	adapter.rx_ring->next_to_clean = 0;
+	adapter.flags2 &= ~FLAG2_IS_DISCARDING;
 	
 	E1000_WRITE_REG(hw, adapter.rx_ring->head, 0);
 	E1000_WRITE_REG(hw, adapter.rx_ring->tail, 0);
@@ -2130,7 +2184,7 @@ void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 	struct e1000_hw *hw = &adapter.hw;
 	UInt32 link, tctl;
 	
-	link = e1000_has_link();
+	link = e1000e_has_link();
 	
 	//e_dbg("timeout link:%d, preLinkStatus:%d.\n", link, preLinkStatus);
 	if (link && link == preLinkStatus) {
@@ -2288,7 +2342,8 @@ void AppleIntelE1000e::e1000_configure()
 #ifdef NETIF_F_HW_VLAN_TX
 	e1000_restore_vlan(&adapter);
 #endif
-	e1000_init_manageability();
+	e1000_init_manageability_pt();
+
 	e1000_configure_tx();
 	e1000_setup_rctl();
 	e1000_configure_rx();
@@ -2344,7 +2399,7 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 	unsigned int i;
 	u8 css, cso;
 	u32 cmd_len = E1000_TXD_CMD_DEXT;
-	
+	//__be16 protocol;
 
 	UInt32 checksumDemanded;
 	getChecksumDemand(skb, kChecksumFamilyTCPIP, &checksumDemanded);
@@ -2460,13 +2515,7 @@ void AppleIntelE1000e::e1000_set_mtu(UInt32 maxSize){
 	 * fragmented skbs
 	 */
 	
-	if (max_frame <= 256)
-		adapter.rx_buffer_len = 256;
-	else if (max_frame <= 512)
-		adapter.rx_buffer_len = 512;
-	else if (max_frame <= 1024)
-		adapter.rx_buffer_len = 1024;
-	else if (max_frame <= 2048)
+	if (max_frame <= 2048)
 		adapter.rx_buffer_len = 2048;
 	else if (max_frame <= 4096)
 		adapter.rx_buffer_len = 4096;

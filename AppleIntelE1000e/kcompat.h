@@ -46,7 +46,10 @@
 #define ALIGN(x,a) (((x)+(a)-1)&~((a)-1))
 
 struct net_device;
-struct pci_dev;
+struct pci_dev {
+	u16 vendor;
+	u16 device;
+};
 
 struct net_device_stats {
 	unsigned long	rx_packets;				/* total packets received       */

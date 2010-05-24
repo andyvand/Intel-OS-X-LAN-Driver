@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2009 Intel Corporation.
+  Copyright(c) 1999 - 2010 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -28,7 +28,7 @@
 
 #include "e1000.h"
 
-static u32 e1000_hash_mc_addr_generic(struct e1000_hw *hw, u8 *mc_addr);
+static u32 e1000_hash_mc_addr(struct e1000_hw *hw, u8 *mc_addr);
 static s32 e1000_set_default_fc_generic(struct e1000_hw *hw);
 static s32 e1000_commit_fc_settings_generic(struct e1000_hw *hw);
 static s32 e1000_poll_fiber_serdes_link_generic(struct e1000_hw *hw);
@@ -46,14 +46,14 @@ void e1000_init_mac_ops_generic(struct e1000_hw *hw)
 	struct e1000_mac_info *mac = &hw->mac;
 	/* General Setup */
 	mac->ops.set_lan_id = e1000_set_lan_id_multi_port_pcie;
-	mac->ops.read_mac_addr = e1000e_read_mac_addr_generic;
+	mac->ops.read_mac_addr = e1000_read_mac_addr_generic;
 	mac->ops.config_collision_dist = e1000e_config_collision_dist;
 	/* LINK */
 	mac->ops.wait_autoneg = e1000_wait_autoneg;
 	/* Management */
-	mac->ops.mng_host_if_write = e1000_mng_host_if_write_generic;
-	mac->ops.mng_write_cmd_header = e1000_mng_write_cmd_header_generic;
-	mac->ops.mng_enable_host_if = e1000_mng_enable_host_if_generic;
+	mac->ops.mng_host_if_write = e1000_mng_host_if_write;
+	mac->ops.mng_write_cmd_header = e1000_mng_write_cmd_header;
+	mac->ops.mng_enable_host_if = e1000_mng_enable_host_if;
 	/* VLAN, MC, etc. */
 	mac->ops.rar_set = e1000e_rar_set;
 	mac->ops.validate_mdi_setting = e1000_validate_mdi_setting_generic;
@@ -71,22 +71,34 @@ s32 e1000e_get_bus_info_pcie(struct e1000_hw *hw)
 {
 	struct e1000_mac_info *mac = &hw->mac;
 	struct e1000_bus_info *bus = &hw->bus;
-
 	s32 ret_val;
 	u16 pcie_link_status;
 
 	bus->type = e1000_bus_type_pci_express;
-	bus->speed = e1000_bus_speed_2500;
 
 	ret_val = e1000_read_pcie_cap_reg(hw,
 	                                  PCIE_LINK_STATUS,
 	                                  &pcie_link_status);
-	if (ret_val)
+	if (ret_val) {
 		bus->width = e1000_bus_width_unknown;
-	else
+		bus->speed = e1000_bus_speed_unknown;
+	} else {
+		switch (pcie_link_status & PCIE_LINK_SPEED_MASK) {
+		case PCIE_LINK_SPEED_2500:
+			bus->speed = e1000_bus_speed_2500;
+			break;
+		case PCIE_LINK_SPEED_5000:
+			bus->speed = e1000_bus_speed_5000;
+			break;
+		default:
+			bus->speed = e1000_bus_speed_unknown;
+			break;
+		}
+		
 		bus->width = (enum e1000_bus_width)((pcie_link_status &
 		                                PCIE_LINK_WIDTH_MASK) >>
 		                               PCIE_LINK_WIDTH_SHIFT);
+	}
 
 	mac->ops.set_lan_id(hw);
 
@@ -128,13 +140,13 @@ void e1000_set_lan_id_single_port(struct e1000_hw *hw)
 }
 
 /**
- *  e1000e_clear_vfta_generic - Clear VLAN filter table
+ *  e1000_clear_vfta_generic - Clear VLAN filter table
  *  @hw: pointer to the HW structure
  *
  *  Clears the register array which contains the VLAN filter table by
  *  setting all the values to 0.
  **/
-void e1000e_clear_vfta_generic(struct e1000_hw *hw)
+void e1000_clear_vfta_generic(struct e1000_hw *hw)
 {
 	u32 offset;
 
@@ -145,7 +157,7 @@ void e1000e_clear_vfta_generic(struct e1000_hw *hw)
 }
 
 /**
- *  e1000e_write_vfta_generic - Write value to VLAN filter table
+ *  e1000_write_vfta_generic - Write value to VLAN filter table
  *  @hw: pointer to the HW structure
  *  @offset: register offset in VLAN filter table
  *  @value: register value written to VLAN filter table
@@ -153,7 +165,7 @@ void e1000e_clear_vfta_generic(struct e1000_hw *hw)
  *  Writes value at the given offset in the register array which stores
  *  the VLAN filter table.
  **/
-void e1000e_write_vfta_generic(struct e1000_hw *hw, u32 offset, u32 value)
+void e1000_write_vfta_generic(struct e1000_hw *hw, u32 offset, u32 value)
 {
 	E1000_WRITE_REG_ARRAY(hw, E1000_VFTA, offset, value);
 	e1e_flush();
@@ -171,17 +183,17 @@ void e1000e_write_vfta_generic(struct e1000_hw *hw, u32 offset, u32 value)
 void e1000e_init_rx_addrs(struct e1000_hw *hw, u16 rar_count)
 {
 	u32 i;
-	u8 mac_addr[ETH_ADDR_LEN] = {0};
+	u8 mac_addr[ETH_ALEN] = {0};
 
 	/* Setup the receive address */
 	e_dbg("Programming MAC Address into RAR[0]\n");
 
-	hw->mac.ops.rar_set(hw, hw->mac.addr, 0);
+	e1000e_rar_set(hw, hw->mac.addr, 0);
 
 	/* Zero out the other (rar_entry_count - 1) receive addresses */
 	e_dbg("Clearing RAR[1-%u]\n", rar_count-1);
 	for (i = 1; i < rar_count; i++)
-		hw->mac.ops.rar_set(hw, mac_addr, i);
+		e1000e_rar_set(hw, mac_addr, i);
 }
 
 /**
@@ -201,7 +213,7 @@ s32 e1000_check_alt_mac_addr_generic(struct e1000_hw *hw)
 	u32 i;
 	s32 ret_val = E1000_SUCCESS;
 	u16 offset, nvm_alt_mac_addr_offset, nvm_data;
-	u8 alt_mac_addr[ETH_ADDR_LEN];
+	u8 alt_mac_addr[ETH_ALEN];
 
 	ret_val = e1000_read_nvm(hw, NVM_ALT_MAC_ADDR_PTR, 1,
 	                         &nvm_alt_mac_addr_offset);
@@ -217,7 +229,7 @@ s32 e1000_check_alt_mac_addr_generic(struct e1000_hw *hw)
 
 	if (hw->bus.func == E1000_FUNC_1)
 		nvm_alt_mac_addr_offset += E1000_ALT_MAC_ADDRESS_OFFSET_LAN1;
-	for (i = 0; i < ETH_ADDR_LEN; i += 2) {
+	for (i = 0; i < ETH_ALEN; i += 2) {
 		offset = nvm_alt_mac_addr_offset + (i >> 1);
 		ret_val = e1000_read_nvm(hw, offset, 1, &nvm_data);
 		if (ret_val) {
@@ -240,7 +252,7 @@ s32 e1000_check_alt_mac_addr_generic(struct e1000_hw *hw)
 	 * same as the normal permanent MAC address stored by the HW into the
 	 * RAR. Do this by mapping this address into RAR0.
 	 */
-	hw->mac.ops.rar_set(hw, alt_mac_addr, 0);
+	e1000e_rar_set(hw, alt_mac_addr, 0);
 
 out:
 	return ret_val;
@@ -285,41 +297,6 @@ void e1000e_rar_set(struct e1000_hw *hw, u8 *addr, u32 index)
 }
 
 /**
- *  e1000_mta_set_generic - Set multicast filter table address
- *  @hw: pointer to the HW structure
- *  @hash_value: determines the MTA register and bit to set
- *
- *  The multicast table address is a register array of 32-bit registers.
- *  The hash_value is used to determine what register the bit is in, the
- *  current value is read, the new bit is OR'd in and the new value is
- *  written back into the register.
- **/
-void e1000_mta_set_generic(struct e1000_hw *hw, u32 hash_value)
-{
-	u32 hash_bit, hash_reg, mta;
-
-	/*
-	 * The MTA is a register array of 32-bit registers. It is
-	 * treated like an array of (32*mta_reg_count) bits.  We want to
-	 * set bit BitArray[hash_value]. So we figure out what register
-	 * the bit is in, read it, OR in the new bit, then write
-	 * back the new value.  The (hw->mac.mta_reg_count - 1) serves as a
-	 * mask to bits 31:5 of the hash value which gives us the
-	 * register we're modifying.  The hash bit within that register
-	 * is determined by the lower 5 bits of the hash value.
-	 */
-	hash_reg = (hash_value >> 5) & (hw->mac.mta_reg_count - 1);
-	hash_bit = hash_value & 0x1F;
-
-	mta = E1000_READ_REG_ARRAY(hw, E1000_MTA, hash_reg);
-
-	mta |= (1 << hash_bit);
-
-	E1000_WRITE_REG_ARRAY(hw, E1000_MTA, hash_reg, mta);
-	e1e_flush();
-}
-
-/**
  *  e1000e_update_mc_addr_list_generic - Update Multicast addresses
  *  @hw: pointer to the HW structure
  *  @mc_addr_list: array of multicast addresses to program
@@ -339,13 +316,13 @@ void e1000e_update_mc_addr_list_generic(struct e1000_hw *hw,
 
 	/* update mta_shadow from mc_addr_list */
 	for (i = 0; (u32) i < mc_addr_count; i++) {
-		hash_value = e1000_hash_mc_addr_generic(hw, mc_addr_list);
+		hash_value = e1000_hash_mc_addr(hw, mc_addr_list);
 
 		hash_reg = (hash_value >> 5) & (hw->mac.mta_reg_count - 1);
 		hash_bit = hash_value & 0x1F;
 
 		hw->mac.mta_shadow[hash_reg] |= (1 << hash_bit);
-		mc_addr_list += (ETH_ADDR_LEN);
+		mc_addr_list += (ETH_ALEN);
 	}
 
 	/* replace the entire MTA table */
@@ -355,15 +332,14 @@ void e1000e_update_mc_addr_list_generic(struct e1000_hw *hw,
 }
 
 /**
- *  e1000_hash_mc_addr_generic - Generate a multicast hash value
+ *  e1000_hash_mc_addr - Generate a multicast hash value
  *  @hw: pointer to the HW structure
  *  @mc_addr: pointer to a multicast address
  *
  *  Generates a multicast address hash value which is used to determine
- *  the multicast filter table array address and new table value.  See
- *  e1000_mta_set_generic()
+ *  the multicast filter table array address and new table value.
  **/
-static u32 e1000_hash_mc_addr_generic(struct e1000_hw *hw, u8 *mc_addr)
+static u32 e1000_hash_mc_addr(struct e1000_hw *hw, u8 *mc_addr)
 {
 	u32 hash_value, hash_mask;
 	u8 bit_shift = 0;
@@ -530,7 +506,7 @@ s32 e1000e_check_for_copper_link(struct e1000_hw *hw)
 	 * of MAC speed/duplex configuration.  So we only need to
 	 * configure Collision Distance in the MAC.
 	 */
-	e1000e_config_collision_dist(hw);
+	mac->ops.config_collision_dist(hw);
 
 	/*
 	 * Configure Flow Control now that Auto-Neg has completed.
@@ -742,9 +718,8 @@ s32 e1000e_setup_link(struct e1000_hw *hw)
 	 * In the case of the phy reset being blocked, we already have a link.
 	 * We do not need to set it up again.
 	 */
-	if (hw->phy.ops.check_reset_block)
-		if (e1000_check_reset_block(hw))
-			goto out;
+	if (e1000_check_reset_block(hw))
+		goto out;
 
 	/*
 	 * If requested flow control is set to default, set flow control
@@ -798,6 +773,7 @@ out:
  **/
 s32 e1000e_setup_fiber_serdes_link(struct e1000_hw *hw)
 {
+	struct e1000_mac_info *mac = &hw->mac;
 	u32 ctrl;
 	s32 ret_val = E1000_SUCCESS;
 
@@ -806,7 +782,7 @@ s32 e1000e_setup_fiber_serdes_link(struct e1000_hw *hw)
 	/* Take the link out of reset */
 	ctrl &= ~E1000_CTRL_LRST;
 
-	e1000e_config_collision_dist(hw);
+	mac->ops.config_collision_dist(hw);
 
 	ret_val = e1000_commit_fc_settings_generic(hw);
 	if (ret_val)
@@ -846,8 +822,7 @@ out:
  *  @hw: pointer to the HW structure
  *
  *  Configures the collision distance to the default value and is used
- *  during link setup. Currently no func pointer exists and all
- *  implementations are handled in the generic version of this function.
+ *  during link setup.
  **/
 void e1000e_config_collision_dist(struct e1000_hw *hw)
 {
@@ -897,7 +872,7 @@ static s32 e1000_poll_fiber_serdes_link_generic(struct e1000_hw *hw)
 		 * link up if we detect a signal. This will allow us to
 		 * communicate with non-autonegotiating link partners.
 		 */
-		ret_val = hw->mac.ops.check_for_link(hw);
+		ret_val = mac->ops.check_for_link(hw);
 		if (ret_val) {
 			e_dbg("Error while checking for link\n");
 			goto out;
@@ -952,7 +927,7 @@ static s32 e1000_commit_fc_settings_generic(struct e1000_hw *hw)
 		 * Rx Flow control is enabled and Tx Flow control is disabled
 		 * by a software over-ride. Since there really isn't a way to
 		 * advertise that we are capable of Rx Pause ONLY, we will
-		 * advertise that we support both symmetric and asymmetric RX
+		 * advertise that we support both symmetric and asymmetric Rx
 		 * PAUSE.  Later, we will disable the adapter's ability to send
 		 * PAUSE frames.
 		 */
@@ -996,7 +971,6 @@ out:
  **/
 s32 e1000e_set_fc_watermarks(struct e1000_hw *hw)
 {
-	s32 ret_val = E1000_SUCCESS;
 	u32 fcrtl = 0, fcrth = 0;
 
 	/*
@@ -1021,7 +995,7 @@ s32 e1000e_set_fc_watermarks(struct e1000_hw *hw)
 	ew32(FCRTL, fcrtl);
 	ew32(FCRTH, fcrth);
 
-	return ret_val;
+	return E1000_SUCCESS;
 }
 
 /**
@@ -1244,7 +1218,7 @@ s32 e1000e_config_fc_after_link_up(struct e1000_hw *hw)
 			/*
 			 * Now we need to check if the user selected Rx ONLY
 			 * of pause frames.  In this case, we had to advertise
-			 * FULL flow control because we could not advertise RX
+			 * FULL flow control because we could not advertise Rx
 			 * ONLY. Hence, we must now check to see if we need to
 			 * turn OFF  the TRANSMISSION of PAUSE frames.
 			 */
@@ -1254,7 +1228,7 @@ s32 e1000e_config_fc_after_link_up(struct e1000_hw *hw)
 			} else {
 				hw->fc.current_mode = e1000_fc_rx_pause;
 				e_dbg("Flow Control = "
-				         "RX PAUSE frames only.\r\n");
+				         "Rx PAUSE frames only.\r\n");
 			}
 		}
 		/*
@@ -1270,7 +1244,7 @@ s32 e1000e_config_fc_after_link_up(struct e1000_hw *hw)
 		          (mii_nway_lp_ability_reg & NWAY_LPAR_PAUSE) &&
 		          (mii_nway_lp_ability_reg & NWAY_LPAR_ASM_DIR)) {
 			hw->fc.current_mode = e1000_fc_tx_pause;
-			e_dbg("Flow Control = TX PAUSE frames only.\r\n");
+			e_dbg("Flow Control = Tx PAUSE frames only.\r\n");
 		}
 		/*
 		 * For transmitting PAUSE frames ONLY.
@@ -1285,7 +1259,7 @@ s32 e1000e_config_fc_after_link_up(struct e1000_hw *hw)
 		         !(mii_nway_lp_ability_reg & NWAY_LPAR_PAUSE) &&
 		         (mii_nway_lp_ability_reg & NWAY_LPAR_ASM_DIR)) {
 			hw->fc.current_mode = e1000_fc_rx_pause;
-			e_dbg("Flow Control = RX PAUSE frames only.\r\n");
+			e_dbg("Flow Control = Rx PAUSE frames only.\r\n");
 		} else {
 			/*
 			 * Per the IEEE spec, at this point flow control
@@ -1362,7 +1336,7 @@ s32 e1000e_get_speed_and_duplex_copper(struct e1000_hw *hw, u16 *speed,
 }
 
 /**
- *  e1000_get_speed_and_duplex_fiber_generic - Retrieve current speed/duplex
+ *  e1000e_get_speed_and_duplex_fiber_serdes - Retrieve current speed/duplex
  *  @hw: pointer to the HW structure
  *  @speed: stores the current speed
  *  @duplex: stores the current duplex
@@ -1565,18 +1539,18 @@ out:
 }
 
 /**
- *  e1000_setup_led_generic - Configures SW controllable LED
+ *  e1000e_setup_led_generic - Configures SW controllable LED
  *  @hw: pointer to the HW structure
  *
  *  This prepares the SW controllable LED for use and saves the current state
  *  of the LED so it can be later restored.
  **/
-s32 e1000_setup_led_generic(struct e1000_hw *hw)
+s32 e1000e_setup_led_generic(struct e1000_hw *hw)
 {
 	u32 ledctl;
 	s32 ret_val = E1000_SUCCESS;
 
-	if (hw->mac.ops.setup_led != e1000_setup_led_generic) {
+	if (hw->mac.ops.setup_led != e1000e_setup_led_generic) {
 		ret_val = -E1000_ERR_CONFIG;
 		goto out;
 	}
@@ -1608,17 +1582,8 @@ out:
  **/
 s32 e1000e_cleanup_led_generic(struct e1000_hw *hw)
 {
-	s32 ret_val = E1000_SUCCESS;
-
-	if (hw->mac.ops.cleanup_led != e1000e_cleanup_led_generic) {
-		ret_val = -E1000_ERR_CONFIG;
-		goto out;
-	}
-
 	ew32(LEDCTL, hw->mac.ledctl_default);
-
-out:
-	return ret_val;
+	return E1000_SUCCESS;
 }
 
 /**
@@ -1719,16 +1684,12 @@ void e1000e_set_pcie_no_snoop(struct e1000_hw *hw, u32 no_snoop)
 {
 	u32 gcr;
 
-	if (hw->bus.type != e1000_bus_type_pci_express)
-		goto out;
-
 	if (no_snoop) {
 		gcr = er32(GCR);
 		gcr &= ~(PCIE_NO_SNOOP_ALL);
 		gcr |= no_snoop;
 		ew32(GCR, gcr);
 	}
-out:
 	return;
 }
 
@@ -1736,7 +1697,7 @@ out:
  *  e1000e_disable_pcie_master - Disables PCI-express master access
  *  @hw: pointer to the HW structure
  *
- *  Returns 0 (E1000_SUCCESS) if successful, else returns -10
+ *  Returns E1000_SUCCESS if successful, else returns -10
  *  (-E1000_ERR_MASTER_REQUESTS_PENDING) if master disable bit has not caused
  *  the master requests to be disabled.
  *
@@ -1748,9 +1709,6 @@ s32 e1000e_disable_pcie_master(struct e1000_hw *hw)
 	u32 ctrl;
 	s32 timeout = MASTER_DISABLE_TIMEOUT;
 	s32 ret_val = E1000_SUCCESS;
-
-	if (hw->bus.type != e1000_bus_type_pci_express)
-		goto out;
 
 	ctrl = er32(CTRL);
 	ctrl |= E1000_CTRL_GIO_MASTER_DISABLE;
@@ -1767,10 +1725,8 @@ s32 e1000e_disable_pcie_master(struct e1000_hw *hw)
 	if (!timeout) {
 		e_dbg("Master requests are pending.\n");
 		ret_val = -E1000_ERR_MASTER_REQUESTS_PENDING;
-		goto out;
 	}
 
-out:
 	return ret_val;
 }
 

@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2009 Intel Corporation.
+  Copyright(c) 1999 - 2010 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -29,12 +29,12 @@
 #ifndef _E1000_MANAGE_H_
 #define _E1000_MANAGE_H_
 
-bool e1000_check_mng_mode_generic(struct e1000_hw *hw);
+bool e1000e_check_mng_mode_generic(struct e1000_hw *hw);
 bool e1000e_enable_tx_pkt_filtering(struct e1000_hw *hw);
-s32  e1000_mng_enable_host_if_generic(struct e1000_hw *hw);
-s32  e1000_mng_host_if_write_generic(struct e1000_hw *hw, u8 *buffer,
+s32  e1000_mng_enable_host_if(struct e1000_hw *hw);
+s32  e1000_mng_host_if_write(struct e1000_hw *hw, u8 *buffer,
                                      u16 length, u16 offset, u8 *sum);
-s32  e1000_mng_write_cmd_header_generic(struct e1000_hw *hw,
+s32  e1000_mng_write_cmd_header(struct e1000_hw *hw,
                                     struct e1000_host_mng_command_header *hdr);
 s32  e1000e_mng_write_dhcp_info(struct e1000_hw *hw,
                                        u8 *buffer, u16 length);

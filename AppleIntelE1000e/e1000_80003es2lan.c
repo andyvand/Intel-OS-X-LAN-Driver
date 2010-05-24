@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2009 Intel Corporation.
+  Copyright(c) 1999 - 2010 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -161,7 +161,7 @@ static s32 e1000_init_nvm_params_80003es2lan(struct e1000_hw *hw)
 		break;
 	}
 
-	nvm->type               = e1000_nvm_eeprom_spi;
+	nvm->type = e1000_nvm_eeprom_spi;
 
 	size = (u16)((eecd & E1000_EECD_SIZE_EX_MASK) >>
 	                  E1000_EECD_SIZE_EX_SHIFT);
@@ -195,16 +195,22 @@ static s32 e1000_init_nvm_params_80003es2lan(struct e1000_hw *hw)
  **/
 static s32 e1000_init_mac_params_80003es2lan(struct e1000_hw *hw)
 {
+	struct e1000_adapter *adapter = hw->adapter;
 	struct e1000_mac_info *mac = &hw->mac;
-	s32 ret_val = E1000_SUCCESS;
 
-	/* Set media type */
-	switch (hw->device_id) {
+	/* Set media type and media-dependent function pointers */
+	switch (adapter->pdev->device) {
 	case E1000_DEV_ID_80003ES2LAN_SERDES_DPT:
 		hw->phy.media_type = e1000_media_type_internal_serdes;
+		mac->ops.check_for_link = e1000e_check_for_serdes_link;
+		mac->ops.setup_physical_interface =
+			e1000e_setup_fiber_serdes_link;
 		break;
 	default:
 		hw->phy.media_type = e1000_media_type_copper;
+		mac->ops.check_for_link = e1000e_check_for_copper_link;
+		mac->ops.setup_physical_interface =
+			e1000_setup_copper_link_80003es2lan;
 		break;
 	}
 
@@ -212,12 +218,14 @@ static s32 e1000_init_mac_params_80003es2lan(struct e1000_hw *hw)
 	mac->mta_reg_count = 128;
 	/* Set rar entry count */
 	mac->rar_entry_count = E1000_RAR_ENTRIES;
-	/* Set if part includes ASF firmware */
-	mac->asf_firmware_present = true;
-	/* Set if manageability features are enabled. */
+	/* FWSM register */
+	mac->has_fwsm = true;
+	/* ARC supported; valid only if manageability features are enabled. */
 	mac->arc_subsystem_valid =
 	        (er32(FWSM) & E1000_FWSM_MODE_MASK)
 	                ? true : false;
+	/* Adaptive IFS not supported */
+	mac->adaptive_ifs = false;
 
 	/* Function pointers */
 
@@ -229,37 +237,14 @@ static s32 e1000_init_mac_params_80003es2lan(struct e1000_hw *hw)
 	mac->ops.init_hw = e1000_init_hw_80003es2lan;
 	/* link setup */
 	mac->ops.setup_link = e1000e_setup_link;
-	/* physical interface link setup */
-	mac->ops.setup_physical_interface =
-	        (hw->phy.media_type == e1000_media_type_copper)
-	                ? e1000_setup_copper_link_80003es2lan
-	                : e1000e_setup_fiber_serdes_link;
-	/* check for link */
-	switch (hw->phy.media_type) {
-	case e1000_media_type_copper:
-		mac->ops.check_for_link = e1000e_check_for_copper_link;
-		break;
-	case e1000_media_type_fiber:
-		mac->ops.check_for_link = e1000e_check_for_fiber_link;
-		break;
-	case e1000_media_type_internal_serdes:
-		mac->ops.check_for_link = e1000e_check_for_serdes_link;
-		break;
-	default:
-		ret_val = -E1000_ERR_CONFIG;
-		goto out;
-		break;
-	}
 	/* check management mode */
-	mac->ops.check_mng_mode = e1000_check_mng_mode_generic;
+	mac->ops.check_mng_mode = e1000e_check_mng_mode_generic;
 	/* multicast address update */
 	mac->ops.update_mc_addr_list = e1000e_update_mc_addr_list_generic;
 	/* writing VFTA */
-	mac->ops.write_vfta = e1000e_write_vfta_generic;
+	mac->ops.write_vfta = e1000_write_vfta_generic;
 	/* clearing VFTA */
-	mac->ops.clear_vfta = e1000e_clear_vfta_generic;
-	/* setting MTA */
-	mac->ops.mta_set = e1000_mta_set_generic;
+	mac->ops.clear_vfta = e1000_clear_vfta_generic;
 	/* read mac address */
 	mac->ops.read_mac_addr = e1000_read_mac_addr_80003es2lan;
 	/* ID LED init */
@@ -267,7 +252,7 @@ static s32 e1000_init_mac_params_80003es2lan(struct e1000_hw *hw)
 	/* blink LED */
 	mac->ops.blink_led = e1000e_blink_led;
 	/* setup LED */
-	mac->ops.setup_led = e1000_setup_led_generic;
+	mac->ops.setup_led = e1000e_setup_led_generic;
 	/* cleanup LED */
 	mac->ops.cleanup_led = e1000e_cleanup_led_generic;
 	/* turn on/off LED */
@@ -281,8 +266,7 @@ static s32 e1000_init_mac_params_80003es2lan(struct e1000_hw *hw)
 	/* set lan id for port to determine which phy lock to use */
 	hw->mac.ops.set_lan_id(hw);
 
-out:
-	return ret_val;
+	return E1000_SUCCESS;
 }
 
 /**
@@ -327,7 +311,6 @@ static void e1000_release_phy_80003es2lan(struct e1000_hw *hw)
 	mask = hw->bus.func ? E1000_SWFW_PHY1_SM : E1000_SWFW_PHY0_SM;
 	e1000_release_swfw_sync_80003es2lan(hw, mask);
 }
-
 
 /**
  *  e1000_acquire_mac_csr_80003es2lan - Acquire rights to access Kumeran register
@@ -504,7 +487,7 @@ static s32 e1000_read_phy_reg_gg82563_80003es2lan(struct e1000_hw *hw,
 		goto out;
 	}
 
-	if (hw->dev_spec._80003es2lan.mdic_wa_enable == true) {
+	if (hw->dev_spec.e80003es2lan.mdic_wa_enable == true) {
 		/*
 		 * The "ready" bit in the MDIC register may be incorrectly set
 		 * before the device has completed the "Page Select" MDI
@@ -528,10 +511,11 @@ static s32 e1000_read_phy_reg_gg82563_80003es2lan(struct e1000_hw *hw,
 		                                  data);
 
 		udelay(200);
-	} else
+	} else {
 		ret_val = e1000e_read_phy_reg_mdic(hw,
 		                                  MAX_PHY_REG_ADDRESS & offset,
 		                                  data);
+	}
 
 	e1000_release_phy_80003es2lan(hw);
 
@@ -576,7 +560,7 @@ static s32 e1000_write_phy_reg_gg82563_80003es2lan(struct e1000_hw *hw,
 		goto out;
 	}
 
-	if (hw->dev_spec._80003es2lan.mdic_wa_enable == true) {
+	if (hw->dev_spec.e80003es2lan.mdic_wa_enable == true) {
 		/*
 		 * The "ready" bit in the MDIC register may be incorrectly set
 		 * before the device has completed the "Page Select" MDI
@@ -600,10 +584,11 @@ static s32 e1000_write_phy_reg_gg82563_80003es2lan(struct e1000_hw *hw,
 		                                  data);
 
 		udelay(200);
-	} else
+	} else {
 		ret_val = e1000e_write_phy_reg_mdic(hw,
 		                                  MAX_PHY_REG_ADDRESS & offset,
-		data);
+		                                  data);
+	}
 
 	e1000_release_phy_80003es2lan(hw);
 
@@ -670,9 +655,6 @@ static s32 e1000_phy_force_speed_duplex_80003es2lan(struct e1000_hw *hw)
 	s32 ret_val = E1000_SUCCESS;
 	u16 phy_data;
 	bool link;
-
-	if (!(hw->phy.ops.read_reg))
-		goto out;
 
 	/*
 	 * Clear Auto-Crossover to force MDI manually.  M88E1000 requires MDI
@@ -767,9 +749,6 @@ static s32 e1000_get_cable_length_80003es2lan(struct e1000_hw *hw)
 	struct e1000_phy_info *phy = &hw->phy;
 	s32 ret_val = E1000_SUCCESS;
 	u16 phy_data, index;
-
-	if (!(hw->phy.ops.read_reg))
-		goto out;
 
 	ret_val = e1e_rphy(hw, GG82563_PHY_DSP_DISTANCE, &phy_data);
 	if (ret_val)
@@ -885,14 +864,13 @@ static s32 e1000_init_hw_80003es2lan(struct e1000_hw *hw)
 
 	/* Initialize identification LED */
 	ret_val = mac->ops.id_led_init(hw);
-	if (ret_val) {
+	if (ret_val)
 		e_dbg("Error initializing identification LED\n");
 		/* This is not fatal and we should not stop init due to this */
-	}
 
 	/* Disabling VLAN filtering */
 	e_dbg("Initializing the IEEE VLAN\n");
-	e1000e_clear_vfta(hw);
+	mac->ops.clear_vfta(hw);
 
 	/* Setup the receive address. */
 	e1000e_init_rx_addrs(hw, mac->rar_entry_count);
@@ -939,7 +917,7 @@ static s32 e1000_init_hw_80003es2lan(struct e1000_hw *hw)
 	E1000_WRITE_REG_ARRAY(hw, E1000_FFLT, 0x0001, reg_data);
 
 	/* default to true to enable the MDIC W/A */
-	hw->dev_spec._80003es2lan.mdic_wa_enable = true;
+	hw->dev_spec.e80003es2lan.mdic_wa_enable = true;
 
 	ret_val = e1000_read_kmrn_reg_80003es2lan(hw,
 	                              E1000_KMRNCTRLSTA_OFFSET >>
@@ -948,7 +926,7 @@ static s32 e1000_init_hw_80003es2lan(struct e1000_hw *hw)
 	if (!ret_val) {
 		if ((i & E1000_KMRNCTRLSTA_OPMODE_MASK) ==
 		     E1000_KMRNCTRLSTA_OPMODE_INBAND_MDIO)
-			hw->dev_spec._80003es2lan.mdic_wa_enable = false;
+			hw->dev_spec.e80003es2lan.mdic_wa_enable = false;
 	}
 
 	/*
@@ -1013,70 +991,67 @@ static s32 e1000_copper_link_setup_gg82563_80003es2lan(struct e1000_hw *hw)
 	u32 ctrl_ext;
 	u16 data;
 
-	if (!phy->reset_disable) {
-		ret_val = e1e_rphy(hw, GG82563_PHY_MAC_SPEC_CTRL,
-		                             &data);
-		if (ret_val)
-			goto out;
+	ret_val = e1e_rphy(hw, GG82563_PHY_MAC_SPEC_CTRL,
+				     &data);
+	if (ret_val)
+		goto out;
 
-		data |= GG82563_MSCR_ASSERT_CRS_ON_TX;
-		/* Use 25MHz for both link down and 1000Base-T for Tx clock. */
-		data |= GG82563_MSCR_TX_CLK_1000MBPS_25;
+	data |= GG82563_MSCR_ASSERT_CRS_ON_TX;
+	/* Use 25MHz for both link down and 1000Base-T for Tx clock. */
+	data |= GG82563_MSCR_TX_CLK_1000MBPS_25;
 
-		ret_val = e1e_wphy(hw, GG82563_PHY_MAC_SPEC_CTRL,
-		                              data);
-		if (ret_val)
-			goto out;
+	ret_val = e1e_wphy(hw, GG82563_PHY_MAC_SPEC_CTRL,
+				      data);
+	if (ret_val)
+		goto out;
 
-		/*
-		 * Options:
-		 *   MDI/MDI-X = 0 (default)
-		 *   0 - Auto for all speeds
-		 *   1 - MDI mode
-		 *   2 - MDI-X mode
-		 *   3 - Auto for 1000Base-T only (MDI-X for 10/100Base-T modes)
-		 */
-		ret_val = e1e_rphy(hw, GG82563_PHY_SPEC_CTRL, &data);
-		if (ret_val)
-			goto out;
+	/*
+	 * Options:
+	 *   MDI/MDI-X = 0 (default)
+	 *   0 - Auto for all speeds
+	 *   1 - MDI mode
+	 *   2 - MDI-X mode
+	 *   3 - Auto for 1000Base-T only (MDI-X for 10/100Base-T modes)
+	 */
+	ret_val = e1e_rphy(hw, GG82563_PHY_SPEC_CTRL, &data);
+	if (ret_val)
+		goto out;
 
-		data &= ~GG82563_PSCR_CROSSOVER_MODE_MASK;
+	data &= ~GG82563_PSCR_CROSSOVER_MODE_MASK;
 
-		switch (phy->mdix) {
-		case 1:
-			data |= GG82563_PSCR_CROSSOVER_MODE_MDI;
-			break;
-		case 2:
-			data |= GG82563_PSCR_CROSSOVER_MODE_MDIX;
-			break;
-		case 0:
-		default:
-			data |= GG82563_PSCR_CROSSOVER_MODE_AUTO;
-			break;
-		}
+	switch (phy->mdix) {
+	case 1:
+		data |= GG82563_PSCR_CROSSOVER_MODE_MDI;
+		break;
+	case 2:
+		data |= GG82563_PSCR_CROSSOVER_MODE_MDIX;
+		break;
+	case 0:
+	default:
+		data |= GG82563_PSCR_CROSSOVER_MODE_AUTO;
+		break;
+	}
 
-		/*
-		 * Options:
-		 *   disable_polarity_correction = 0 (default)
-		 *       Automatic Correction for Reversed Cable Polarity
-		 *   0 - Disabled
-		 *   1 - Enabled
-		 */
-		data &= ~GG82563_PSCR_POLARITY_REVERSAL_DISABLE;
-		if (phy->disable_polarity_correction)
-			data |= GG82563_PSCR_POLARITY_REVERSAL_DISABLE;
+	/*
+	 * Options:
+	 *   disable_polarity_correction = 0 (default)
+	 *       Automatic Correction for Reversed Cable Polarity
+	 *   0 - Disabled
+	 *   1 - Enabled
+	 */
+	data &= ~GG82563_PSCR_POLARITY_REVERSAL_DISABLE;
+	if (phy->disable_polarity_correction)
+		data |= GG82563_PSCR_POLARITY_REVERSAL_DISABLE;
 
-		ret_val = e1e_wphy(hw, GG82563_PHY_SPEC_CTRL, data);
-		if (ret_val)
-			goto out;
+	ret_val = e1e_wphy(hw, GG82563_PHY_SPEC_CTRL, data);
+	if (ret_val)
+		goto out;
 
-		/* SW Reset the PHY so all changes take effect */
-		ret_val = e1000e_commit_phy(hw);
-		if (ret_val) {
-			e_dbg("Error Resetting the PHY\n");
-			goto out;
-		}
-
+	/* SW Reset the PHY so all changes take effect */
+	ret_val = e1000e_commit_phy(hw);
+	if (ret_val) {
+		e_dbg("Error Resetting the PHY\n");
+		goto out;
 	}
 
 	/* Bypass Rx and Tx FIFO's */
@@ -1275,7 +1250,6 @@ static s32 e1000_cfg_kmrn_10_100_80003es2lan(struct e1000_hw *hw, u16 duplex)
 	tipg |= DEFAULT_TIPG_IPGT_10_100_80003ES2LAN;
 	ew32(TIPG, tipg);
 
-
 	do {
 		ret_val = e1e_rphy(hw, GG82563_PHY_KMRN_MODE_CTRL,
 		                               &reg_data);
@@ -1326,7 +1300,6 @@ static s32 e1000_cfg_kmrn_1000_80003es2lan(struct e1000_hw *hw)
 	tipg &= ~E1000_TIPG_IPGT_MASK;
 	tipg |= DEFAULT_TIPG_IPGT_1000_80003ES2LAN;
 	ew32(TIPG, tipg);
-
 
 	do {
 		ret_val = e1e_rphy(hw, GG82563_PHY_KMRN_MODE_CTRL,
@@ -1432,7 +1405,7 @@ static s32 e1000_read_mac_addr_80003es2lan(struct e1000_hw *hw)
 	if (ret_val)
 		goto out;
 
-	ret_val = e1000e_read_mac_addr_generic(hw);
+	ret_val = e1000_read_mac_addr_generic(hw);
 
 out:
 	return ret_val;

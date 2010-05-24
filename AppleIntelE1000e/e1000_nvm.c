@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2009 Intel Corporation.
+  Copyright(c) 1999 - 2010 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -378,7 +378,7 @@ out:
  *
  *  Writes data to EEPROM at offset using SPI interface.
  *
- *  If e1000_update_nvm_checksum is not called after this function , the
+ *  If e1000e_update_nvm_checksum is not called after this function , the
  *  EEPROM will most likely contain an invalid checksum.
  **/
 s32 e1000e_write_nvm_spi(struct e1000_hw *hw, u16 offset, u16 words, u16 *data)
@@ -483,14 +483,14 @@ out:
 }
 
 /**
- *  e1000e_read_mac_addr_generic - Read device MAC address
+ *  e1000_read_mac_addr_generic - Read device MAC address
  *  @hw: pointer to the HW structure
  *
  *  Reads the device MAC address from the EEPROM and stores the value.
  *  Since devices with two ports use the same EEPROM, we increment the
  *  last bit in the MAC address for the second port.
  **/
-s32 e1000e_read_mac_addr_generic(struct e1000_hw *hw)
+s32 e1000_read_mac_addr_generic(struct e1000_hw *hw)
 {
 	u32 rar_high;
 	u32 rar_low;
@@ -505,7 +505,7 @@ s32 e1000e_read_mac_addr_generic(struct e1000_hw *hw)
 	for (i = 0; i < E1000_RAH_MAC_ADDR_LEN; i++)
 		hw->mac.perm_addr[i+4] = (u8)(rar_high >> (i*8));
 
-	for (i = 0; i < ETH_ADDR_LEN; i++)
+	for (i = 0; i < ETH_ALEN; i++)
 		hw->mac.addr[i] = hw->mac.perm_addr[i];
 
 	return E1000_SUCCESS;
@@ -553,7 +553,7 @@ out:
  **/
 s32 e1000e_update_nvm_checksum_generic(struct e1000_hw *hw)
 {
-	s32  ret_val;
+	s32 ret_val;
 	u16 checksum = 0;
 	u16 i, nvm_data;
 

@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2009 Intel Corporation.
+  Copyright(c) 1999 - 2010 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -299,9 +299,13 @@ int _kc_pci_save_state(struct pci_dev *pdev)
 	struct net_device *netdev = pci_get_drvdata(pdev);
 	struct adapter_struct *adapter = netdev_priv(netdev);
 	int size = PCI_CONFIG_SPACE_LEN, i;
-	u16 pcie_cap_offset = pci_find_capability(pdev, PCI_CAP_ID_EXP);
-	u16 pcie_link_status;
+	u16 pcie_cap_offset, pcie_link_status;
 
+#if ( LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,0) )
+	/* no ->dev for 2.4 kernels */
+	WARN_ON(pdev->dev.driver_data == NULL);
+#endif
+	pcie_cap_offset = pci_find_capability(pdev, PCI_CAP_ID_EXP);
 	if (pcie_cap_offset) {
 		if (!pci_read_config_word(pdev,
 		                          pcie_cap_offset + PCIE_LINK_STATUS,
@@ -324,7 +328,7 @@ int _kc_pci_save_state(struct pci_dev *pdev)
 	return 0;
 }
 
-void _kc_pci_restore_state(struct pci_dev * pdev)
+void _kc_pci_restore_state(struct pci_dev *pdev)
 {
 	struct net_device *netdev = pci_get_drvdata(pdev);
 	struct adapter_struct *adapter = netdev_priv(netdev);
@@ -389,6 +393,26 @@ int __kc_adapter_clean(struct net_device *netdev, int *budget)
 }
 #endif /* NAPI */
 #endif /* <= 2.6.24 */
+
+/*****************************************************************************/
+#if ( LINUX_VERSION_CODE < KERNEL_VERSION(2,6,26) )
+void _kc_pci_disable_link_state(struct pci_dev *pdev, int state)
+{
+	struct pci_dev *parent = pdev->bus->self;
+	u16 link_state;
+	int pos;
+
+	if (!parent)
+		return;
+
+	pos = pci_find_capability(parent, PCI_CAP_ID_EXP);
+	if (pos) {
+		pci_read_config_word(parent, pos + PCI_EXP_LNKCTL, &link_state);
+		link_state &= ~state;
+		pci_write_config_word(parent, pos + PCI_EXP_LNKCTL, link_state);
+	}
+}
+#endif /* < 2.6.26 */
 
 /*****************************************************************************/
 #if ( LINUX_VERSION_CODE < KERNEL_VERSION(2,6,27) )
@@ -464,9 +488,18 @@ out:
 #endif /* < 2.6.28 */
 
 /*****************************************************************************/
-#if ( LINUX_VERSION_CODE < KERNEL_VERSION(2,6,29) )
-#endif /* < 2.6.29 */
-
-/*****************************************************************************/
 #if ( LINUX_VERSION_CODE < KERNEL_VERSION(2,6,30) )
 #endif /* < 2.6.30 */
+
+/*****************************************************************************/
+#if ( LINUX_VERSION_CODE < KERNEL_VERSION(2,6,33) )
+struct sk_buff *_kc_netdev_alloc_skb_ip_align(struct net_device *dev,
+                                              unsigned int length)
+{
+	struct sk_buff *skb = netdev_alloc_skb(dev, length + NET_IP_ALIGN);
+
+	if (NET_IP_ALIGN && skb)
+		skb_reserve(skb, NET_IP_ALIGN);
+	return skb;
+}
+#endif /* < 2.6.33 */

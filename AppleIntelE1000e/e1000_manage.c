@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2009 Intel Corporation.
+  Copyright(c) 1999 - 2010 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -52,7 +52,7 @@ static u8 e1000_calculate_checksum(u8 *buffer, u32 length)
 }
 
 /**
- *  e1000_mng_enable_host_if_generic - Checks host interface is enabled
+ *  e1000_mng_enable_host_if - Checks host interface is enabled
  *  @hw: pointer to the HW structure
  *
  *  Returns E1000_success upon success, else E1000_ERR_HOST_INTERFACE_COMMAND
@@ -61,11 +61,17 @@ static u8 e1000_calculate_checksum(u8 *buffer, u32 length)
  *  and also checks whether the previous command is completed.  It busy waits
  *  in case of previous command is not completed.
  **/
-s32 e1000_mng_enable_host_if_generic(struct e1000_hw *hw)
+s32 e1000_mng_enable_host_if(struct e1000_hw *hw)
 {
 	u32 hicr;
 	s32 ret_val = E1000_SUCCESS;
-	u8  i;
+	u8 i;
+
+	if (!(hw->mac.arc_subsystem_valid)) {
+		e_dbg("ARC subsystem not valid.\n");
+		ret_val = -E1000_ERR_HOST_INTERFACE_COMMAND;
+		goto out;
+	}
 
 	/* Check that the host interface is enabled. */
 	hicr = er32(HICR);
@@ -93,22 +99,21 @@ out:
 }
 
 /**
- *  e1000_check_mng_mode_generic - Generic check management mode
+ *  e1000e_check_mng_mode_generic - Generic check management mode
  *  @hw: pointer to the HW structure
  *
  *  Reads the firmware semaphore register and returns true (>0) if
  *  manageability is enabled, else false (0).
  **/
-bool e1000_check_mng_mode_generic(struct e1000_hw *hw)
+bool e1000e_check_mng_mode_generic(struct e1000_hw *hw)
 {
-	u32 fwsm;
+	u32 fwsm = er32(FWSM);
 
-	fwsm = er32(FWSM);
 	return (fwsm & E1000_FWSM_MODE_MASK) ==
 	        (E1000_MNG_IAMT_MODE << E1000_FWSM_MODE_SHIFT);
 }
 /**
- *  e1000e_enable_tx_pkt_filtering - Enable packet filtering on TX
+ *  e1000e_enable_tx_pkt_filtering - Enable packet filtering on Tx
  *  @hw: pointer to the HW structure
  *
  *  Enables packet filtering on transmit packets if manageability is enabled
@@ -121,11 +126,12 @@ bool e1000e_enable_tx_pkt_filtering(struct e1000_hw *hw)
 	u32 offset;
 	s32 ret_val, hdr_csum, csum;
 	u8 i, len;
-	bool tx_filter = true;
+
+	hw->mac.tx_pkt_filtering = true;
 
 	/* No manageability, no filtering */
 	if (!hw->mac.ops.check_mng_mode(hw)) {
-		tx_filter = false;
+		hw->mac.tx_pkt_filtering = false;
 		goto out;
 	}
 
@@ -134,19 +140,17 @@ bool e1000e_enable_tx_pkt_filtering(struct e1000_hw *hw)
 	 * reason, disable filtering.
 	 */
 	ret_val = hw->mac.ops.mng_enable_host_if(hw);
-	if (ret_val != E1000_SUCCESS) {
-		tx_filter = false;
+	if (ret_val) {
+		hw->mac.tx_pkt_filtering = false;
 		goto out;
 	}
 
 	/* Read in the header.  Length and offset are in dwords. */
 	len    = E1000_MNG_DHCP_COOKIE_LENGTH >> 2;
 	offset = E1000_MNG_DHCP_COOKIE_OFFSET >> 2;
-	for (i = 0; i < len; i++) {
-		*(buffer + i) = E1000_READ_REG_ARRAY_DWORD(hw,
-		                                           E1000_HOST_IF,
+	for (i = 0; i < len; i++)
+		*(buffer + i) = E1000_READ_REG_ARRAY(hw, E1000_HOST_IF,
 		                                           offset + i);
-	}
 	hdr_csum = hdr->checksum;
 	hdr->checksum = 0;
 	csum = e1000_calculate_checksum((u8 *)hdr,
@@ -156,18 +160,19 @@ bool e1000e_enable_tx_pkt_filtering(struct e1000_hw *hw)
 	 * the cookie area isn't considered valid, in which case we
 	 * take the safe route of assuming Tx filtering is enabled.
 	 */
-	if (hdr_csum != csum)
+	if ((hdr_csum != csum) || (hdr->signature != E1000_IAMT_SIGNATURE)) {
+		hw->mac.tx_pkt_filtering = true;
 		goto out;
-	if (hdr->signature != E1000_IAMT_SIGNATURE)
-		goto out;
+	}
 
 	/* Cookie area is valid, make the final check for filtering. */
-	if (!(hdr->status & E1000_MNG_DHCP_COOKIE_STATUS_PARSING))
-		tx_filter = false;
+	if (!(hdr->status & E1000_MNG_DHCP_COOKIE_STATUS_PARSING)) {
+		hw->mac.tx_pkt_filtering = false;
+		goto out;
+	}
 
 out:
-	hw->mac.tx_pkt_filtering = tx_filter;
-	return tx_filter;
+	return hw->mac.tx_pkt_filtering;
 }
 
 /**
@@ -216,13 +221,13 @@ out:
 }
 
 /**
- *  e1000_mng_write_cmd_header_generic - Writes manageability command header
+ *  e1000_mng_write_cmd_header - Writes manageability command header
  *  @hw: pointer to the HW structure
  *  @hdr: pointer to the host interface command header
  *
  *  Writes the command header after does the checksum calculation.
  **/
-s32 e1000_mng_write_cmd_header_generic(struct e1000_hw *hw,
+s32 e1000_mng_write_cmd_header(struct e1000_hw *hw,
                                     struct e1000_host_mng_command_header *hdr)
 {
 	u16 i, length = sizeof(struct e1000_host_mng_command_header);
@@ -234,7 +239,7 @@ s32 e1000_mng_write_cmd_header_generic(struct e1000_hw *hw,
 	length >>= 2;
 	/* Write the relevant command block into the ram area. */
 	for (i = 0; i < length; i++) {
-		E1000_WRITE_REG_ARRAY_DWORD(hw, E1000_HOST_IF, i,
+		E1000_WRITE_REG_ARRAY(hw, E1000_HOST_IF, i,
 		                            *((u32 *) hdr + i));
 		e1e_flush();
 	}
@@ -243,7 +248,7 @@ s32 e1000_mng_write_cmd_header_generic(struct e1000_hw *hw,
 }
 
 /**
- *  e1000_mng_host_if_write_generic - Write to the manageability host interface
+ *  e1000_mng_host_if_write - Write to the manageability host interface
  *  @hw: pointer to the HW structure
  *  @buffer: pointer to the host interface buffer
  *  @length: size of the buffer
@@ -254,7 +259,7 @@ s32 e1000_mng_write_cmd_header_generic(struct e1000_hw *hw,
  *  It also does alignment considerations to do the writes in most efficient
  *  way.  Also fills up the sum of the buffer in *buffer parameter.
  **/
-s32 e1000_mng_host_if_write_generic(struct e1000_hw *hw, u8 *buffer,
+s32 e1000_mng_host_if_write(struct e1000_hw *hw, u8 *buffer,
                                     u16 length, u16 offset, u8 *sum)
 {
 	u8 *tmp;
@@ -275,12 +280,12 @@ s32 e1000_mng_host_if_write_generic(struct e1000_hw *hw, u8 *buffer,
 	offset >>= 2;
 
 	if (prev_bytes) {
-		data = E1000_READ_REG_ARRAY_DWORD(hw, E1000_HOST_IF, offset);
+		data = E1000_READ_REG_ARRAY(hw, E1000_HOST_IF, offset);
 		for (j = prev_bytes; j < sizeof(u32); j++) {
 			*(tmp + j) = *bufptr++;
 			*sum += *(tmp + j);
 		}
-		E1000_WRITE_REG_ARRAY_DWORD(hw, E1000_HOST_IF, offset, data);
+		E1000_WRITE_REG_ARRAY(hw, E1000_HOST_IF, offset, data);
 		length -= j - prev_bytes;
 		offset++;
 	}
@@ -301,7 +306,7 @@ s32 e1000_mng_host_if_write_generic(struct e1000_hw *hw, u8 *buffer,
 			*sum += *(tmp + j);
 		}
 
-		E1000_WRITE_REG_ARRAY_DWORD(hw, E1000_HOST_IF, offset + i,
+		E1000_WRITE_REG_ARRAY(hw, E1000_HOST_IF, offset + i,
 		                            data);
 	}
 	if (remaining) {
@@ -313,7 +318,7 @@ s32 e1000_mng_host_if_write_generic(struct e1000_hw *hw, u8 *buffer,
 
 			*sum += *(tmp + j);
 		}
-		E1000_WRITE_REG_ARRAY_DWORD(hw, E1000_HOST_IF, offset + i, data);
+		E1000_WRITE_REG_ARRAY(hw, E1000_HOST_IF, offset + i, data);
 	}
 
 out:
@@ -321,10 +326,11 @@ out:
 }
 
 /**
- *  e1000e_enable_mng_pass_thru - Enable processing of ARP's
+ *  e1000e_enable_mng_pass_thru - Check if management passthrough is needed
  *  @hw: pointer to the HW structure
  *
- *  Verifies the hardware needs to allow ARPs to be processed by the host.
+ *  Verifies the hardware needs to leave interface enabled so that frames can
+ *  be directed to and from the management interface.
  **/
 bool e1000e_enable_mng_pass_thru(struct e1000_hw *hw)
 {
@@ -332,16 +338,12 @@ bool e1000e_enable_mng_pass_thru(struct e1000_hw *hw)
 	u32 fwsm, factps;
 	bool ret_val = false;
 
-	if (!hw->mac.asf_firmware_present)
-		goto out;
-
 	manc = er32(MANC);
 
-	if (!(manc & E1000_MANC_RCV_TCO_EN) ||
-	    !(manc & E1000_MANC_EN_MAC_ADDR_FILTER))
+	if (!(manc & E1000_MANC_RCV_TCO_EN))
 		goto out;
 
-	if (hw->mac.arc_subsystem_valid) {
+	if (hw->mac.has_fwsm) {
 		fwsm = er32(FWSM);
 		factps = er32(FACTPS);
 
@@ -351,12 +353,23 @@ bool e1000e_enable_mng_pass_thru(struct e1000_hw *hw)
 			ret_val = true;
 			goto out;
 		}
-	} else {
-		if ((manc & E1000_MANC_SMBUS_EN) &&
-		    !(manc & E1000_MANC_ASF_EN)) {
+	} else if ((hw->mac.type == e1000_82574) ||
+		   (hw->mac.type == e1000_82583)) {
+		u16 data;
+
+		factps = er32(FACTPS);
+		e1000_read_nvm(hw, NVM_INIT_CONTROL2_REG, 1, &data);
+
+		if (!(factps & E1000_FACTPS_MNGCG) &&
+		    ((data & E1000_NVM_INIT_CTRL2_MNGM) ==
+		     (e1000_mng_mode_pt << 13))) {
 			ret_val = true;
 			goto out;
 		}
+	} else if ((manc & E1000_MANC_SMBUS_EN) &&
+		    !(manc & E1000_MANC_ASF_EN)) {
+			ret_val = true;
+			goto out;
 	}
 
 out:

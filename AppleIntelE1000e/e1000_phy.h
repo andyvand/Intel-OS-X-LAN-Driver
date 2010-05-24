@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2009 Intel Corporation.
+  Copyright(c) 1999 - 2010 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -46,6 +46,7 @@ s32  e1000e_get_cfg_done(struct e1000_hw *hw);
 s32  e1000e_get_phy_id(struct e1000_hw *hw);
 s32  e1000e_get_phy_info_igp(struct e1000_hw *hw);
 s32  e1000e_get_phy_info_m88(struct e1000_hw *hw);
+s32  e1000_get_phy_info_ife(struct e1000_hw *hw);
 s32  e1000e_phy_sw_reset(struct e1000_hw *hw);
 void e1000e_phy_force_speed_duplex_setup(struct e1000_hw *hw, u16 *phy_ctrl);
 s32  e1000e_phy_hw_reset_generic(struct e1000_hw *hw);
@@ -66,7 +67,7 @@ s32  e1000e_write_phy_reg_m88(struct e1000_hw *hw, u32 offset, u16 data);
 s32  e1000_phy_reset_dsp(struct e1000_hw *hw);
 s32  e1000e_phy_has_link_generic(struct e1000_hw *hw, u32 iterations,
                                 u32 usec_interval, bool *success);
-s32  e1000_phy_init_script_igp3(struct e1000_hw *hw);
+s32  e1000e_phy_init_script_igp3(struct e1000_hw *hw);
 enum e1000_phy_type e1000e_get_phy_type_from_id(u32 phy_id);
 s32  e1000e_determine_phy_address(struct e1000_hw *hw);
 s32  e1000e_write_phy_reg_bm(struct e1000_hw *hw, u32 offset, u16 data);
@@ -81,7 +82,6 @@ s32  e1000_read_phy_reg_hv(struct e1000_hw *hw, u32 offset, u16 *data);
 s32  e1000_read_phy_reg_hv_locked(struct e1000_hw *hw, u32 offset, u16 *data);
 s32  e1000_write_phy_reg_hv(struct e1000_hw *hw, u32 offset, u16 data);
 s32  e1000_write_phy_reg_hv_locked(struct e1000_hw *hw, u32 offset, u16 data);
-s32  e1000_set_mdio_slow_mode_hv(struct e1000_hw *hw, bool slow);
 s32  e1000_link_stall_workaround_hv(struct e1000_hw *hw);
 s32  e1000_copper_link_setup_82577(struct e1000_hw *hw);
 s32  e1000_check_polarity_82577(struct e1000_hw *hw);

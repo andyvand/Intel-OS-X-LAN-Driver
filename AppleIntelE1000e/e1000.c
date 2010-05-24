@@ -65,6 +65,7 @@ static struct {
 	
 	{ E1000_DEV_ID_ICH10_D_BM_LM, board_ich10lan },
 	{ E1000_DEV_ID_ICH10_D_BM_LF, board_ich10lan },
+	{ E1000_DEV_ID_ICH10_D_BM_V, board_ich10lan },
 	
 	{ E1000_DEV_ID_PCH_M_HV_LM, board_pchlan },
 	{ E1000_DEV_ID_PCH_M_HV_LC, board_pchlan },
@@ -79,12 +80,11 @@ static s32 e1000_get_variants_82571(struct e1000_adapter *adapter)
 {
 	struct e1000_hw *hw = &adapter->hw;
 	static int global_quad_port_a; /* global port a indication */
-	u16 device = adapter->hw.device_id;
-	u16 eeprom_data = 0;
+	struct pci_dev *pdev = adapter->pdev;
 	int is_port_b = er32(STATUS) & E1000_STATUS_FUNC_1;
 	
 	/* tag quad port adapters first, it's used below */
-	switch (device) {
+	switch (pdev->device) {
 		case E1000_DEV_ID_82571EB_QUAD_COPPER:
 		case E1000_DEV_ID_82571EB_QUAD_FIBER:
 		case E1000_DEV_ID_82571EB_QUAD_COPPER_LP:
@@ -105,9 +105,9 @@ static s32 e1000_get_variants_82571(struct e1000_adapter *adapter)
 	switch (adapter->hw.mac.type) {
 		case e1000_82571:
 			/* these dual ports don't have WoL on port B at all */
-			if (((device == E1000_DEV_ID_82571EB_FIBER) ||
-				 (device == E1000_DEV_ID_82571EB_SERDES) ||
-				 (device == E1000_DEV_ID_82571EB_COPPER)) &&
+			if (((pdev->device == E1000_DEV_ID_82571EB_FIBER) ||
+				 (pdev->device == E1000_DEV_ID_82571EB_SERDES) ||
+				 (pdev->device == E1000_DEV_ID_82571EB_COPPER)) &&
 				(is_port_b))
 				adapter->flags &= ~FLAG_HAS_WOL;
 			/* quad ports only support WoL on port A */
@@ -115,19 +115,26 @@ static s32 e1000_get_variants_82571(struct e1000_adapter *adapter)
 				(!(adapter->flags & FLAG_IS_QUAD_PORT_A)))
 				adapter->flags &= ~FLAG_HAS_WOL;
 			/* Does not support WoL on any port */
-			if (device == E1000_DEV_ID_82571EB_SERDES_QUAD)
+			if (pdev->device == E1000_DEV_ID_82571EB_SERDES_QUAD)
 				adapter->flags &= ~FLAG_HAS_WOL;
 			break;
 			
 		case e1000_82573:
-			if (device == E1000_DEV_ID_82573L) {
-				if (e1000_read_nvm(&adapter->hw, NVM_INIT_3GIO_3, 1,
-								   &eeprom_data) < 0)
-					break;
-				if (!(eeprom_data & NVM_WORD1A_ASPM_MASK)) {
-					adapter->flags |= FLAG_HAS_JUMBO_FRAMES;
-					adapter->max_hw_frame_size = DEFAULT_JUMBO;
-				}
+		case e1000_82574:
+		case e1000_82583:
+#if	0
+			/* Disable ASPM L0s due to hardware errata */
+			if (pcie_aspm_enabled()) {
+				IOLog("Disabling L0s\n");
+				pci_disable_link_state(pdev, PCIE_LINK_STATE_L0S);
+			} else {
+				IOLog("ASPM disabled system-wide\n");
+			}
+#endif
+
+			if (pdev->device == E1000_DEV_ID_82573L) {
+				adapter->flags |= FLAG_HAS_JUMBO_FRAMES;
+				adapter->max_hw_frame_size = DEFAULT_JUMBO;
 			}
 			break;
 			
@@ -150,6 +157,7 @@ static struct e1000_info e1000_82571_info = {
 	| FLAG_RESET_OVERWRITES_LAA /* errata */
 	| FLAG_TARC_SPEED_MODE_BIT /* errata */
 	| FLAG_APME_CHECK_PORT_B,
+	.flags2			= FLAG2_DISABLE_ASPM_L1, /* errata */
 	.pba			= 38,
 	.max_hw_frame_size	= DEFAULT_JUMBO,
 	.init_ops		= e1000_init_function_pointers_82571,
@@ -165,6 +173,7 @@ static struct e1000_info e1000_82572_info = {
 	| FLAG_RX_CSUM_ENABLED
 	| FLAG_HAS_CTRLEXT_ON_LOAD
 	| FLAG_TARC_SPEED_MODE_BIT, /* errata */
+	.flags2			= FLAG2_DISABLE_ASPM_L1, /* errata */
 	.pba			= 38,
 	.max_hw_frame_size	= DEFAULT_JUMBO,
 	.init_ops		= e1000_init_function_pointers_82571,
@@ -179,7 +188,6 @@ static struct e1000_info e1000_82573_info = {
 	| FLAG_RX_CSUM_ENABLED
 	| FLAG_HAS_SMART_POWER_DOWN
 	| FLAG_HAS_AMT
-	| FLAG_HAS_ERT
 	| FLAG_HAS_SWSM_ON_LOAD,
 	.pba			= 20,
 	.max_hw_frame_size	= ETH_FRAME_LEN + ETH_FCS_LEN,
@@ -200,7 +208,7 @@ static struct e1000_info e1000_82574_info = {
 	| FLAG_HAS_SMART_POWER_DOWN
 	| FLAG_HAS_AMT
 	| FLAG_HAS_CTRLEXT_ON_LOAD,
-	.pba			= 20,
+	.pba			= 36,
 	.max_hw_frame_size	= DEFAULT_JUMBO,
 	.init_ops		= e1000_init_function_pointers_82571,
 	.get_variants		= e1000_get_variants_82571,
@@ -215,7 +223,7 @@ static struct e1000_info e1000_82583_info = {
 	| FLAG_HAS_SMART_POWER_DOWN
 	| FLAG_HAS_AMT
 	| FLAG_HAS_CTRLEXT_ON_LOAD,
-	.pba			= 20,
+	.pba			= 36,
 	.max_hw_frame_size	= ETH_FRAME_LEN + ETH_FCS_LEN,
 	.init_ops		= e1000_init_function_pointers_82571,
 	.get_variants		= e1000_get_variants_82571,
