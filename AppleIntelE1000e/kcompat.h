@@ -40,12 +40,22 @@
 #define true 1
 #define false 0
 
+#define cpu_to_le16(x)	OSSwapHostToLittleConstInt16(x)
 #define cpu_to_le32(x)	OSSwapHostToLittleConstInt32(x)
+#define	cpu_to_le64(x)	OSSwapHostToLittleConstInt64(x)
 #define	le16_to_cpu(x)	OSSwapLittleToHostInt16(x)
+#define	le32_to_cpu(x)	OSSwapLittleToHostInt32(x)
+
+#define	writel(val, reg)	_OSWriteInt32(reg, 0, val)
+#define	writew(val, reg)	_OSWriteInt16(reg, 0, val)
+#define	readl(reg)	_OSReadInt32(reg, 0)
+#define	readw(reg)	_OSReadInt16(reg, 0)
 
 #define ALIGN(x,a) (((x)+(a)-1)&~((a)-1))
 
-struct net_device;
+struct net_device {
+	u32 mtu;
+};
 struct pci_dev {
 	u16 vendor;
 	u16 device;
@@ -124,6 +134,11 @@ struct work_struct {
 
 #define NET_IP_ALIGN	2
 
+#define	PCI_EXP_LNKCTL	16
+
+#define	EIO		5
+#define	ENOMEM	12
+#define	EBUSY	16
 /*****************************************************************************/
 #define msleep(x)	IOSleep(x)
 #define udelay(x)	IODelay(x)
@@ -145,4 +160,12 @@ struct work_struct {
 typedef void IOBufferMemoryDescriptor;
 #endif
 
+#define	prefetch(x)
+#define	unlikely(x)	(x)
+#define	likely(x)	(x)
+#define	BUG()
+#define	wmb()
+#define	mmiowb()
+
+#define	__MODULE_STRING(s)	"x"
 #endif /* _KCOMPAT_H_ */

@@ -100,8 +100,8 @@ public:
 	virtual IOReturn getMinPacketSize (UInt32 *minSize) const;
 	
 private:
-	IOWorkLoop * workLoop;
-	IOPCIDevice * pciDevice;
+	IOWorkLoop* workLoop;
+	IOPCIDevice* pciDevice;
 	OSDictionary * mediumDict;
 	IONetworkMedium * mediumTable[MEDIUM_INDEX_COUNT];
 	IOOutputQueue * transmitQueue;
@@ -115,30 +115,22 @@ private:
     
 	IOMemoryMap * csrPCIAddress;
 	IOMemoryMap * flashPCIAddress;
-	IOVirtualAddress csrCPUAddress;
-	IOVirtualAddress flashCPUAddress;
 	
 	IOMbufNaturalMemoryCursor * rxMbufCursor;
 	IOMbufNaturalMemoryCursor * txMbufCursor;
 	
-	bool interruptEnabled;
 	bool enabledForNetif;
 	bool promiscusMode;
 	bool multicastMode;
 	UInt32 preLinkStatus;
-	UInt32 mtu;
 	UInt32 powerState;
 
-	bool resumeState;
 	bool suspend;
 	
-	struct e1000_adapter adapter;
+	struct e1000_adapter priv_adapter;
 	struct pci_dev priv_pdev;
+	struct net_device priv_netdev;
 	
-	struct e1000_ring rx_ring;
-	struct e1000_ring tx_ring;
-	struct e1000_buffer rx_buffer_info[NUM_RING_FRAME];
-	struct e1000_buffer tx_buffer_info[NUM_RING_FRAME];
 private:
 	void interruptOccurred(IOInterruptEventSource * src);
 	void timeoutOccurred(IOTimerEventSource* src);
@@ -148,38 +140,41 @@ private:
 	bool initPCIConfigSpace(IOPCIDevice* provider);
 
 	void e1000_print_link_info();
-	void e1000_free_rx_resources();
 	void e1000_clean_rx_ring();
-	void e1000_free_tx_resources();
 	void e1000_clean_tx_ring();
-	void e1000e_reset();
+	void e1000e_free_tx_resources();
+	void e1000e_free_rx_resources();
 	bool e1000e_has_link();
 	void e1000e_enable_receives();
 	bool e1000_clean_tx_irq();
 	bool e1000_clean_rx_irq();
-	void e1000_alloc_rx_buffers();
-	int  e1000_desc_unused(struct e1000_ring *ring);
+	bool e1000_clean_rx_irq_ps();
+	void e1000_put_txbuf(e1000_buffer *buffer_info);
+	void e1000_alloc_rx_buffers(int cleaned_count);
+	void e1000_alloc_rx_buffers_ps(int cleaned_count);
 	void e1000_configure_rx();
 	void e1000_setup_rctl();
 	void e1000_init_manageability_pt();
 	void e1000_configure_tx();
 	void e1000_set_multi();
 	bool e1000_tx_csum(mbuf_t skb);
-	void e1000_irq_enable();
-	void e1000_irq_disable();
+	void e1000_rx_checksum(mbuf_t skb, u32 status);
+	void e1000_receive_skb(mbuf_t skb, u32 length, u8 status, __le16 vlan);
 	void e1000_configure();
-	void e1000_set_mtu(UInt32 maxSize);
-	
+	void e1000e_down();
+	void e1000_change_mtu(UInt32 maxSize);
+
+private:
+	bool clean_rx_irq();
+	void alloc_rx_buf(int cleaned_count);
+
 public:
 	static void interruptHandler(OSObject * target,
 								 IOInterruptEventSource * src,
 								 int count );
 	
-	static bool interruptFilter(OSObject * target ,
-								IOFilterInterruptEventSource * src);
 	
 	static void timeoutHandler(OSObject * target, IOTimerEventSource * src);
-	UInt32 interruptReason;
 	
 };
 

@@ -361,6 +361,290 @@ s32 e1000_read_pcie_cap_reg(struct e1000_hw *hw, u32 reg, u16 *value)
 }
 
 
+/*
+ * This is the only thing that needs to be changed to adjust the
+ * maximum number of ports that the driver can manage.
+ */
+
+#define E1000_MAX_NIC 32
+
+#define OPTION_UNSET   -1
+#define OPTION_DISABLED 0
+#define OPTION_ENABLED  1
+
+#define COPYBREAK_DEFAULT 256
+unsigned int copybreak = COPYBREAK_DEFAULT;
+
+/*
+ * All parameters are treated the same, as an integer array of values.
+ * This macro just reduces the need to repeat the same declaration code
+ * over and over (plus this helps to avoid typo bugs).
+ */
+
+#define E1000_PARAM_INIT { [0 ... E1000_MAX_NIC] = OPTION_UNSET }
+#define E1000_PARAM(X, desc) \
+
+
+/*
+ * Transmit Interrupt Delay in units of 1.024 microseconds
+ * Tx interrupt delay needs to typically be set to something non zero
+ *
+ * Valid Range: 0-65535
+ */
+E1000_PARAM(TxIntDelay, "Transmit Interrupt Delay");
+#define DEFAULT_TIDV 8
+#define MAX_TXDELAY 0xFFFF
+#define MIN_TXDELAY 0
+
+/*
+ * Transmit Absolute Interrupt Delay in units of 1.024 microseconds
+ *
+ * Valid Range: 0-65535
+ */
+E1000_PARAM(TxAbsIntDelay, "Transmit Absolute Interrupt Delay");
+#define DEFAULT_TADV 32
+#define MAX_TXABSDELAY 0xFFFF
+#define MIN_TXABSDELAY 0
+
+/*
+ * Receive Interrupt Delay in units of 1.024 microseconds
+ * hardware will likely hang if you set this to anything but zero.
+ *
+ * Valid Range: 0-65535
+ */
+E1000_PARAM(RxIntDelay, "Receive Interrupt Delay");
+#define DEFAULT_RDTR 0
+#define MAX_RXDELAY 0xFFFF
+#define MIN_RXDELAY 0
+
+/*
+ * Receive Absolute Interrupt Delay in units of 1.024 microseconds
+ *
+ * Valid Range: 0-65535
+ */
+E1000_PARAM(RxAbsIntDelay, "Receive Absolute Interrupt Delay");
+#define DEFAULT_RADV 8
+#define MAX_RXABSDELAY 0xFFFF
+#define MIN_RXABSDELAY 0
+
+/*
+ * Interrupt Throttle Rate (interrupts/sec)
+ *
+ * Valid Range: 100-100000 (0=off, 1=dynamic, 3=dynamic conservative)
+ */
+E1000_PARAM(InterruptThrottleRate, "Interrupt Throttling Rate");
+#define DEFAULT_ITR 3
+#define MAX_ITR 100000
+#define MIN_ITR 100
+
+#ifdef CONFIG_E1000E_MSIX
+/* IntMode (Interrupt Mode)
+ *
+ * Valid Range: 0 - 2
+ *
+ * Default Value: 2 (MSI-X)
+ */
+E1000_PARAM(IntMode, "Interrupt Mode");
+#define MAX_INTMODE	2
+#define MIN_INTMODE	0
+
+#endif /* CONFIG_E1000E_MSIX */
+/*
+ * Enable Smart Power Down of the PHY
+ *
+ * Valid Range: 0, 1
+ *
+ * Default Value: 0 (disabled)
+ */
+E1000_PARAM(SmartPowerDownEnable, "Enable PHY smart power down");
+
+/*
+ * Enable Kumeran Lock Loss workaround
+ *
+ * Valid Range: 0, 1
+ *
+ * Default Value: 1 (enabled)
+ */
+E1000_PARAM(KumeranLockLoss, "Enable Kumeran lock loss workaround");
+
+/*
+ * Enable CRC Stripping
+ *
+ * Valid Range: 0, 1
+ *
+ * Default Value: 1 (enabled)
+ */
+E1000_PARAM(CrcStripping, "Enable CRC Stripping, disable if your BMC needs " \
+			"the CRC");
+
+struct e1000_option {
+	enum { enable_option, range_option, list_option } type;
+	const char *name;
+	const char *err;
+	int def;
+	union {
+		struct { /* range_option info */
+			int min;
+			int max;
+		} r;
+		struct { /* list_option info */
+			int nr;
+			struct e1000_opt_list { int i; char *str; } *p;
+		} l;
+	} arg;
+};
+
+static int e1000_validate_option(unsigned int *value,
+										   const struct e1000_option *opt,
+										   struct e1000_adapter *adapter)
+{
+	if (*value == OPTION_UNSET) {
+		*value = opt->def;
+		return 0;
+	}
+	
+	switch (opt->type) {
+		case enable_option:
+			switch (*value) {
+				case OPTION_ENABLED:
+					e_info("%s Enabled\n", opt->name);
+					return 0;
+				case OPTION_DISABLED:
+					e_info("%s Disabled\n", opt->name);
+					return 0;
+			}
+			break;
+		case range_option:
+			if (*value >= opt->arg.r.min && *value <= opt->arg.r.max) {
+				e_info("%s set to %i\n", opt->name, *value);
+				return 0;
+			}
+			break;
+		case list_option: {
+			int i;
+			struct e1000_opt_list *ent;
+			
+			for (i = 0; i < opt->arg.l.nr; i++) {
+				ent = &opt->arg.l.p[i];
+				if (*value == ent->i) {
+					if (ent->str[0] != '\0')
+						e_info("%s\n", ent->str);
+					return 0;
+				}
+			}
+		}
+			break;
+		default:
+			BUG();
+	}
+	
+	e_info("Invalid %s value specified (%i) %s\n", opt->name, *value,
+	       opt->err);
+	*value = opt->def;
+	return -1;
+}
+
+/**
+ * e1000e_check_options - Range Checking for Command Line Parameters
+ * @adapter: board private structure
+ *
+ * This routine checks all command line parameters for valid user
+ * input.  If an invalid value is given, or if no user specified
+ * value exists, a default value is used.  The final value is stored
+ * in a variable in the adapter structure.
+ **/
+void e1000e_check_options(struct e1000_adapter *adapter)
+{
+	struct e1000_hw *hw = &adapter->hw;
+	int bd = adapter->bd_number;
+	
+	if (bd >= E1000_MAX_NIC) {
+		e_notice("Warning: no configuration for board #%i\n", bd);
+		e_notice("Using defaults for all values\n");
+	}
+	
+	{ /* Transmit Interrupt Delay */
+		static const struct e1000_option opt = {
+			.type = range_option,
+			.name = "Transmit Interrupt Delay",
+			.err  = "using default of "
+			__MODULE_STRING(DEFAULT_TIDV),
+			.def  = DEFAULT_TIDV,
+			.arg  = { .r = { .min = MIN_TXDELAY,
+				.max = MAX_TXDELAY } }
+		};
+		
+		adapter->tx_int_delay = opt.def;
+	}
+	{ /* Transmit Absolute Interrupt Delay */
+		static const struct e1000_option opt = {
+			.type = range_option,
+			.name = "Transmit Absolute Interrupt Delay",
+			.err  = "using default of "
+			__MODULE_STRING(DEFAULT_TADV),
+			.def  = DEFAULT_TADV,
+			.arg  = { .r = { .min = MIN_TXABSDELAY,
+				.max = MAX_TXABSDELAY } }
+		};
+		
+		adapter->tx_abs_int_delay = opt.def;
+	}
+	{ /* Receive Interrupt Delay */
+		static struct e1000_option opt = {
+			.type = range_option,
+			.name = "Receive Interrupt Delay",
+			.err  = "using default of "
+			__MODULE_STRING(DEFAULT_RDTR),
+			.def  = DEFAULT_RDTR,
+			.arg  = { .r = { .min = MIN_RXDELAY,
+				.max = MAX_RXDELAY } }
+		};
+		
+		adapter->rx_int_delay = opt.def;
+	}
+	{ /* Receive Absolute Interrupt Delay */
+		static const struct e1000_option opt = {
+			.type = range_option,
+			.name = "Receive Absolute Interrupt Delay",
+			.err  = "using default of "
+			__MODULE_STRING(DEFAULT_RADV),
+			.def  = DEFAULT_RADV,
+			.arg  = { .r = { .min = MIN_RXABSDELAY,
+				.max = MAX_RXABSDELAY } }
+		};
+		
+		adapter->rx_abs_int_delay = opt.def;
+	}
+	{ /* Interrupt Throttling Rate */
+		static const struct e1000_option opt = {
+			.type = range_option,
+			.name = "Interrupt Throttling Rate (ints/sec)",
+			.err  = "using default of "
+			__MODULE_STRING(DEFAULT_ITR),
+			.def  = DEFAULT_ITR,
+			.arg  = { .r = { .min = MIN_ITR,
+				.max = MAX_ITR } }
+		};
+		
+		adapter->itr_setting = opt.def;
+		adapter->itr = 20000;
+	}
+	{ /* CRC Stripping */
+		adapter->flags2 |= FLAG2_CRC_STRIPPING;
+	}
+	{ /* Kumeran Lock Loss Workaround */
+		static const struct e1000_option opt = {
+			.type = enable_option,
+			.name = "Kumeran Lock Loss Workaround",
+			.err  = "defaulting to Enabled",
+			.def  = OPTION_ENABLED
+		};
+		
+		if (hw->mac.type == e1000_ich8lan)
+			e1000e_set_kmrn_lock_loss_workaround_ich8lan(hw, opt.def);
+	}
+}
+
 // Mutex used in ich8lan.c
 IOLock* swflag_mutex;
 IOLock* nvm_mutex;

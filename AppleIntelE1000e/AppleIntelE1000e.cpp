@@ -21,10 +21,23 @@ extern "C" {
 
 #include "AppleIntelE1000e.h"
 
+#define	USE_COPY_BUFFER	0
 
 #define TBDS_PER_TCB 12
-#define COPYBREAK_DEFAULT 256
 #define super IOEthernetController
+
+#define E1000_TX_FLAGS_CSUM		0x00000001
+#define E1000_TX_FLAGS_VLAN		0x00000002
+#define E1000_TX_FLAGS_TSO		0x00000004
+#define E1000_TX_FLAGS_IPV4		0x00000008
+#define E1000_TX_FLAGS_VLAN_MASK	0xffff0000
+#define E1000_TX_FLAGS_VLAN_SHIFT	16
+
+#define E1000_MAX_PER_TXD	8192
+#define E1000_MAX_TXD_PWR	12
+#define TXD_USE_COUNT(S, X) (((S) >> (X)) + 1)
+
+static int cards_found = 0;
 
 static inline void RELEASE(OSObject* x)
 {
@@ -51,48 +64,265 @@ static void release_mutex(){
 	}
 }
 
-static inline void clear_desc(IOBufferMemoryDescriptor* desc, size_t size)
+/**
+ * e1000_desc_unused - calculate if we have unused descriptors
+ **/
+static int e1000_desc_unused(struct e1000_ring *ring)
 {
-	bzero(desc->getBytesNoCopy(), size);
+	if (ring->next_to_clean > ring->next_to_use)
+		return ring->next_to_clean - ring->next_to_use - 1;
+	
+	return ring->count + ring->next_to_clean - ring->next_to_use - 1;
 }
 
-static void e1000_free_ring_resources(e1000_ring* ring)
+
+static void e1000e_disable_l1aspm(IOPCIDevice* pdev)
 {
-	if (ring->desc) {
-        ring->desc->complete();
-        ring->desc->release();
-		ring->desc = NULL;
+	int pos;
+	u16 val;
+	
+	/*
+	 * Workaround for 82571/82572 Errata 13 - Device Does Not Support
+	 * PCIe Active State Power Management L1 State (ASPM L1).
+	 */
+	pos = pdev->findPCICapability(kIOPCIPCIExpressCapability);
+	val = pdev->configRead16(pos + PCI_EXP_LNKCTL);
+	if (val & 0x2) {
+		IOLog("Disabling L1 ASPM\n");
+		val &= ~0x2;
+		pdev->configWrite16(pos + PCI_EXP_LNKCTL, val);
 	}
-	bzero(ring, sizeof(e1000_ring));
 }
 
 /**
- * e1000_setup_ring_resources - allocate Tx/Rx resources (Descriptors)
+ * e1000_alloc_queues - Allocate memory for all rings
+ * @adapter: board private structure to initialize
+ **/
+static int e1000_alloc_queues(struct e1000_adapter *adapter)
+{
+	adapter->tx_ring = (e1000_ring*)IOMalloc(sizeof(struct e1000_ring));
+	if (adapter->tx_ring){
+		adapter->rx_ring = (e1000_ring*)IOMalloc(sizeof(struct e1000_ring));
+		if (adapter->rx_ring){
+			bzero(adapter->tx_ring, sizeof(e1000_ring));
+			bzero(adapter->rx_ring, sizeof(e1000_ring));
+			return 0;
+		}
+		IOFree(adapter->tx_ring, sizeof(e1000_ring));
+	}
+	return -ENOMEM;
+}
+
+/**
+ * e1000_irq_disable - Mask off interrupt generation on the NIC
+ **/
+static void e1000_irq_disable(struct e1000_adapter *adapter)
+{
+	struct e1000_hw *hw = &adapter->hw;
+	
+	ew32(IMC, ~0);
+#ifdef CONFIG_E1000E_MSIX
+	if (adapter->msix_entries)
+		ew32(EIAC_82574, 0);
+#endif /* CONFIG_E1000E_MSIX */
+	e1e_flush();
+	//synchronize_irq(adapter->pdev->irq);
+}
+
+/**
+ * e1000_irq_enable - Enable default interrupt generation settings
+ **/
+static void e1000_irq_enable(struct e1000_adapter *adapter)
+{
+	struct e1000_hw *hw = &adapter->hw;
+	
+#ifdef CONFIG_E1000E_MSIX
+	if (adapter->msix_entries) {
+		ew32(EIAC_82574, adapter->eiac_mask & E1000_EIAC_MASK_82574);
+		ew32(IMS, adapter->eiac_mask | E1000_IMS_OTHER | E1000_IMS_LSC);
+	} else {
+		ew32(IMS, IMS_ENABLE_MASK);
+	}
+#else
+	ew32(IMS, IMS_ENABLE_MASK);
+#endif /* CONFIG_E1000E_MSIX */
+	e1e_flush();
+}
+
+
+/**
+ * e1000_sw_init - Initialize general software structures (struct e1000_adapter)
+ * @adapter: board private structure to initialize
+ *
+ * e1000_sw_init initializes the Adapter private data structure.
+ * Fields are initialized based on PCI device information and
+ * OS network device settings (MTU size).
+ **/
+static int e1000_sw_init(struct e1000_adapter *adapter)
+{
+	struct net_device *netdev = adapter->netdev;
+	s32 rc;
+	
+	adapter->rx_buffer_len = ETH_FRAME_LEN + VLAN_HLEN + ETH_FCS_LEN;
+	adapter->rx_ps_bsize0 = 128;
+	adapter->max_frame_size = netdev->mtu + ETH_HLEN + ETH_FCS_LEN;
+	adapter->min_frame_size = ETH_ZLEN + ETH_FCS_LEN;
+	
+	/* Set various function pointers */
+	adapter->ei->init_ops(&adapter->hw);
+	
+	rc = adapter->hw.mac.ops.init_params(&adapter->hw);
+	if (rc)
+		return rc;
+	
+	rc = adapter->hw.nvm.ops.init_params(&adapter->hw);
+	if (rc)
+		return rc;
+	
+	rc = adapter->hw.phy.ops.init_params(&adapter->hw);
+	if (rc)
+		return rc;
+	
+#ifdef CONFIG_E1000E_MSIX
+	e1000e_set_interrupt_capability(adapter);
+	
+#endif /* CONFIG_E1000E_MSIX */
+	if (e1000_alloc_queues(adapter))
+		return -ENOMEM;
+	
+	/* Explicitly disable IRQ since the NIC can be in any state. */
+	e1000_irq_disable(adapter);
+	
+	//set_bit(__E1000_DOWN, &adapter->state);
+	return 0;
+}
+
+static void e1000_eeprom_checks(struct e1000_adapter *adapter)
+{
+	struct e1000_hw *hw = &adapter->hw;
+	int ret_val;
+	u16 buf = 0;
+	
+	if (hw->mac.type != e1000_82573)
+		return;
+	
+	ret_val = e1000_read_nvm(hw, NVM_INIT_CONTROL2_REG, 1, &buf);
+	if (!ret_val && (!(le16_to_cpu(buf) & (1 << 0)))) {
+		/* Deep Smart Power Down (DSPD) */
+		IOLog("Warning: detected DSPD enabled in EEPROM\n");
+	}
+}
+
+/**
+ * @e1000_alloc_ring - allocate memory for a ring structure
+ **/
+static int e1000_alloc_ring_dma(struct e1000_adapter *adapter,
+								struct e1000_ring *ring)
+{
+	ring->pool = IOBufferMemoryDescriptor::inTaskWithOptions( kernel_task, kIODirectionInOut | kIOMemoryPhysicallyContiguous,
+													   ring->size, PAGE_SIZE );
+
+	if (!ring->pool)
+		return -ENOMEM;
+
+	ring->pool->prepare();
+	ring->desc = ring->pool->getBytesNoCopy();
+	ring->dma = ring->pool->getPhysicalAddress();
+
+	bzero(ring->desc, ring->size);
+	
+	return 0;
+}
+
+/**
+ * e1000e_setup_tx_resources - allocate Tx resources (Descriptors)
  * @adapter: board private structure
  *
  * Return 0 on success, negative on failure
  **/
-static int e1000_setup_ring_resources(struct e1000_ring* ring)
+int e1000e_setup_tx_resources(struct e1000_adapter *adapter)
 {
-	IOBufferMemoryDescriptor* desc;
-	IOPhysicalAddress dma;
+	struct e1000_ring *tx_ring = adapter->tx_ring;
+	int err = -ENOMEM, size;
 	
-	desc = IOBufferMemoryDescriptor::inTaskWithOptions( kernel_task, kIODirectionInOut | kIOMemoryPhysicallyContiguous,
-													   SIZE_RING_DESC, PAGE_SIZE );
-	if (desc == NULL) {
-		e_dbg("No memory for ring desc.\n");
-		return -1;
-	}
-	dma = desc->getPhysicalAddress();
+	size = sizeof(struct e1000_buffer) * tx_ring->count;
+	tx_ring->buffer_info = (e1000_buffer*)IOMalloc(size);
+	if (!tx_ring->buffer_info)
+		goto err;
+	bzero(tx_ring->buffer_info, size);
 	
-	clear_desc( desc, SIZE_RING_DESC);
-	ring->dma = dma;
-	ring->desc = desc;
+	/* round up to nearest 4K */
+	tx_ring->size = tx_ring->count * sizeof(struct e1000_tx_desc);
+	tx_ring->size = ALIGN(tx_ring->size, 4096);
 	
-	e_dbg("ring desc success: size->%d, virtual:%p, phy:%p.\n", SIZE_RING_DESC, desc->getBytesNoCopy(), (void*)dma);
+	err = e1000_alloc_ring_dma(adapter, tx_ring);
+	if (err)
+		goto err;
+	
+	tx_ring->next_to_use = 0;
+	tx_ring->next_to_clean = 0;
 	
 	return 0;
+err:
+	IOFree(tx_ring->buffer_info, size);
+	e_err("Unable to allocate memory for the transmit descriptor ring\n");
+	return err;
 }
+
+/**
+ * e1000e_setup_rx_resources - allocate Rx resources (Descriptors)
+ * @adapter: board private structure
+ *
+ * Returns 0 on success, negative on failure
+ **/
+int e1000e_setup_rx_resources(struct e1000_adapter *adapter)
+{
+	struct e1000_ring *rx_ring = adapter->rx_ring;
+	struct e1000_buffer *buffer_info;
+	int i, size, desc_len, err = -ENOMEM;
+	
+	size = sizeof(struct e1000_buffer) * rx_ring->count;
+	rx_ring->buffer_info = (e1000_buffer*)IOMalloc(size);
+	if (!rx_ring->buffer_info)
+		goto err;
+	bzero(rx_ring->buffer_info, size);
+	
+	for (i = 0; i < rx_ring->count; i++) {
+		buffer_info = &rx_ring->buffer_info[i];
+		buffer_info->ps_pages = (e1000_ps_page*)IOMalloc(PS_PAGE_BUFFERS * sizeof(struct e1000_ps_page));
+		if (!buffer_info->ps_pages)
+			goto err_pages;
+		bzero(buffer_info->ps_pages, PS_PAGE_BUFFERS * sizeof(struct e1000_ps_page));
+	}
+	
+	desc_len = sizeof(union e1000_rx_desc_packet_split);
+	
+	/* Round up to nearest 4K */
+	rx_ring->size = rx_ring->count * desc_len;
+	rx_ring->size = ALIGN(rx_ring->size, 4096);
+	
+	err = e1000_alloc_ring_dma(adapter, rx_ring);
+	if (err)
+		goto err_pages;
+	
+	rx_ring->next_to_clean = 0;
+	rx_ring->next_to_use = 0;
+	rx_ring->rx_skb_top = NULL;
+	
+	return 0;
+	
+err_pages:
+	for (i = 0; i < rx_ring->count; i++) {
+		buffer_info = &rx_ring->buffer_info[i];
+		IOFree(buffer_info->ps_pages, PS_PAGE_BUFFERS * sizeof(struct e1000_ps_page));
+	}
+err:
+	IOFree(rx_ring->buffer_info, size);
+	e_err("Unable to allocate memory for the receive descriptor ring\n");
+	return err;
+}
+
+
 
 /**
  * e1000_get_hw_control - get control of the h/w from f/w
@@ -145,6 +375,8 @@ static void e1000_release_hw_control(struct e1000_adapter *adapter)
 	}
 }
 
+
+
 /**
  * e1000e_power_up_phy - restore link in case the phy was powered down
  * @adapter: address of board private structure
@@ -178,6 +410,163 @@ static void e1000_power_down_phy(struct e1000_adapter *adapter)
 }
 
 /**
+ * e1000e_reset - bring the hardware into a known good state
+ *
+ * This function boots the hardware and enables some settings that
+ * require a configuration cycle of the hardware - those cannot be
+ * set/changed during runtime. After reset the device needs to be
+ * properly configured for Rx, Tx etc.
+ */
+void e1000e_reset(struct e1000_adapter *adapter)
+{
+	struct e1000_mac_info *mac = &adapter->hw.mac;
+	struct e1000_fc_info *fc = &adapter->hw.fc;
+	struct e1000_hw *hw = &adapter->hw;
+	u32 tx_space, min_tx_space, min_rx_space;
+	u32 pba = adapter->pba;
+	u16 hwm;
+	
+	/* reset Packet Buffer Allocation to default */
+	ew32(PBA, pba);
+	
+	if (adapter->max_frame_size > ETH_FRAME_LEN + ETH_FCS_LEN) {
+		/*
+		 * To maintain wire speed transmits, the Tx FIFO should be
+		 * large enough to accommodate two full transmit packets,
+		 * rounded up to the next 1KB and expressed in KB.  Likewise,
+		 * the Rx FIFO should be large enough to accommodate at least
+		 * one full receive packet and is similarly rounded up and
+		 * expressed in KB.
+		 */
+		pba = er32(PBA);
+		/* upper 16 bits has Tx packet buffer allocation size in KB */
+		tx_space = pba >> 16;
+		/* lower 16 bits has Rx packet buffer allocation size in KB */
+		pba &= 0xffff;
+		/*
+		 * the Tx fifo also stores 16 bytes of information about the tx
+		 * but don't include ethernet FCS because hardware appends it
+		 */
+		min_tx_space = (adapter->max_frame_size +
+						sizeof(struct e1000_tx_desc) -
+						ETH_FCS_LEN) * 2;
+		min_tx_space = ALIGN(min_tx_space, 1024);
+		min_tx_space >>= 10;
+		/* software strips receive CRC, so leave room for it */
+		min_rx_space = adapter->max_frame_size;
+		min_rx_space = ALIGN(min_rx_space, 1024);
+		min_rx_space >>= 10;
+		
+		/*
+		 * If current Tx allocation is less than the min Tx FIFO size,
+		 * and the min Tx FIFO size is less than the current Rx FIFO
+		 * allocation, take space away from current Rx allocation
+		 */
+		if ((tx_space < min_tx_space) &&
+		    ((min_tx_space - tx_space) < pba)) {
+			pba -= min_tx_space - tx_space;
+			
+			/*
+			 * if short on Rx space, Rx wins and must trump tx
+			 * adjustment or use Early Receive if available
+			 */
+			if ((pba < min_rx_space) &&
+			    (!(adapter->flags & FLAG_HAS_ERT)))
+			/* ERT enabled in e1000_configure_rx */
+				pba = min_rx_space;
+		}
+		
+		ew32(PBA, pba);
+	}
+	
+	
+	/*
+	 * flow control settings
+	 *
+	 * The high water mark must be low enough to fit one full frame
+	 * (or the size used for early receive) above it in the Rx FIFO.
+	 * Set it to the lower of:
+	 * - 90% of the Rx FIFO size, and
+	 * - the full Rx FIFO size minus the early receive size (for parts
+	 *   with ERT support assuming ERT set to E1000_ERT_2048), or
+	 * - the full Rx FIFO size minus one full frame
+	 */
+	if (hw->mac.type == e1000_pchlan) {
+		/*
+		 * Workaround PCH LOM adapter hangs with certain network
+		 * loads.  If hangs persist, try disabling Tx flow control.
+		 */
+		if (adapter->netdev->mtu > ETH_DATA_LEN) {
+			fc->high_water = 0x3500;
+			fc->low_water  = 0x1500;
+		} else {
+			fc->high_water = 0x5000;
+			fc->low_water  = 0x3000;
+		}
+		fc->refresh_time = 0x1000;
+	} else {
+		if ((adapter->flags & FLAG_HAS_ERT) &&
+		    (adapter->netdev->mtu > ETH_DATA_LEN))
+			hwm = min(((pba << 10) * 9 / 10),
+					  ((pba << 10) - (E1000_ERT_2048 << 3)));
+		else
+			hwm = min(((pba << 10) * 9 / 10),
+					  ((pba << 10) - adapter->max_frame_size));
+		
+		fc->high_water = hwm & E1000_FCRTH_RTH; /* 8-byte granularity */
+		fc->low_water = fc->high_water - 8;
+	}
+	
+	if (adapter->flags & FLAG_DISABLE_FC_PAUSE_TIME)
+		fc->pause_time = 0xFFFF;
+	else
+		fc->pause_time = E1000_FC_PAUSE_TIME;
+	fc->send_xon = 1;
+	fc->current_mode = fc->requested_mode;
+	
+	/* Allow time for pending master requests to run */
+	mac->ops.reset_hw(hw);
+	
+	/*
+	 * For parts with AMT enabled, let the firmware know
+	 * that the network interface is in control
+	 */
+	if (adapter->flags & FLAG_HAS_AMT)
+		e1000_get_hw_control(adapter);
+	
+	ew32(WUC, 0);
+	if (adapter->flags2 & FLAG2_HAS_PHY_WAKEUP)
+		e1e_wphy(&adapter->hw, BM_WUC, 0);
+	
+	if (mac->ops.init_hw(hw))
+		e_err("Hardware Error\n");
+	
+#ifdef NETIF_F_HW_VLAN_TX
+	e1000_update_mng_vlan(adapter);
+	
+	/* Enable h/w to recognize an 802.1Q VLAN Ethernet packet */
+	ew32(VET, ETH_P_8021Q);
+	
+#endif
+	e1000e_reset_adaptive(hw);
+	e1000_get_phy_info(hw);
+	
+	if ((adapter->flags & FLAG_HAS_SMART_POWER_DOWN) &&
+	    !(adapter->flags & FLAG_SMART_POWER_DOWN)) {
+		u16 phy_data = 0;
+		/*
+		 * speed up time to link by disabling smart power down, ignore
+		 * the return value of this function because there is nothing
+		 * different we would do if it failed
+		 */
+		e1e_rphy(hw, IGP02E1000_PHY_POWER_MGMT, &phy_data);
+		phy_data &= ~IGP02E1000_PM_SPD;
+		e1e_wphy(hw, IGP02E1000_PHY_POWER_MGMT, phy_data);
+	}
+}
+
+
+/**
  *  e1000_update_mc_addr_list - Update Multicast addresses
  *  @hw: pointer to the HW structure
  *  @mc_addr_list: array of multicast addresses to program
@@ -191,6 +580,7 @@ static void e1000_update_mc_addr_list(struct e1000_hw *hw, u8 *mc_addr_list,
 {
 	hw->mac.ops.update_mc_addr_list(hw, mc_addr_list, mc_addr_count);
 }
+
 
 /**
  * e1000_update_itr - update the dynamic ITR value based on statistics
@@ -326,10 +716,112 @@ set_itr_now:
 	}
 }
 
-#define E1000_GET_DESC(R, i, type)	(&(((struct type *)((R).desc->getBytesNoCopy()))[i]))
-#define E1000_RX_DESC(R, i)		E1000_GET_DESC(R, i, e1000_rx_desc)
-#define E1000_TX_DESC(R, i)		E1000_GET_DESC(R, i, e1000_tx_desc)
-#define E1000_CONTEXT_DESC(R, i)	E1000_GET_DESC(R, i, e1000_context_desc)
+static int e1000_tx_map(struct e1000_adapter *adapter, mbuf_t skb, unsigned int first, IOMbufNaturalMemoryCursor * txMbufCursor )
+{
+	struct e1000_ring *tx_ring = adapter->tx_ring;
+	struct e1000_buffer *buffer_info;
+	unsigned int count = 0, i;
+	unsigned int f;
+
+	unsigned int nr_frags;
+	IOPhysicalSegment tx_segments[TBDS_PER_TCB];
+	nr_frags = txMbufCursor->getPhysicalSegmentsWithCoalesce(skb, &tx_segments[0], TBDS_PER_TCB);
+
+	
+	i = tx_ring->next_to_use;
+	
+	for(f = 0; f < nr_frags; f++) {
+		buffer_info = &tx_ring->buffer_info[i];
+		buffer_info->length = tx_segments[f].length;
+		/* set time_stamp *before* dma to help avoid a possible race */
+		// buffer_info->time_stamp = jiffies;
+		buffer_info->dma = tx_segments[f].location;
+		buffer_info->mapped_as_page = false;
+		
+		buffer_info->next_to_watch = i;
+
+		count++;
+		
+		i++;
+		if (i == tx_ring->count)
+			i = 0;
+	}
+	
+	if (i == 0)
+		i = tx_ring->count - 1;
+	else
+		i--;
+	
+	tx_ring->buffer_info[i].skb = skb;
+	tx_ring->buffer_info[first].next_to_watch = i;
+	
+	return count;
+	
+}
+
+
+static void e1000_tx_queue(struct e1000_adapter *adapter,
+						   int tx_flags, int count)
+{
+	struct e1000_ring *tx_ring = adapter->tx_ring;
+	struct e1000_tx_desc *tx_desc = NULL;
+	struct e1000_buffer *buffer_info;
+	u32 txd_upper = 0, txd_lower = E1000_TXD_CMD_IFCS;
+	unsigned int i;
+	
+	if (tx_flags & E1000_TX_FLAGS_TSO) {
+		txd_lower |= E1000_TXD_CMD_DEXT | E1000_TXD_DTYP_D |
+		E1000_TXD_CMD_TSE;
+		txd_upper |= E1000_TXD_POPTS_TXSM << 8;
+		
+		if (tx_flags & E1000_TX_FLAGS_IPV4)
+			txd_upper |= E1000_TXD_POPTS_IXSM << 8;
+	}
+	
+	if (tx_flags & E1000_TX_FLAGS_CSUM) {
+		txd_lower |= E1000_TXD_CMD_DEXT | E1000_TXD_DTYP_D;
+		txd_upper |= E1000_TXD_POPTS_TXSM << 8;
+	}
+	
+	if (tx_flags & E1000_TX_FLAGS_VLAN) {
+		txd_lower |= E1000_TXD_CMD_VLE;
+		txd_upper |= (tx_flags & E1000_TX_FLAGS_VLAN_MASK);
+	}
+	
+	i = tx_ring->next_to_use;
+	
+	while (count--) {
+		buffer_info = &tx_ring->buffer_info[i];
+		tx_desc = E1000_TX_DESC(*tx_ring, i);
+		tx_desc->buffer_addr = cpu_to_le64(buffer_info->dma);
+		tx_desc->lower.data =
+		cpu_to_le32(txd_lower | buffer_info->length);
+		tx_desc->upper.data = cpu_to_le32(txd_upper);
+		
+		i++;
+		if (i == tx_ring->count)
+			i = 0;
+	}
+	
+	tx_desc->lower.data |= cpu_to_le32(adapter->txd_cmd);
+	
+	/*
+	 * Force memory writes to complete before letting h/w
+	 * know there are new descriptors to fetch.  (Only
+	 * applicable for weak-ordered memory model archs,
+	 * such as IA-64).
+	 */
+	wmb();
+	
+	tx_ring->next_to_use = i;
+	writel(i, adapter->hw.hw_addr + tx_ring->tail);
+	/*
+	 * we need this if more than one processor can write to our tail
+	 * at a time, it synchronizes IO on IA64/Altix systems
+	 */
+	mmiowb();
+}
+
 
 /////////////////
 
@@ -349,11 +841,6 @@ void AppleIntelE1000e::free()
 	RELEASE(pciDevice);
 	RELEASE(mediumDict);
 	
-	int i;
-	for (i = 0; i < MEDIUM_INDEX_COUNT; i++) {
-		RELEASE(mediumTable[i]);
-	}
-	
 	RELEASE(csrPCIAddress);
 	RELEASE(flashPCIAddress);
 	
@@ -369,13 +856,12 @@ void AppleIntelE1000e::free()
 bool AppleIntelE1000e::init(OSDictionary *properties)
 {
 	e_dbg("bool AppleIntelE1000e::Init(OSDictionary *properties).\n");
+	struct e1000_adapter *adapter = &priv_adapter;
 	
 	if (super::init(properties) == false) 
 		return false;
-	int i;
 	
 	enabledForNetif = false;
-	interruptEnabled = false;
 	
 	pciDevice = NULL;
 	mediumDict = NULL;
@@ -390,25 +876,12 @@ bool AppleIntelE1000e::init(OSDictionary *properties)
 	rxMbufCursor = NULL;
 	txMbufCursor = NULL;
 	
-	// static allocate
-	bzero(rx_buffer_info,sizeof(rx_buffer_info));
-	bzero(tx_buffer_info,sizeof(tx_buffer_info));
-	bzero(&rx_ring,sizeof(rx_ring));
-	bzero(&tx_ring,sizeof(tx_ring));
-	rx_ring.buffer_info = rx_buffer_info;
-	tx_ring.buffer_info = tx_buffer_info;
-	tx_ring.count = rx_ring.count = NUM_RING_FRAME;
-	adapter.rx_ring = &rx_ring;
-	adapter.tx_ring = &tx_ring;
 	
-	for (i = 0; i < MEDIUM_INDEX_COUNT; i++) {
-		mediumTable[i] = NULL;
-	}
-
 	// for ich8lan
 	init_mutex();
 
-	adapter.pdev = &priv_pdev;
+	adapter->pdev = &priv_pdev;
+	adapter->netdev = &priv_netdev;
 	
 	suspend = false;
 	return true;
@@ -417,9 +890,7 @@ bool AppleIntelE1000e::init(OSDictionary *properties)
 void AppleIntelE1000e::stop(IOService* provider)
 {
 	e_dbg("AppleIntelE1000e::stop(IOService * provider)\n");
-
-	e1000_free_tx_resources();
-	e1000_free_rx_resources();
+	struct e1000_adapter *adapter = &priv_adapter;
 
 	if(workLoop){
 		if (watchdogSource) {
@@ -435,8 +906,19 @@ void AppleIntelE1000e::stop(IOService* provider)
 		}
 	}
 
-	// netif->terminate();
-	// detachInterface((IONetworkInterface *)netif);
+	e1000_power_down_phy(adapter);
+
+	/*
+	 * Release control of h/w to f/w.  If f/w is AMT enabled, this
+	 * would have already happened in close and is redundant.
+	 */
+	e1000_release_hw_control(adapter);
+	
+#ifdef CONFIG_E1000E_MSIX
+	e1000e_reset_interrupt_capability(adapter);
+#endif /* CONFIG_E1000E_MSIX */
+	IOFree(adapter->tx_ring, sizeof(e1000_ring));
+	IOFree(adapter->rx_ring, sizeof(e1000_ring));
 	
 	super::stop(provider);
 }
@@ -445,7 +927,12 @@ bool AppleIntelE1000e::start(IOService* provider)
 {
 	e_dbg("AppleIntelE1000e::start(IOService * provider)\n");
     bool success = false;
-	
+	int err, i;
+	u16 eeprom_data = 0;
+	u16 eeprom_apme_mask = E1000_EEPROM_APME;
+	struct e1000_adapter *adapter = &priv_adapter;
+	struct e1000_hw *hw = &adapter->hw;
+
 	if (super::start(provider) == false) {
 		e_dbg("supper::start failed.\n");
 		return false;
@@ -463,113 +950,6 @@ bool AppleIntelE1000e::start(IOService* provider)
 		if(!initEventSources(provider)){
 			break;
 		}
-
-		/* allocate transmit descriptors */
-		if (e1000_setup_ring_resources(adapter.tx_ring))
-			break;
-		/* allocate receive descriptors */
-		if (e1000_setup_ring_resources(adapter.rx_ring))
-			break;
-		
-		// adapter.hw.device_id will be used later
-		adapter.pdev->device = pciDevice->configRead16(kIOPCIConfigDeviceID);
-		IOLog("vendor:device: 0x%x:0x%x.\n", pciDevice->configRead16(kIOPCIConfigVendorID), adapter.pdev->device);
-		
-		csrPCIAddress = pciDevice->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress0);
-		if (csrPCIAddress == NULL) {
-			e_dbg("csrPCIAddress.\n");
-			break;
-		}
-		flashPCIAddress = pciDevice->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress1);
-		if (flashPCIAddress == NULL) {
-			e_dbg("flashPCIAddress.\n");
-			break;
-		}
-		
-		csrCPUAddress = csrPCIAddress->getVirtualAddress();
-		flashCPUAddress = flashPCIAddress->getVirtualAddress();
-
-		// Init PCI config space:
-        if ( false == initPCIConfigSpace( pciDevice ) )
-            break;
-		
-
-		adapter.ei = e1000_probe(adapter.pdev->device);
-		if (adapter.ei == NULL) {
-			break;
-		}
-		
-		adapter.pba = adapter.ei->pba;
-		adapter.flags = adapter.ei->flags;
-		adapter.flags2 = adapter.ei->flags2;
-		adapter.hw.adapter = &adapter;
-		adapter.hw.mac.type = adapter.ei->mac;
-		adapter.max_hw_frame_size = adapter.ei->max_hw_frame_size;
-		// adapter.msg_enable = (1 << NETIF_MSG_DRV | NETIF_MSG_PROBE) - 1;
-		
-		adapter.hw.hw_addr = (__uint8_t*)csrCPUAddress;
-		adapter.hw.flash_address = (__uint8_t*)flashCPUAddress;
-		
-		e1000_set_mtu(ETH_DATA_LEN);	// this call allocates rxMbufCursor/txMbufCursor
-		
-		adapter.ei->init_ops(&adapter.hw);
-		adapter.hw.mac.ops.init_params(&adapter.hw);
-		adapter.hw.nvm.ops.init_params(&adapter.hw);
-		adapter.hw.phy.ops.init_params(&adapter.hw);
-		
-		
-		/* setup adapter struct */
-		if (adapter.ei->get_variants) {
-			if (adapter.ei->get_variants(&adapter))
-				break;
-		}
-		
-		//Explicitly disable IRQ since the NIC can be in any state.
-		E1000_WRITE_REG(&adapter.hw, E1000_IMC, ~0);
-		E1000_READ_REG(&adapter.hw, E1000_STATUS);
-		//sw_init end
-		
-		adapter.hw.bus.width = e1000_bus_width_unknown; // dont care		
-		
-		adapter.hw.phy.autoneg_wait_to_complete = 0;	
-		/* Copper options */
-		if (adapter.hw.phy.media_type == e1000_media_type_copper) {
-			adapter.hw.phy.mdix = AUTO_ALL_MODES;
-			adapter.hw.phy.disable_polarity_correction = 0;
-			adapter.hw.phy.ms_type = e1000_ms_hw_default;
-		}
-		
-		if (adapter.hw.phy.ops.check_reset_block &&
-			adapter.hw.phy.ops.check_reset_block(&adapter.hw))
-			e_info("PHY reset is blocked due to SOL/IDER session.\n");
-		
-		adapter.hw.mac.ops.reset_hw(&adapter.hw);
-		
-		int i;
-		for (i = 0; i < 2; i++) {
-			if (adapter.hw.nvm.ops.validate(&adapter.hw) >= 0)
-				break;
-		}
-		if (i == 2) {
-			e_dbg("The NVM Checksum Is Not Valid\n");
-			break;
-		}
-
-		/* copy the MAC address out of the NVM */
-		if (e1000e_read_mac_addr(&adapter.hw))
-			e_dbg("NVM Read Error while reading MAC address\n");
-		
-		// Initialize link parameters. User can change them with ethtool
-		adapter.hw.mac.autoneg = 1;
-		adapter.fc_autoneg = 1;
-		adapter.hw.fc.requested_mode = e1000_fc_default;
-		adapter.hw.fc.current_mode = e1000_fc_default;
-		adapter.hw.phy.autoneg_advertised = 0x2f;
-		
-		// reset the hardware with the new settings
-		e1000e_reset();
-		
-		
 		addNetworkMedium(kIOMediumEthernetAuto, 0, MEDIUM_INDEX_AUTO);
 		addNetworkMedium(kIOMediumEthernet10BaseT | kIOMediumOptionHalfDuplex,
 						 10 * MBit, MEDIUM_INDEX_10HD);
@@ -586,6 +966,189 @@ bool AppleIntelE1000e::start(IOService* provider)
 			e_dbg("publishMediumDictionary.\n");
 			break;
 		}
+		
+		// adapter.hw.device_id will be used later
+		adapter->pdev->device = pciDevice->configRead16(kIOPCIConfigDeviceID);
+		IOLog("vendor:device: 0x%x:0x%x.\n", pciDevice->configRead16(kIOPCIConfigVendorID), adapter->pdev->device);
+		
+		csrPCIAddress = pciDevice->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress0);
+		if (csrPCIAddress == NULL) {
+			e_dbg("csrPCIAddress.\n");
+			break;
+		}
+		
+		// Init PCI config space:
+        if ( false == initPCIConfigSpace( pciDevice ) )
+            break;
+		
+
+		const e1000_info* ei = e1000_probe(adapter->pdev->device);
+		if (ei == NULL) {
+			break;
+		}
+		if (ei->flags2 & FLAG2_DISABLE_ASPM_L1)
+			e1000e_disable_l1aspm(pciDevice);
+		
+		adapter->ei = ei;
+		adapter->pba = ei->pba;
+		adapter->flags = ei->flags;
+		adapter->flags2 = ei->flags2;
+		adapter->hw.adapter = adapter;
+		adapter->hw.mac.type = ei->mac;
+		adapter->max_hw_frame_size = ei->max_hw_frame_size;
+		// adapter->msg_enable = (1 << NETIF_MSG_DRV | NETIF_MSG_PROBE) - 1;
+		
+		adapter->hw.hw_addr = (u8*)(csrPCIAddress->getVirtualAddress());
+		if (adapter->flags & FLAG_HAS_FLASH){
+			flashPCIAddress = pciDevice->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress1);
+			if (flashPCIAddress == NULL) {
+				e_dbg("flashPCIAddress.\n");
+				break;
+			}
+			adapter->hw.flash_address = (u8*)(flashPCIAddress->getVirtualAddress());
+		}
+		adapter->bd_number = cards_found++;
+
+		e1000e_check_options(adapter);
+
+		adapter->min_frame_size = ETHER_MIN_LEN;
+		e1000_change_mtu(ETH_DATA_LEN);	// this call allocates rxMbufCursor/txMbufCursor
+
+		/* setup adapter struct */
+		err = e1000_sw_init(adapter);
+		if(err)
+			break;
+
+		if (ei->get_variants) {
+			err = ei->get_variants(adapter);
+			if (err)
+				break;
+		}
+		
+
+		/* setup adapter struct */
+		if (adapter->ei->get_variants) {
+			if (adapter->ei->get_variants(adapter))
+				break;
+		}
+		
+		
+		adapter->hw.mac.ops.get_bus_info(&adapter->hw);
+		
+		adapter->hw.phy.autoneg_wait_to_complete = 0;	
+
+		/* Copper options */
+		if (adapter->hw.phy.media_type == e1000_media_type_copper) {
+			adapter->hw.phy.mdix = AUTO_ALL_MODES;
+			adapter->hw.phy.disable_polarity_correction = 0;
+			adapter->hw.phy.ms_type = e1000_ms_hw_default;
+		}
+		
+		if (adapter->hw.phy.ops.check_reset_block &&
+			adapter->hw.phy.ops.check_reset_block(&adapter->hw))
+			e_info("PHY reset is blocked due to SOL/IDER session.\n");
+		
+		if (e1000_check_reset_block(&adapter->hw))
+			e_info("PHY reset is blocked due to SOL/IDER session.\n");
+
+		if (e1000e_enable_mng_pass_thru(&adapter->hw))
+			adapter->flags |= FLAG_MNG_PT_ENABLED;
+		
+		/*
+		 * before reading the NVM, reset the controller to
+		 * put the device in a known good starting state
+		 */
+		adapter->hw.mac.ops.reset_hw(&adapter->hw);
+		
+		/*
+		 * systems with ASPM and others may see the checksum fail on the first
+		 * attempt. Let's give it a few tries
+		 */
+		for (i = 0;; i++) {
+			if (e1000_validate_nvm_checksum(&adapter->hw) >= 0)
+				break;
+			if (i == 2) {
+				e_err("The NVM Checksum Is Not Valid\n");
+				err = -EIO;
+				break;
+			}
+		}
+		if(err)
+			break;
+
+		e1000_eeprom_checks(adapter);
+
+		/* copy the MAC address out of the NVM */
+		if (e1000e_read_mac_addr(&adapter->hw))
+			e_dbg("NVM Read Error while reading MAC address\n");
+		
+		
+		// Initialize link parameters. User can change them with ethtool
+		adapter->hw.mac.autoneg = 1;
+		adapter->fc_autoneg = 1;
+		if (adapter->hw.mac.type == e1000_pchlan) {
+			/* Workaround h/w hang when Tx flow control enabled */
+			adapter->hw.fc.requested_mode = e1000_fc_rx_pause;
+			adapter->hw.fc.current_mode = e1000_fc_rx_pause;
+		} else {
+			adapter->hw.fc.requested_mode = e1000_fc_default;
+			adapter->hw.fc.current_mode = e1000_fc_default;
+		}
+		adapter->hw.phy.autoneg_advertised = 0x2f;
+		
+		/* ring size defaults */
+		adapter->rx_ring->count = NUM_RING_FRAME;
+		adapter->tx_ring->count = NUM_RING_FRAME;
+		
+		/*
+		 * Initial Wake on LAN setting - If APM wake is enabled in
+		 * the EEPROM, enable the ACPI Magic Packet filter
+		 */
+		if (adapter->flags & FLAG_APME_IN_WUC) {
+			/* APME bit in EEPROM is mapped to WUC.APME */
+			eeprom_data = er32(WUC);
+			eeprom_apme_mask = E1000_WUC_APME;
+			if (eeprom_data & E1000_WUC_PHY_WAKE)
+				adapter->flags2 |= FLAG2_HAS_PHY_WAKEUP;
+		} else if (adapter->flags & FLAG_APME_IN_CTRL3) {
+			if (adapter->flags & FLAG_APME_CHECK_PORT_B &&
+				(adapter->hw.bus.func == 1))
+				e1000_read_nvm(&adapter->hw, NVM_INIT_CONTROL3_PORT_B,
+							   1, &eeprom_data);
+			else
+				e1000_read_nvm(&adapter->hw, NVM_INIT_CONTROL3_PORT_A,
+							   1, &eeprom_data);
+		}
+		
+		/* fetch WoL from EEPROM */
+		if (eeprom_data & eeprom_apme_mask)
+			adapter->eeprom_wol |= E1000_WUFC_MAG;
+		
+		/*
+		 * now that we have the eeprom settings, apply the special cases
+		 * where the eeprom may be wrong or the board simply won't support
+		 * wake on lan on a particular port
+		 */
+		if (!(adapter->flags & FLAG_HAS_WOL))
+			adapter->eeprom_wol = 0;
+		
+		/* initialize the wol settings based on the eeprom settings */
+		adapter->wol = adapter->eeprom_wol;
+		//device_set_wakeup_enable(&adapter->pdev->dev, adapter->wol);
+		
+		/* save off EEPROM version number */
+		e1000_read_nvm(&adapter->hw, 5, 1, &adapter->eeprom_vers);
+		
+		/* reset the hardware with the new settings */
+		e1000e_reset(adapter);
+
+		/*
+		 * If the controller has AMT, do not set DRV_LOAD until the interface
+		 * is up.  For all other cases, let the f/w know that the h/w is now
+		 * under the control of the driver.
+		 */
+		if (!(adapter->flags & FLAG_HAS_AMT))
+			e1000_get_hw_control(adapter);
 		
 		success = true;
 	} while(false);
@@ -647,13 +1210,9 @@ bool AppleIntelE1000e::initEventSources( IOService* provider )
 		return false;
 	}
 	transmitQueue->setCapacity(NUM_RING_FRAME);
-	
-	interruptSource = IOFilterInterruptEventSource::filterInterruptEventSource(
-							this,
-							&AppleIntelE1000e::interruptHandler,
-							&AppleIntelE1000e::interruptFilter,
-							provider);
-	
+
+	interruptSource = IOInterruptEventSource::interruptEventSource(this,&AppleIntelE1000e::interruptHandler,provider);
+
 	if (!interruptSource ||
 		(myWorkLoop->addEventSource(interruptSource) != kIOReturnSuccess)) {
 		e_dbg("workloop add eventsource interrupt source.\n");
@@ -688,24 +1247,66 @@ bool AppleIntelE1000e::initEventSources( IOService* provider )
 IOReturn AppleIntelE1000e::enable(IONetworkInterface * netif)
 {
 	e_dbg("AppleIntelE1000e::enable().\n");
-	if (enabledForNetif) {
-		e_info("Netif has been enabled already.\n");
-		return kIOReturnSuccess;
-	}
+
+	struct e1000_adapter *adapter = &priv_adapter;
+	struct e1000_hw *hw = &adapter->hw;
+	int err;
 	
-	//pciDevice->open(this);
+	pciDevice->open(this);
+
+	/* allocate transmit descriptors */
+	err = e1000e_setup_tx_resources(adapter);
+	if (err)
+		goto err_setup_tx;
+	
+	/* allocate receive descriptors */
+	err = e1000e_setup_rx_resources(adapter);
+	if (err)
+		goto err_setup_rx;
+	
+	
+
 	/*
 	 * If AMT is enabled, let the firmware know that the network
 	 * interface is now open
 	 */
-	if (adapter.flags & FLAG_HAS_AMT){
-		e1000_get_hw_control(&adapter);
-		e1000e_reset();
+	if (adapter->flags & FLAG_HAS_AMT){
+		e1000_get_hw_control(adapter);
+		e1000e_reset(adapter);
 	}
 	
-	e1000e_power_up_phy(&adapter);
+	e1000e_power_up_phy(adapter);
 
-#if		1
+
+#ifdef NETIF_F_HW_VLAN_TX
+	adapter->mng_vlan_id = E1000_MNG_VLAN_NONE;
+	if ((adapter->hw.mng_cookie.status &
+	     E1000_MNG_DHCP_COOKIE_STATUS_VLAN))
+		e1000_update_mng_vlan(adapter);
+	
+#endif
+	/*
+	 * before we allocate an interrupt, we must be ready to handle it.
+	 * Setting DEBUG_SHIRQ in the kernel makes it fire an interrupt
+	 * as soon as we call pci_request_irq, so we have to setup our
+	 * clean_rx handler before we do so.
+	 */
+	e1000_configure();
+#if	0
+	err = e1000_request_irq(adapter);
+	if (err)
+		goto err_req_irq;
+#else
+	adapter->flags &= ~FLAG_MSI_ENABLED;
+#endif
+	/*
+	 * Work around PCIe errata with MSI interrupts causing some chipsets to
+	 * ignore e1000e MSI messages, which means we need to test our MSI
+	 * interrupt now
+	 */
+		
+		
+#if		0
 	if(suspend){
 		suspend = false;
 		/* report the system wakeup cause from S3/S4 */
@@ -738,48 +1339,32 @@ IOReturn AppleIntelE1000e::enable(IONetworkInterface * netif)
 			ew32(WUS, ~0);
 		}
 		
-		e1000e_reset();
+		e1000e_reset(adapter);
 
 		e1000_init_manageability_pt();
 	}
 #endif
-	adapter.mng_vlan_id = E1000_MNG_VLAN_NONE;
-	
-	/*
-	 * before we allocate an interrupt, we must be ready to handle it.
-	 * Setting DEBUG_SHIRQ in the kernel makes it fire an interrupt
-	 * as soon as we call pci_request_irq, so we have to setup our
-	 * clean_rx handler before we do so.
-	 */
-	e1000_configure();
-	
-	// Create and register an interrupt event source. The provider will
-	// take care of the low-level interrupt registration stuff.
-	//
-	// enable interrupt
-	e1000_irq_enable();
 	
 	if (selectMedium(getSelectedMedium()) != kIOReturnSuccess)
 		return kIOReturnIOError;
 
-	watchdogSource->setTimeoutMS(1000);
+	e1000_irq_enable(adapter);
+
+	watchdogSource->setTimeoutMS(200);
 	
 	transmitQueue->start();
-	
-	adapter.hw.mac.get_link_status = true;
+	workLoop->enableAllInterrupts();
 
 	/* fire a link status change interrupt to start the watchdog */
-	E1000_WRITE_REG(&adapter.hw, E1000_ICS, E1000_ICS_LSC);
-
-	workLoop->enableAllInterrupts();
+	ew32(ICS, E1000_ICS_LSC);
 
 	enabledForNetif = true;
 	return kIOReturnSuccess; 
 
 err_setup_rx:
-	e1000_free_tx_resources();
+	e1000e_free_tx_resources();
 err_setup_tx:
-	e1000e_reset();
+	e1000e_reset(adapter);
 	
 	return kIOReturnIOError;
 }
@@ -787,51 +1372,19 @@ err_setup_tx:
 IOReturn AppleIntelE1000e::disable(IONetworkInterface * netif)
 {
 	e_dbg("AppleIntelE1000e::disable().\n");
+
+	struct e1000_adapter *adapter = &priv_adapter;
+
 	if(!enabledForNetif)
 		return kIOReturnSuccess;
 	enabledForNetif = false;
+
+	e1000e_down();
+	e1000_power_down_phy(adapter);
+	//e1000_free_irq(adapter);
 	
-	struct e1000_hw* hw = &adapter.hw;
-	UInt32 rctl, tctl;
-
-	/* disable irq */
-	e1000_irq_disable();
-	workLoop->disableAllInterrupts();
-	
-	if (transmitQueue) {
-		transmitQueue->stop();
-		transmitQueue->flush();
-	}
-
-	//stop watchdog timer
-	watchdogSource->cancelTimeout();		// Stop the timer event source.
-
-	/* disable receives in the hardware */
-	rctl = E1000_READ_REG(hw, E1000_RCTL);
-	E1000_WRITE_REG(hw, E1000_RCTL, rctl & ~E1000_RCTL_EN);
-	/* flush and sleep below */
-	
-	/* disable transmits in the hardware */
-	tctl = E1000_READ_REG(hw, E1000_TCTL);
-	tctl &= ~E1000_TCTL_EN;
-	E1000_WRITE_REG(hw, E1000_TCTL, tctl);
-
-	/* flush both disables and wait for them to finish */
-	e1e_flush();
-	E1000_READ_REG(hw, E1000_STATUS);
-	msleep(10);
-
-	adapter.link_speed = 0;
-	adapter.link_duplex = 0;
-
-	e1000e_reset();
-
-	e1000_clean_tx_ring();
-	e1000_clean_rx_ring();
-	
-	e1000_power_down_phy(&adapter);
-	
-	//e1000_free_irq(&adapter);
+	e1000e_free_tx_resources();
+	e1000e_free_rx_resources();
 	
 #ifdef NETIF_F_HW_VLAN_TX
 	/*
@@ -843,116 +1396,125 @@ IOReturn AppleIntelE1000e::disable(IONetworkInterface * netif)
 		!(adapter->vlgrp &&
 		  vlan_group_get_device(adapter->vlgrp, adapter->mng_vlan_id)))
 		e1000_vlan_rx_kill_vid(netdev, adapter->mng_vlan_id);
-
-#endif
 	
+#endif
 	/*
 	 * If AMT is enabled, let the firmware know that the network
 	 * interface is now closed
 	 */
-	if (adapter.flags & FLAG_HAS_AMT)
-		e1000_release_hw_control(&adapter);
+	if (adapter->flags & FLAG_HAS_AMT)
+		e1000_release_hw_control(adapter);
+	
 
-	setLinkStatus( kIONetworkLinkValid );	// Valid sans kIONetworkLinkActive
-
-	//pciDevice->close(this);
+	pciDevice->close(this);
 
 	return kIOReturnSuccess;
 }
 
+void AppleIntelE1000e::e1000e_down()
+{
+	struct e1000_adapter *adapter = &priv_adapter;
+	struct e1000_hw *hw = &adapter->hw;
+	u32 tctl, rctl;
+	
+	/*
+	 * signal that we're down so the interrupt handler does not
+	 * reschedule our watchdog timer
+	 */
+	//set_bit(__E1000_DOWN, &adapter->state);
+	
+	/* disable receives in the hardware */
+	rctl = er32(RCTL);
+	ew32(RCTL, rctl & ~E1000_RCTL_EN);
+	/* flush and sleep below */
+
+	if (transmitQueue) {
+		transmitQueue->stop();
+		transmitQueue->flush();
+	}
+	
+	/* disable transmits in the hardware */
+	tctl = er32(TCTL);
+	tctl &= ~E1000_TCTL_EN;
+	ew32(TCTL, tctl);
+	/* flush both disables and wait for them to finish */
+	e1e_flush();
+	msleep(10);
+	
+#ifdef CONFIG_E1000E_NAPI
+	napi_disable(&adapter->napi);
+#endif
+	e1000_irq_disable(adapter);
+	workLoop->disableAllInterrupts();
+	
+	
+	//stop watchdog timer
+	watchdogSource->cancelTimeout();		// Stop the timer event source.
+	
+	setLinkStatus( kIONetworkLinkValid );	// Valid sans kIONetworkLinkActive
+
+	adapter->link_speed = 0;
+	adapter->link_duplex = 0;
+	
+#ifdef HAVE_PCI_ERS
+	if (!pci_channel_offline(adapter->pdev))
+#endif
+		e1000e_reset(adapter);
+	e1000_clean_tx_ring();
+	e1000_clean_rx_ring();
+#if	0
+	if (adapter->flags & FLAG_HAS_ERT)
+		pm_qos_remove_requirement(PM_QOS_CPU_DMA_LATENCY,
+		                          adapter->netdev->name);
+#endif
+	/*
+	 * TODO: for power management, we could drop the link and
+	 * pci_disable_device here.
+	 */
+}
 
 UInt32 AppleIntelE1000e::outputPacket(mbuf_t skb, void * param)
 {
-	// e_dbg("AppleIntelE1000e::outputPacket()\n");
-	
-	struct e1000_buffer* buffer_info = NULL;
-	struct e1000_tx_desc* tx_desc = NULL;
-	struct e1000_tx_desc* tx_desc_array = NULL;
-	struct e1000_hw* hw = &adapter.hw;
-	
-	IOPhysicalSegment tx_segments[TBDS_PER_TCB];
+	//e_dbg("AppleIntelE1000e::outputPacket()\n");
+
+	struct e1000_adapter *adapter = &priv_adapter;
+	struct e1000_ring *tx_ring = adapter->tx_ring;
+	unsigned int first;
+	unsigned int tx_flags = 0;
 	int count = 0;
-	unsigned int i, j, first;
-	UInt32 txd_upper = 0, txd_lower = 0;
-	bool txCRC = false;
 	
 	if (enabledForNetif == false) {             // drop the packet.
-		//e_dbg("not enabledForNetif in outputPacket.\n");
+		e_dbg("not enabledForNetif in outputPacket.\n");
+		freePacket(skb);
+		return kIOReturnOutputDropped;
+	}
+
+	if (e1000_desc_unused(adapter->tx_ring) < TBDS_PER_TCB+2){
 		freePacket(skb);
 		return kIOReturnOutputDropped;
 	}
 	
-	if (mbuf_len(skb) <= 0) {
-		//e_dbg("skb <=0 in outputPacket.\n");
+	if (mbuf_pkthdr_len(skb) <= 0) {
+		e_dbg("skb <=0 in outputPacket.\n");
 		freePacket(skb);
 		return kIOReturnOutputDropped;
 	}
-	
+
 	if (e1000_tx_csum(skb)) {
-		txCRC = true;
+		tx_flags |= E1000_TX_FLAGS_CSUM;
 	}
-	txCRC = false;
+
+	first = tx_ring->next_to_use;
+	count = e1000_tx_map(adapter, skb, first, txMbufCursor);
 	
-	count = txMbufCursor->getPhysicalSegmentsWithCoalesce(skb, &tx_segments[0], TBDS_PER_TCB);
-	//count = txMbufCursor->getPhysicalSegments(skb, &tx_segments[0]);
-	if (count == 0) {
-		//e_dbg("failed to getphysicalsegment in outputPacket.\n");
+	if (count <= 0) {
+		e_dbg("failed to getphysicalsegment in outputPacket.\n");
 		freePacket(skb);
 		return kIOReturnOutputDropped;
 	}
-	netStats->outputPackets++;
+
+	e1000_tx_queue(adapter, tx_flags, count);
 	
-	if (0) {
-		IOLog("enter TX count:%d, len:%04x, next_to_use:%d, next_to_clean:%d, head:%d, tail:%d.\n",
-		      count, (unsigned int)mbuf_len(skb), adapter.tx_ring->next_to_use, adapter.tx_ring->next_to_clean, E1000_READ_REG(hw, adapter.tx_ring->head), E1000_READ_REG(hw, adapter.tx_ring->tail));
-	}
-	
-	
-	if (txCRC == true) {
-		txd_lower |= E1000_TXD_CMD_DEXT | E1000_TXD_DTYP_D;
-		txd_upper |= E1000_TXD_POPTS_TXSM << 8;
-	}
-	
-	tx_desc_array = (e1000_tx_desc*)(adapter.tx_ring->desc->getBytesNoCopy());
-	j = first = adapter.tx_ring->next_to_use;
-	
-	for (i = 0; i < count; i++) {
-		buffer_info = &adapter.tx_ring->buffer_info[j];
-		tx_desc = &tx_desc_array[j];
-		
-		buffer_info->next_to_watch = j;
-		buffer_info->skb = NULL;
-		
-		tx_desc->buffer_addr = tx_segments[i].location;
-		tx_desc->lower.data = txd_lower | (tx_segments[i].length);
-		tx_desc->upper.data = txd_upper;
-		
-		j++;
-		if (j >= adapter.tx_ring->count)
-			j = 0;
-	}
-	tx_desc->lower.data |= adapter.txd_cmd;
-	
-	adapter.tx_ring->next_to_use = j;
-	OSWriteLittleInt32((UInt8*)adapter.hw.hw_addr + adapter.tx_ring->tail, 0, j);
-	OSSynchronizeIO();
-	
-	if (j == 0)
-		j = adapter.tx_ring->count - 1;
-	else
-		j--;
-	
-	adapter.tx_ring->buffer_info[j].skb = skb;
-	adapter.tx_ring->buffer_info[first].next_to_watch = j;
-	IODelay(10);
-	
-	if (0) {
-		IOLog("in TX lower:%08x, upper:%08x.\n", tx_desc->lower.data, tx_desc->upper.data);
-	}
-	//writel(i, adapter.hw.hw_addr + adapter.tx_ring->tail);
-	
-	/* Make sure there is space in the ring for the next send. */
-	// e1000_maybe_stop_tx(netdev, MAX_SKB_FRAGS + 2);
 	return kIOReturnOutputSuccess;
 }
 
@@ -986,8 +1548,9 @@ IOReturn AppleIntelE1000e::selectMedium(const IONetworkMedium * medium)
 {
 	e_dbg("IOReturn AppleIntelE1000e::selectMedium(const IONetworkMedium * medium).\n");
 	bool link;
+	e1000_adapter *adapter = &priv_adapter;
 	
-	link = e1000e_setup_copper_link(&adapter.hw);
+	link = e1000e_setup_copper_link(&adapter->hw);
 	
 	if (OSDynamicCast(IONetworkMedium, medium) == 0) {
 		// Defaults to Auto.
@@ -996,22 +1559,22 @@ IOReturn AppleIntelE1000e::selectMedium(const IONetworkMedium * medium)
 	
 	
 	if (link) {
-		adapter.hw.mac.ops.get_link_up_info(&adapter.hw,
-											&adapter.link_speed,
-											&adapter.link_duplex);
-		switch(adapter.link_speed) {
+		adapter->hw.mac.ops.get_link_up_info(&adapter->hw,
+											&adapter->link_speed,
+											&adapter->link_duplex);
+		switch(adapter->link_speed) {
 			case SPEED_1000:
 				medium = mediumTable[MEDIUM_INDEX_1000FD];
 				break;
 			case SPEED_100:
-				if (adapter.link_duplex == FULL_DUPLEX) {
+				if (adapter->link_duplex == FULL_DUPLEX) {
 					medium = mediumTable[MEDIUM_INDEX_100FD];
 				} else {
 					medium = mediumTable[MEDIUM_INDEX_100HD];
 				}
 				break;
 			case SPEED_10:
-				if (adapter.link_duplex == FULL_DUPLEX) {
+				if (adapter->link_duplex == FULL_DUPLEX) {
 					medium = mediumTable[MEDIUM_INDEX_10FD];
 				} else {
 					medium = mediumTable[MEDIUM_INDEX_10HD];
@@ -1079,25 +1642,23 @@ IOWorkLoop * AppleIntelE1000e::getWorkLoop() const
 
 IOReturn AppleIntelE1000e::getHardwareAddress(IOEthernetAddress * addr)
 {
-	e_dbg("getHardwareAddress %02x:%02x:%02x:%02x:%02x:%02x.\n",
-		   adapter.hw.mac.addr[0],adapter.hw.mac.addr[1],adapter.hw.mac.addr[2],
-		   adapter.hw.mac.addr[3],adapter.hw.mac.addr[4],adapter.hw.mac.addr[5] );
-	memcpy(addr->bytes, adapter.hw.mac.addr, kIOEthernetAddressSize);
+	memcpy(addr->bytes, priv_adapter.hw.mac.addr, kIOEthernetAddressSize);
 	return kIOReturnSuccess;
 }
 
 IOReturn AppleIntelE1000e::setHardwareAddress(const IOEthernetAddress * addr)
 {
+	e1000_adapter *adapter = &priv_adapter;
 	e_info("setHardwareAddress %02x:%02x:%02x:%02x:%02x:%02x.\n",
 		addr->bytes[0],addr->bytes[1],addr->bytes[2],
 		addr->bytes[3],addr->bytes[4],addr->bytes[5] );
-	memcpy(adapter.hw.mac.addr, addr->bytes, kIOEthernetAddressSize);
+	memcpy(adapter->hw.mac.addr, addr->bytes, kIOEthernetAddressSize);
 	
-	e1000e_rar_set(&adapter.hw, adapter.hw.mac.addr, 0);
+	e1000e_rar_set(&adapter->hw, adapter->hw.mac.addr, 0);
 	
-	if (adapter.flags & FLAG_RESET_OVERWRITES_LAA) {
+	if (adapter->flags & FLAG_RESET_OVERWRITES_LAA) {
 		/* activate the work around */
-		e1000e_set_laa_state_82571(&adapter.hw, 1);
+		e1000e_set_laa_state_82571(&adapter->hw, 1);
 		
 		/*
 		 * Hold a copy of the LAA in RAR[14] This is done so that
@@ -1107,9 +1668,9 @@ IOReturn AppleIntelE1000e::setHardwareAddress(const IOEthernetAddress * addr)
 		 * are dropped. Eventually the LAA will be in RAR[0] and
 		 * RAR[14]
 		 */
-		e1000e_rar_set(&adapter.hw,
-					   adapter.hw.mac.addr,
-					   adapter.hw.mac.rar_entry_count - 1);
+		e1000e_rar_set(&adapter->hw,
+					   adapter->hw.mac.addr,
+					   adapter->hw.mac.rar_entry_count - 1);
 	}
 	return kIOReturnSuccess;
 }
@@ -1129,8 +1690,8 @@ IOReturn AppleIntelE1000e::setMulticastMode(bool active)
 }
 IOReturn AppleIntelE1000e::setMulticastList(IOEthernetAddress * addrs, UInt32 count)
 {
-	e_dbg("AppleIntelE1000e::setMulticastList(%p, %u).\n", addrs, (unsigned int)count);
-	e1000_update_mc_addr_list(&adapter.hw,(u8*)addrs,count);
+	e1000_adapter *adapter = &priv_adapter;
+	e1000_update_mc_addr_list(&adapter->hw,(u8*)addrs,count);
 	return kIOReturnSuccess;
 }
 
@@ -1175,88 +1736,74 @@ bool AppleIntelE1000e::addNetworkMedium(UInt32 type, UInt32 bps, UInt32 index)
 
 void AppleIntelE1000e::interruptOccurred(IOInterruptEventSource * src)
 {
-	int i;
-	struct e1000_hw* hw = &adapter.hw;
+	e1000_adapter *adapter = &priv_adapter;
+	struct e1000_hw* hw = &adapter->hw;
+	u32 rctl, icr = er32(ICR);
 	
-	if (interruptReason & E1000_ICR_LSC) {
-		hw->mac.get_link_status = true;
+	if (!icr)
+		return;  /* Not our interrupt */
+	
+	if (icr & E1000_ICR_LSC) {
+		hw->mac.get_link_status = 1;
 		/*
 		 * ICH8 workaround-- Call gig speed drop workaround on cable
 		 * disconnect (LSC) before accessing any PHY registers
 		 */
 		
-		if ((adapter.flags & FLAG_LSC_GIG_SPEED_DROP) &&
-			(!(E1000_READ_REG(hw, E1000_STATUS) & E1000_STATUS_LU)))
+		if ((adapter->flags & FLAG_LSC_GIG_SPEED_DROP) &&
+		    (!(er32(STATUS) & E1000_STATUS_LU)))
 			e1000e_gig_downshift_workaround_ich8lan(hw);
-	#if	0
+
 		/*
 		 * 80003ES2LAN workaround--
 		 * For packet buffer work-around on link down event;
 		 * disable receives here in the ISR and
 		 * reset adapter in watchdog
 		 */
-		if (adapter.flags & FLAG_RX_NEEDS_RESTART) {
+		if (adapter->flags & FLAG_RX_NEEDS_RESTART) {
 			/* disable receives */
 			rctl = er32(RCTL);
 			ew32(RCTL, rctl & ~E1000_RCTL_EN);
-			adapter.flags |= FLAG_RX_RESTART_NOW;
+			adapter->flags |= FLAG_RX_RESTART_NOW;
 		}
 		/* guard against interrupt when we're going down */
-	#endif
 	}
 	
-	adapter.total_tx_bytes = 0;
-	adapter.total_rx_bytes = 0;
-	adapter.total_tx_packets = 0;
-	adapter.total_rx_packets = 0;
-	
-	for (i = 0; i < E1000_MAX_INTR; i++) {
+	adapter->total_tx_bytes = 0;
+	adapter->total_rx_bytes = 0;
+	adapter->total_tx_packets = 0;
+	adapter->total_rx_packets = 0;
+
+	for (int i = 0; i < E1000_MAX_INTR; i++) {
 		// int rx_cleaned = adapter->clean_rx(adapter);
-		int rx_cleaned = e1000_clean_rx_irq();
+		int rx_cleaned = this->clean_rx_irq();
+		if(rx_cleaned){
+			netStats->inputPackets += netif->flushInputQueue();
+		}
 		int tx_cleaned_complete = e1000_clean_tx_irq();
 		if (!rx_cleaned && tx_cleaned_complete)
 			break;
 	}
-	
-	if (adapter.itr_setting & 3)
-		e1000_set_itr(&adapter);
+	transmitQueue->service();
+
+	if (likely(adapter->itr_setting & 3))
+		e1000_set_itr(adapter);
 }
 
 void AppleIntelE1000e::interruptHandler(OSObject * target, IOInterruptEventSource * src, int count)
 {
 	AppleIntelE1000e * me = (AppleIntelE1000e *) target;
-	me->interruptOccurred(src);
+	if(me->enabledForNetif)
+		me->interruptOccurred(src);
 }
 
-bool AppleIntelE1000e::interruptFilter(OSObject * target, IOFilterInterruptEventSource * src )
-{
-	AppleIntelE1000e * me = (AppleIntelE1000e *) target;
-	struct e1000_hw* hw = &me->adapter.hw;
-	u32 icr;
-
-	if (!me->interruptEnabled)
-		return false;
-	
-	icr = er32(ICR);
-
-	if (!icr)
-		return false;  /* Not our interrupt */
-	/*
-	 * Interrupt Auto-Mask...upon reading ICR,
-	 * interrupts are masked.  No need for the
-	 * IMC write
-	 */
-	
-	me->interruptReason = icr;
-	return true;
-}
 
 void AppleIntelE1000e::e1000_init_manageability_pt()
 {
-	struct e1000_hw *hw = &adapter.hw;
+	struct e1000_hw *hw = &priv_adapter.hw;
 	u32 manc, manc2h, mdef, i, j;
 	
-	if (!(adapter.flags & FLAG_MNG_PT_ENABLED))
+	if (!(priv_adapter.flags & FLAG_MNG_PT_ENABLED))
 		return;
 	
 	manc = er32(MANC);
@@ -1324,21 +1871,21 @@ void AppleIntelE1000e::e1000_init_manageability_pt()
  **/
 void AppleIntelE1000e::e1000_configure_tx()
 {
-	struct e1000_hw *hw = &adapter.hw;
-	struct e1000_ring *tx_ring = adapter.tx_ring;
-	UInt32 tctl, tipg;
-	UInt32 ipgr1, ipgr2;
+	e1000_adapter *adapter = &priv_adapter;
+	struct e1000_hw *hw = &adapter->hw;
+	struct e1000_ring *tx_ring = adapter->tx_ring;
+	u64 tdba;
+	u32 tdlen, tctl, tipg, tarc;
+	u32 ipgr1, ipgr2;
 	
 	/* Setup the HW Tx Head and Tail descriptor pointers */
-	
-	u64 tdba = (u64)tx_ring->dma;
-	u32 tdlen = tx_ring->count * sizeof(struct e1000_tx_desc);
+	tdba = tx_ring->dma;
+	tdlen = tx_ring->count * sizeof(struct e1000_tx_desc);
 	ew32(TDBAL(0), (tdba & DMA_BIT_MASK(32)));
 	ew32(TDBAH(0), (tdba >> 32));
 	ew32(TDLEN(0), tdlen);
 	ew32(TDH(0), 0);
 	ew32(TDT(0), 0);
-	
 	tx_ring->head = E1000_TDH(0);
 	tx_ring->tail = E1000_TDT(0);
 	
@@ -1347,34 +1894,58 @@ void AppleIntelE1000e::e1000_configure_tx()
 	ipgr1 = DEFAULT_82543_TIPG_IPGR1;               /*  8  */
 	ipgr2 = DEFAULT_82543_TIPG_IPGR2;               /*  6  */
 	
+	if (adapter->flags & FLAG_TIPG_MEDIUM_FOR_80003ESLAN)
+		ipgr2 = DEFAULT_80003ES2LAN_TIPG_IPGR2; /*  7  */
+	
 	tipg |= ipgr1 << E1000_TIPG_IPGR1_SHIFT;
 	tipg |= ipgr2 << E1000_TIPG_IPGR2_SHIFT;
-	E1000_WRITE_REG(hw, E1000_TIPG, tipg);
+	ew32(TIPG, tipg);
 	
 	/* Set the Tx Interrupt Delay register */
-	//E1000_WRITE_REG(hw, E1000_TIDV, adapter.tx_int_delay);
+	ew32(TIDV, adapter->tx_int_delay);
 	/* Tx irq moderation */
-	//E1000_WRITE_REG(hw, E1000_TADV, adapter.tx_abs_int_delay);
+	ew32(TADV, adapter->tx_abs_int_delay);
 	
 	/* Program the Transmit Control Register */
-	tctl = E1000_READ_REG(hw, E1000_TCTL);
+	tctl = er32(TCTL);
 	tctl &= ~E1000_TCTL_CT;
 	tctl |= E1000_TCTL_PSP | E1000_TCTL_RTLC |
 	(E1000_COLLISION_THRESHOLD << E1000_CT_SHIFT);
 	
-	hw->mac.ops.config_collision_dist(hw);
+	if (adapter->flags & FLAG_TARC_SPEED_MODE_BIT) {
+		tarc = er32(TARC(0));
+		/*
+		 * set the speed mode bit, we'll clear it if we're not at
+		 * gigabit link later
+		 */
+#define SPEED_MODE_BIT (1 << 21)
+		tarc |= SPEED_MODE_BIT;
+		ew32(TARC(0), tarc);
+	}
+	
+	/* errata: program both queues to unweighted RR */
+	if (adapter->flags & FLAG_TARC_SET_BIT_ZERO) {
+		tarc = er32(TARC(0));
+		tarc |= 1;
+		ew32(TARC(0), tarc);
+		tarc = er32(TARC(1));
+		tarc |= 1;
+		ew32(TARC(1), tarc);
+	}
 	
 	/* Setup Transmit Descriptor Settings for eop descriptor */
-	adapter.txd_cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_IFCS;
+	adapter->txd_cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_IFCS;
 	
 	/* only set IDE if we are delaying interrupts using the timers */
-	//if (adapter.tx_int_delay)
-	//adapter.txd_cmd |= E1000_TXD_CMD_IDE;
+	if (adapter->tx_int_delay)
+		adapter->txd_cmd |= E1000_TXD_CMD_IDE;
 	
 	/* enable Report Status bit */
-	adapter.txd_cmd |= E1000_TXD_CMD_RS;
+	adapter->txd_cmd |= E1000_TXD_CMD_RS;
 	
-	E1000_WRITE_REG(hw, E1000_TCTL, tctl);
+	ew32(TCTL, tctl);
+	
+	e1000e_config_collision_dist(hw);
 }
 
 /**
@@ -1385,7 +1956,8 @@ void AppleIntelE1000e::e1000_configure_tx()
 (((S) & (PAGE_SIZE - 1)) ? 1 : 0))
 void AppleIntelE1000e::e1000_setup_rctl()
 {
-	struct e1000_hw *hw = &adapter.hw;
+	e1000_adapter *adapter = &priv_adapter;
+	struct e1000_hw *hw = &adapter->hw;
 	u32 rctl, rfctl;
 	u32 psrctl = 0;
 	u32 pages = 0;
@@ -1395,13 +1967,13 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	rctl &= ~(3 << E1000_RCTL_MO_SHIFT);
 	rctl |= E1000_RCTL_EN | E1000_RCTL_BAM |
 	E1000_RCTL_LBM_NO | E1000_RCTL_RDMTS_HALF |
-	(adapter.hw.mac.mc_filter_type << E1000_RCTL_MO_SHIFT);
+	(hw->mac.mc_filter_type << E1000_RCTL_MO_SHIFT);
 	
 	/* Do not Store bad packets */
 	rctl &= ~E1000_RCTL_SBP;
 	
 	/* Enable Long Packet receive */
-	if (mtu <= ETH_DATA_LEN)
+	if (adapter->netdev->mtu <= ETH_DATA_LEN)
 		rctl &= ~E1000_RCTL_LPE;
 	else
 		rctl |= E1000_RCTL_LPE;
@@ -1409,7 +1981,7 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	/* Some systems expect that the CRC is included in SMBUS traffic.  The
 	 * hardware strips the CRC before sending to both SMBUS (BMC) and to
 	 * host memory when this is enabled */
-	if (adapter.flags2 & FLAG2_CRC_STRIPPING)
+	if (adapter->flags2 & FLAG2_CRC_STRIPPING)
 		rctl |= E1000_RCTL_SECRC;
 	
 	/* Workaround Si errata on 82577 PHY - configure IPG for jumbos */
@@ -1432,7 +2004,7 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	/* Setup buffer sizes */
 	rctl &= ~E1000_RCTL_SZ_4096;
 	rctl |= E1000_RCTL_BSEX;
-	switch (adapter.rx_buffer_len) {
+	switch (adapter->rx_buffer_len) {
 		case 2048:
 		default:
 			rctl |= E1000_RCTL_SZ_2048;
@@ -1464,18 +2036,14 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	 * a lot of memory, since we allocate 3 pages at all times
 	 * per packet.
 	 */
-#if	1
-	// not supported (yet)
-	pages = 0;
-#else
-	pages = PAGE_USE_COUNT(mtu);
-#endif	
-	if (!(adapter.flags & FLAG_IS_ICH) && (pages <= 3) &&
+	pages = PAGE_USE_COUNT(adapter->netdev->mtu);
+	if (!(adapter->flags & FLAG_IS_ICH) && (pages <= 3) &&
 	    (PAGE_SIZE <= 16384) && (rctl & E1000_RCTL_LPE))
-		adapter.rx_ps_pages = pages;
+		adapter->rx_ps_pages = pages;
 	else
-		adapter.rx_ps_pages = 0;
-	if (adapter.rx_ps_pages) {
+		adapter->rx_ps_pages = 0;
+
+	if (adapter->rx_ps_pages) {
 		/* Configure extra packet-split registers */
 		rfctl = er32(RFCTL);
 		rfctl |= E1000_RFCTL_EXTEN;
@@ -1491,9 +2059,9 @@ void AppleIntelE1000e::e1000_setup_rctl()
 		/* Enable Packet split descriptors */
 		rctl |= E1000_RCTL_DTYP_PS;
 		
-		psrctl |= adapter.rx_ps_bsize0 >> E1000_PSRCTL_BSIZE0_SHIFT;
+		psrctl |= adapter->rx_ps_bsize0 >> E1000_PSRCTL_BSIZE0_SHIFT;
 		
-		switch (adapter.rx_ps_pages) {
+		switch (adapter->rx_ps_pages) {
 			case 3:
 				psrctl |= PAGE_SIZE << E1000_PSRCTL_BSIZE3_SHIFT;
 			case 2:
@@ -1509,7 +2077,7 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	ew32(RCTL, rctl);
 
 	/* just started the receive unit, no need to restart */
-	adapter.flags &= ~FLAG_RX_RESTART_NOW;
+	adapter->flags &= ~FLAG_RX_RESTART_NOW;
 }
 
 /**
@@ -1520,12 +2088,13 @@ void AppleIntelE1000e::e1000_setup_rctl()
  **/
 void AppleIntelE1000e::e1000_configure_rx()
 {
-	struct e1000_hw *hw = &adapter.hw;
-	struct e1000_ring *rx_ring = adapter.rx_ring;
+	e1000_adapter *adapter = &priv_adapter;
+	struct e1000_hw *hw = &adapter->hw;
+	struct e1000_ring *rx_ring = adapter->rx_ring;
 	u64 rdba;
 	u32 rdlen, rctl, rxcsum, ctrl_ext;
 	
-	if (adapter.rx_ps_pages) {
+	if (adapter->rx_ps_pages) {
 		/* this is a 32 byte descriptor */
 		e_dbg("32 byte descriptor.\n");
 		rdlen = rx_ring->count *
@@ -1541,12 +2110,12 @@ void AppleIntelE1000e::e1000_configure_rx()
 	msleep(10);
 	
 	/* set the Receive Delay Timer Register */
-	ew32(RDTR, adapter.rx_int_delay);
+	ew32(RDTR, adapter->rx_int_delay);
 	
 	/* irq moderation */
-	ew32(RADV, adapter.rx_abs_int_delay);
-	if (adapter.itr_setting != 0)
-		ew32(ITR, 1000000000 / (adapter.itr * 256));
+	ew32(RADV, adapter->rx_abs_int_delay);
+	if (adapter->itr_setting != 0)
+		ew32(ITR, 1000000000 / (adapter->itr * 256));
 	
 	ctrl_ext = er32(CTRL_EXT);
 	ew32(CTRL_EXT, ctrl_ext);
@@ -1567,14 +2136,14 @@ void AppleIntelE1000e::e1000_configure_rx()
 	
 	/* Enable Receive Checksum Offload for TCP and UDP */
 	rxcsum = er32(RXCSUM);
-	if (adapter.flags & FLAG_RX_CSUM_ENABLED) {
+	if (adapter->flags & FLAG_RX_CSUM_ENABLED) {
 		rxcsum |= E1000_RXCSUM_TUOFL;
 		
 		/*
 		 * IPv4 payload checksum for UDP fragments must be
 		 * used in conjunction with packet-split.
 		 */
-		if (adapter.rx_ps_pages)
+		if (adapter->rx_ps_pages)
 			rxcsum |= E1000_RXCSUM_IPPCSE;
 	} else {
 		rxcsum &= ~E1000_RXCSUM_TUOFL;
@@ -1587,8 +2156,8 @@ void AppleIntelE1000e::e1000_configure_rx()
 	 * packet size is equal or larger than the specified value (in 8 byte
 	 * units), e.g. using jumbo frames when setting to E1000_ERT_2048
 	 */
-	if (adapter.flags & FLAG_HAS_ERT) {
-		if (mtu > ETH_DATA_LEN) {
+	if (adapter->flags & FLAG_HAS_ERT) {
+		if (priv_netdev.mtu > ETH_DATA_LEN) {
 			u32 rxdctl = er32(RXDCTL(0));
 			ew32(RXDCTL(0), rxdctl | 0x3);
 			ew32(ERT, E1000_ERT_2048 | (1 << 13));
@@ -1615,109 +2184,232 @@ void AppleIntelE1000e::e1000_configure_rx()
 }
 
 
-/**
- * e1000_desc_unused - calculate if we have unused descriptors
- **/
-int AppleIntelE1000e::e1000_desc_unused(struct e1000_ring *ring)
-{
-	if (ring->next_to_clean > ring->next_to_use)
-		return ring->next_to_clean - ring->next_to_use - 1;
-		
-	return ring->count + ring->next_to_clean - ring->next_to_use - 1;
-}
 
 
 /**
  * e1000_alloc_rx_buffers - Replace used receive buffers; legacy & extended
  * @adapter: address of board private structure
  **/
-void AppleIntelE1000e::e1000_alloc_rx_buffers()
+void AppleIntelE1000e::e1000_alloc_rx_buffers(int cleaned_count)
 {
-	struct e1000_rx_desc *rx_desc, *rx_desc_array;
+	e1000_adapter *adapter = &priv_adapter;
+	struct e1000_ring *rx_ring = adapter->rx_ring;
+	struct e1000_rx_desc *rx_desc;
 	struct e1000_buffer *buffer_info;
-	struct IOPhysicalSegment vector;
-	
 	mbuf_t skb;
-	UInt32 count;
-	
-	UInt32 i;
-	
-	rx_desc_array = (e1000_rx_desc*)(adapter.rx_ring->desc->getBytesNoCopy());
+	unsigned int i;
+	unsigned int bufsz = adapter->rx_buffer_len;
 
-	for (i = 0; i < adapter.rx_ring->count; i++) {
-		
-		buffer_info = &adapter.rx_ring->buffer_info[i];
-		rx_desc = &rx_desc_array[i];
-		
-		//kIOEthernetMaxPacketSize
-		skb = allocatePacket(adapter.rx_buffer_len);
-		if (skb == NULL) {
-			IOLog("allocatePacket failed in alloc_rx_buffer.\n");
-			break;
+	i = rx_ring->next_to_use;
+	buffer_info = &rx_ring->buffer_info[i];
+	
+	while (cleaned_count--) {
+		skb = buffer_info->skb;
+		if (skb) {	// recycle
+			//skb_trim(skb, 0);
+		} else {
+			skb = allocatePacket( bufsz);
+			if (!skb) {
+				/* Better luck next round */
+				adapter->alloc_rx_buff_failed++;
+				break;
+			}
+			buffer_info->skb = skb;
+			buffer_info->dma = 0;
 		}
-		
-		//mbuf_adj(skb, 0x12);
-		count = rxMbufCursor->getPhysicalSegmentsWithCoalesce(skb, &vector, 1);
-		if (count == 0) {
-			IOLog("getPhysicalSegments failed in alloc_rx_buffer.\n");
-			freePacket(skb);
-			break;
+		if(buffer_info->dma == 0){
+			UInt32 count;
+			struct IOPhysicalSegment vector;
+			count = rxMbufCursor->getPhysicalSegmentsWithCoalesce(skb, &vector, 1);
+			if (count == 0) {
+				IOLog("getPhysicalSegments failed in alloc_rx_buffer.\n");
+				adapter->rx_dma_failed++;
+				freePacket(skb);
+				buffer_info->skb = NULL;
+				break;
+			}
+			buffer_info->dma = vector.location;
 		}
-		buffer_info->skb = skb;
-		rx_desc->buffer_addr = vector.location;
-		//IOLog("index:%d, addr:%08x.\n", i, vector.location);
+
+		rx_desc = E1000_RX_DESC(*rx_ring, i);
+		rx_desc->buffer_addr = cpu_to_le64(buffer_info->dma);
+		
+		i++;
+		if (i == rx_ring->count)
+			i = 0;
+		buffer_info = &rx_ring->buffer_info[i];
 	}
 	
-	adapter.rx_ring->next_to_use = adapter.rx_ring->count - 1;
-	E1000_WRITE_REG(&adapter.hw, adapter.rx_ring->tail, adapter.rx_ring->count - 2);
+	if (rx_ring->next_to_use != i) {
+		rx_ring->next_to_use = i;
+		if (i-- == 0)
+			i = (rx_ring->count - 1);
+		
+		/*
+		 * Force memory writes to complete before letting h/w
+		 * know there are new descriptors to fetch.  (Only
+		 * applicable for weak-ordered memory model archs,
+		 * such as IA-64).
+		 */
+		wmb();
+		writel(i, adapter->hw.hw_addr + rx_ring->tail);
+	}
+	
+}
+
+
+/**
+ * e1000_alloc_rx_buffers_ps - Replace used receive buffers; packet split
+ * @adapter: address of board private structure
+ **/
+void AppleIntelE1000e::e1000_alloc_rx_buffers_ps( int cleaned_count )
+{
+	e1000_adapter *adapter = &priv_adapter;
+	union e1000_rx_desc_packet_split *rx_desc;
+	struct e1000_ring *rx_ring = adapter->rx_ring;
+	struct e1000_buffer *buffer_info;
+	struct e1000_ps_page *ps_page;
+	mbuf_t skb;
+	unsigned int i, j;
+	
+	i = rx_ring->next_to_use;
+	buffer_info = &rx_ring->buffer_info[i];
+	
+	while (cleaned_count--) {
+		rx_desc = E1000_RX_DESC_PS(*rx_ring, i);
+		
+		for (j = 0; j < PS_PAGE_BUFFERS; j++) {
+			ps_page = &buffer_info->ps_pages[j];
+			if (j >= adapter->rx_ps_pages) {
+				/* all unused desc entries get hw null ptr */
+				rx_desc->read.buffer_addr[j+1] = ~cpu_to_le64(0);
+				continue;
+			}
+			if (!ps_page->page) {
+				ps_page->pool = IOBufferMemoryDescriptor::inTaskWithOptions( kernel_task, kIODirectionInOut | kIOMemoryPhysicallyContiguous,
+																		 PAGE_SIZE, PAGE_SIZE );
+				if (!ps_page->pool) {
+					adapter->alloc_rx_buff_failed++;
+					goto no_buffers;
+				}
+				ps_page->pool->prepare();
+				ps_page->page = (page*)ps_page->pool->getBytesNoCopy();
+			}
+			if (!ps_page->dma) {
+				ps_page->dma = ps_page->pool->getPhysicalAddress();
+			}
+			/*
+			 * Refresh the desc even if buffer_addrs
+			 * didn't change because each write-back
+			 * erases this info.
+			 */
+			rx_desc->read.buffer_addr[j+1] =
+			cpu_to_le64(ps_page->dma);
+		}
+		
+		skb = buffer_info->skb;
+		if (skb) {
+			mbuf_pkthdr_setlen(skb, 0);
+			goto map_skb;
+		}
+		
+		skb = allocatePacket(adapter->rx_ps_bsize0);
+		
+		if (!skb) {
+			adapter->alloc_rx_buff_failed++;
+			break;
+		}
+		
+		buffer_info->skb = skb;
+		
+	map_skb:
+		{
+			IOPhysicalSegment segment;
+			if( txMbufCursor->getPhysicalSegmentsWithCoalesce(skb, &segment, 1) != 0 ){
+				adapter->rx_dma_failed++;
+				freePacket(skb);
+				buffer_info->skb = NULL;
+				break;
+			}
+			buffer_info->dma = segment.location;
+		}
+		
+		rx_desc->read.buffer_addr[0] = cpu_to_le64(buffer_info->dma);
+		
+		i++;
+		if (i == rx_ring->count)
+			i = 0;
+		buffer_info = &rx_ring->buffer_info[i];
+	}
+	
+no_buffers:
+	if (rx_ring->next_to_use != i) {
+		rx_ring->next_to_use = i;
+		
+		if (!(i--))
+			i = (rx_ring->count - 1);
+		
+		/*
+		 * Force memory writes to complete before letting h/w
+		 * know there are new descriptors to fetch.  (Only
+		 * applicable for weak-ordered memory model archs,
+		 * such as IA-64).
+		 */
+		wmb();
+		/*
+		 * Hardware increments by 16 bytes, but packet split
+		 * descriptors are 32 bytes...so we increment tail
+		 * twice as much.
+		 */
+		writel(i<<1, adapter->hw.hw_addr + rx_ring->tail);
+	}
 }
 
 
 bool AppleIntelE1000e::e1000_clean_rx_irq()
 {
-	struct e1000_rx_desc *rx_desc, *next_rxd, *rx_desc_array;
+	e1000_adapter *adapter = &priv_adapter;
+	//struct e1000_hw* hw = &adapter->hw;
+	struct e1000_ring *rx_ring = adapter->rx_ring;
+	struct e1000_rx_desc *rx_desc, *next_rxd;
 	struct e1000_buffer *buffer_info, *next_buffer;
-	struct e1000_hw* hw = &adapter.hw;
-	
-	UInt32 length;
-	UInt32 head, tail;
+	u32 length;
 	unsigned int i;
+	int cleaned_count = 0;
 	bool cleaned = 0;
 	unsigned int total_rx_bytes = 0, total_rx_packets = 0;
 	
 	
-	i = adapter.rx_ring->next_to_clean % adapter.rx_ring->count;
-	rx_desc_array = (e1000_rx_desc*)(adapter.rx_ring->desc->getBytesNoCopy());
-	rx_desc = &rx_desc_array[i];
-	buffer_info = &adapter.rx_ring->buffer_info[i];
-	head = E1000_READ_REG(hw, adapter.rx_ring->head);
-	tail = E1000_READ_REG(hw, adapter.rx_ring->tail);
+	i = rx_ring->next_to_clean;
+	rx_desc = E1000_RX_DESC(*rx_ring, i);
+	buffer_info = &rx_ring->buffer_info[i];
 	
-	while ((rx_desc->status & E1000_RXD_STAT_DD)) {
+	while (rx_desc->status & E1000_RXD_STAT_DD) {
 		mbuf_t skb;
-		UInt8 status;
-		UInt32 ckResult;
-		struct IOPhysicalSegment vector;
+		u8 status;
 		
 		status = rx_desc->status;
+
 		skb = buffer_info->skb;
 		buffer_info->skb = NULL;
 
+		//prefetch(skb->data - NET_IP_ALIGN);
+
 		i++;
-		if (i >= adapter.rx_ring->count)
+		if (i == rx_ring->count)
 			i = 0;
+		next_rxd = E1000_RX_DESC(*rx_ring, i);
+		prefetch(next_rxd);
+
+		next_buffer = &rx_ring->buffer_info[i];
 		
-		next_rxd = &rx_desc_array[i];
-		next_buffer = &adapter.rx_ring->buffer_info[i];
-		
-		cleaned = true;
+		cleaned = 1;
+		cleaned_count++;
+		buffer_info->dma = 0;
+
 		length = le16_to_cpu(rx_desc->length);
-#if	0
-		if (rx_desc->errors){
-			e_dbg("rx_desc->errors.\n");
-			goto next_desc;
-		}
-#endif
+
+		//e_dbg("e1000_clean_rx_irq: %d len = %d\n", i, (int)length );
 		/*
 		 * !EOP means multiple descriptors were used to store a single
 		 * packet, if that's the case we need to toss it.  In fact, we
@@ -1725,99 +2417,261 @@ bool AppleIntelE1000e::e1000_clean_rx_irq()
 		 * next frame that _does_ have the EOP bit set, as it is by
 		 * definition only a frame fragment
 		 */
-		if (!(status & E1000_RXD_STAT_EOP))
-			adapter.flags2 |= FLAG2_IS_DISCARDING;
+		if (unlikely(!(status & E1000_RXD_STAT_EOP)))
+			adapter->flags2 |= FLAG2_IS_DISCARDING;
 
-		if (adapter.flags2 & FLAG2_IS_DISCARDING) {
+		if (adapter->flags2 & FLAG2_IS_DISCARDING) {
 			/* All receives must fit into a single buffer */
 			e_dbg("Receive packet consumed multiple buffers\n");
 			/* recycle */
 			buffer_info->skb = skb;
 			if (status & E1000_RXD_STAT_EOP)
-				adapter.flags2 &= ~FLAG2_IS_DISCARDING;
-			goto next_desc;
-		}
-
-		if (rx_desc->errors & E1000_RXD_ERR_FRAME_ERR_MASK) {
+				adapter->flags2 &= ~FLAG2_IS_DISCARDING;
+		} else if (rx_desc->errors & E1000_RXD_ERR_FRAME_ERR_MASK) {
 			/* recycle */
 			buffer_info->skb = skb;
+		} else if(length > 4) {
+			/* adjust length to remove Ethernet CRC */
+			if (!(adapter->flags2 & FLAG2_CRC_STRIPPING))
+				length -= 4;
+			
+			total_rx_bytes += length;
+			total_rx_packets++;
+			
+			/*
+			 * code added for copybreak, this should improve
+			 * performance for small packets with large amounts
+			 * of reassembly being done in the stack
+			 */
+			if (length < copybreak) {
+				mbuf_t new_skb = copyPacket(skb, length);
+				if (new_skb) {
+					buffer_info->skb = skb;
+					skb = new_skb;
+				}
+			} else {
+				;
+			}
+			/* end copybreak code */
+			
+			/* Receive Checksum Offload */
+			e1000_rx_checksum(skb, status);
+
+			e1000_receive_skb(skb, length, status, rx_desc->special);
+		}
+next_desc:		
+		rx_desc->status = 0;
+
+		/* return some buffers to hardware, one at a time is too slow */
+		if (cleaned_count >= E1000_RX_BUFFER_WRITE) {
+			this->alloc_rx_buf(cleaned_count);
+			cleaned_count = 0;
+		}
+		/* use prefetched values */
+		rx_desc = next_rxd;
+		buffer_info = next_buffer;
+
+	}
+	rx_ring->next_to_clean = i;
+	
+	cleaned_count = e1000_desc_unused(rx_ring);
+	if (cleaned_count)
+		this->alloc_rx_buf(cleaned_count);
+
+	adapter->total_rx_bytes += total_rx_bytes;
+	adapter->total_rx_packets += total_rx_packets;
+
+	return cleaned;
+}
+
+bool AppleIntelE1000e::e1000_clean_rx_irq_ps()
+{
+	struct e1000_adapter *adapter = &priv_adapter;
+	//struct e1000_hw *hw = &adapter->hw;
+	union e1000_rx_desc_packet_split *rx_desc, *next_rxd;
+	struct e1000_ring *rx_ring = adapter->rx_ring;
+	struct e1000_buffer *buffer_info, *next_buffer;
+	struct e1000_ps_page *ps_page;
+	mbuf_t skb;
+	unsigned int i, j;
+	u32 length, staterr;
+	int cleaned_count = 0;
+	bool cleaned = 0;
+	unsigned int total_rx_bytes = 0, total_rx_packets = 0;
+	
+	i = rx_ring->next_to_clean;
+	rx_desc = E1000_RX_DESC_PS(*rx_ring, i);
+	staterr = le32_to_cpu(rx_desc->wb.middle.status_error);
+	buffer_info = &rx_ring->buffer_info[i];
+	
+	while (staterr & E1000_RXD_STAT_DD) {
+#ifdef CONFIG_E1000E_NAPI
+		if (*work_done >= work_to_do)
+			break;
+		(*work_done)++;
+#endif
+		skb = buffer_info->skb;
+		
+		/* in the packet split case this is header only */
+		prefetch(skb->data - NET_IP_ALIGN);
+
+		i++;
+		if (i == rx_ring->count)
+			i = 0;
+		next_rxd = E1000_RX_DESC_PS(*rx_ring, i);
+		prefetch(next_rxd);
+		
+		next_buffer = &rx_ring->buffer_info[i];
+		
+		cleaned = 1;
+		cleaned_count++;
+
+		buffer_info->dma = 0;
+		
+		/* see !EOP comment in other rx routine */
+		if (!(staterr & E1000_RXD_STAT_EOP))
+			adapter->flags2 |= FLAG2_IS_DISCARDING;
+		
+		if (adapter->flags2 & FLAG2_IS_DISCARDING) {
+			e_dbg("Packet Split buffers didn't pick up the full "
+			      "packet\n");
+			freePacket(skb);
+			if (staterr & E1000_RXD_STAT_EOP)
+				adapter->flags2 &= ~FLAG2_IS_DISCARDING;
 			goto next_desc;
 		}
 		
-		/* adjust length to remove Ethernet CRC */
-		if (!(adapter.flags2 & FLAG2_CRC_STRIPPING))
-			length -= 4;
+		if (staterr & E1000_RXDEXT_ERR_FRAME_ERR_MASK) {
+			freePacket(skb);
+			goto next_desc;
+		}
 		
-		total_rx_bytes += length;
-		total_rx_packets++;
+		length = le16_to_cpu(rx_desc->wb.middle.length0);
+		
+		if (!length) {
+			e_dbg("Last part of the packet spanning multiple "
+			      "descriptors\n");
+			freePacket(skb);
+			goto next_desc;
+		}
+		
+		/* Good Receive */
+		mbuf_pkthdr_setlen(skb, length);
+		mbuf_setlen(skb, length);
+		
+#ifdef CONFIG_E1000E_NAPI
+		{
+			/*
+			 * this looks ugly, but it seems compiler issues make it
+			 * more efficient than reusing j
+			 */
+			int l1 = le16_to_cpu(rx_desc->wb.upper.length[0]);
+			
+			/*
+			 * page alloc/put takes too long and effects small packet
+			 * throughput, so unsplit small packets and save the alloc/put
+			 * only valid in softirq (napi) context to call kmap_*
+			 */
+			if (l1 && (l1 <= copybreak) &&
+				((length + l1) <= adapter->rx_ps_bsize0)) {
+				u8 *vaddr;
+				
+				ps_page = &buffer_info->ps_pages[0];
+				
+				/*
+				 * there is no documentation about how to call
+				 * kmap_atomic, so we can't hold the mapping
+				 * very long
+				 */
+				pci_dma_sync_single_for_cpu(pdev, ps_page->dma,
+											PAGE_SIZE, PCI_DMA_FROMDEVICE);
+				vaddr = kmap_atomic(ps_page->page, KM_SKB_DATA_SOFTIRQ);
+				memcpy(skb_tail_pointer(skb), vaddr, l1);
+				kunmap_atomic(vaddr, KM_SKB_DATA_SOFTIRQ);
+				pci_dma_sync_single_for_device(pdev, ps_page->dma,
+											   PAGE_SIZE, PCI_DMA_FROMDEVICE);
+				
+				/* remove the CRC */
+				if (!(adapter->flags2 & FLAG2_CRC_STRIPPING))
+					l1 -= 4;
+				
+				skb_put(skb, l1);
+				goto copydone;
+			} /* if */
+		}
+#endif
+		
+		for (j = 0; j < PS_PAGE_BUFFERS; j++) {
+			length = le16_to_cpu(rx_desc->wb.upper.length[j]);
+			if (!length)
+				break;
 
-		/*
-		 * code added for copybreak, this should improve
-		 * performance for small packets with large amounts
-		 * of reassembly being done in the stack
+			ps_page = &buffer_info->ps_pages[j];
+			mbuf_copyback(skb, mbuf_pkthdr_len(skb), length, ps_page->page, MBUF_WAITOK);
+
+			ps_page->pool->complete();
+			ps_page->pool->release();
+			ps_page->pool = NULL;
+			ps_page->dma = 0;
+			ps_page->page = NULL;
+			
+			mbuf_pkthdr_setlen(skb, mbuf_pkthdr_len(skb)+length );
+		}
+		
+		/* strip the ethernet crc, problem is we're using pages now so
+		 * this whole operation can get a little cpu intensive
 		 */
-		if (length < COPYBREAK_DEFAULT) {
-			mbuf_t skb_in = copyPacket(skb);
-			if (skb_in) {
-				skb = skb_in;
-			} else {
-				/* else just continue with the old one */
-				buffer_info->skb = NULL;
-			}
-		} else {
-			/* else just continue with the old one */
-			buffer_info->skb = NULL;
-		}
-		/* end copybreak code */
-		// skb_put(skb, length);
-
-		/* Receive Checksum Offload */
-		ckResult = 0;
-		if (status & E1000_RXD_STAT_IPCS) {
-			ckResult |= kChecksumIP;
-		}
-		if (status & E1000_RXD_STAT_UDPCS) {
-			ckResult |= kChecksumUDP;
-		}
-		if (status & E1000_RXD_STAT_TCPCS) {
-			ckResult |= kChecksumTCP;
-		} 
-		setChecksumResult(skb, kChecksumFamilyTCPIP, kChecksumIP | kChecksumTCP | kChecksumUDP, ckResult);
-		netif->inputPacket(skb, length);
-		netStats->inputPackets++;
-		buffer_info->skb = allocatePacket(adapter.rx_buffer_len);
-		//mbuf_adj(buffer_info->skb, 0x12);
-		rxMbufCursor->getPhysicalSegmentsWithCoalesce(buffer_info->skb, &vector, 1);
-		rx_desc->buffer_addr = vector.location;
+		if (!(adapter->flags2 & FLAG2_CRC_STRIPPING))
+			mbuf_pkthdr_adjustlen(skb,  - 4);
+		
+#ifdef CONFIG_E1000E_NAPI
+	copydone:
+#endif
+		total_rx_bytes += mbuf_pkthdr_len(skb);
+		total_rx_packets++;
+		
+		e1000_rx_checksum(skb, staterr);
+		
+		if (rx_desc->wb.upper.header_status &
+			cpu_to_le16(E1000_RXDPS_HDRSTAT_HDRSP))
+			adapter->rx_hdr_split++;
+		
+		e1000_receive_skb(skb, mbuf_pkthdr_len(skb), staterr, rx_desc->wb.middle.vlan);
 		
 	next_desc:
-		rx_desc->status = 0;
-		rx_desc->errors = 0;
-		rx_desc->length = 0;
+		rx_desc->wb.middle.status_error &= cpu_to_le32(~0xFF);
+		buffer_info->skb = NULL;
 		
-		// alloc
-		adapter.rx_ring->next_to_use++;
-		if (adapter.rx_ring->next_to_use >= adapter.rx_ring->count) {
-			adapter.rx_ring->next_to_use = 0; 
-			E1000_WRITE_REG(hw, adapter.rx_ring->tail, adapter.rx_ring->count - 1);
-		} else {
-			E1000_WRITE_REG(hw, adapter.rx_ring->tail, adapter.rx_ring->next_to_use - 1);
+		/* return some buffers to hardware, one at a time is too slow */
+		if (cleaned_count >= E1000_RX_BUFFER_WRITE) {
+			this->alloc_rx_buf(cleaned_count);
+			cleaned_count = 0;
 		}
-		// alloc end
 		
 		/* use prefetched values */
 		rx_desc = next_rxd;
 		buffer_info = next_buffer;
+		
+		staterr = le32_to_cpu(rx_desc->wb.middle.status_error);
 	}
-	adapter.rx_ring->next_to_clean = i;
+	rx_ring->next_to_clean = i;
 	
-	/*
-	 if (cleaned)
-	 netif->flushInputQueue();
-	 */
+	cleaned_count = e1000_desc_unused(rx_ring);
+	if (cleaned_count)
+		this->alloc_rx_buf(cleaned_count);
 	
+	adapter->total_rx_bytes += total_rx_bytes;
+	adapter->total_rx_packets += total_rx_packets;
+#ifdef HAVE_NETDEV_STATS_IN_NETDEV
+	netdev->stats.rx_bytes += total_rx_bytes;
+	netdev->stats.rx_packets += total_rx_packets;
+#else
+	adapter->net_stats.rx_bytes += total_rx_bytes;
+	adapter->net_stats.rx_packets += total_rx_packets;
+#endif
 	return cleaned;
 }
+
 
 /**
  * e1000_clean_tx_irq - Reclaim resources after transmit completes
@@ -1827,55 +2681,80 @@ bool AppleIntelE1000e::e1000_clean_rx_irq()
  **/
 bool AppleIntelE1000e::e1000_clean_tx_irq()
 {
-	struct e1000_tx_desc *tx_desc, *eop_desc, *tx_desc_array;
+	e1000_adapter *adapter = &priv_adapter;
+	struct e1000_hw *hw = &adapter->hw;
+	struct e1000_ring *tx_ring = adapter->tx_ring;
+	struct e1000_tx_desc *tx_desc, *eop_desc;
 	struct e1000_buffer *buffer_info;
 	unsigned int i, eop;
 	bool cleaned = 0, retval = 1;
-	bool do_service = false;
+	unsigned int total_tx_bytes = 0, total_tx_packets = 0;
 	
-	i = adapter.tx_ring->next_to_clean;
-	eop = adapter.tx_ring->buffer_info[i].next_to_watch;
-	tx_desc_array = (e1000_tx_desc*)(adapter.tx_ring->desc->getBytesNoCopy());
-	eop_desc = &tx_desc_array[eop];
+	i = tx_ring->next_to_clean;
+	eop = tx_ring->buffer_info[i].next_to_watch;
+	eop_desc = E1000_TX_DESC(*tx_ring, eop);
 	
-	
-	if (0) {		
-		IOLog("DDING: clean_tx_irq: next_to_clean->%d, eop->%d.\n", i, eop);
-	}
-	
-	while (eop_desc->upper.data & (E1000_TXD_STAT_DD)) {
+	while (eop_desc->upper.data & cpu_to_le32(E1000_TXD_STAT_DD)) {
 		for (cleaned = 0; !cleaned; ) {
-			tx_desc = &tx_desc_array[i];
-			buffer_info = &adapter.tx_ring->buffer_info[i];
-			
+			tx_desc = E1000_TX_DESC(*tx_ring, i);
+			buffer_info = &tx_ring->buffer_info[i];
 			cleaned = (i == eop);
 			
 			if (cleaned) {
-				do_service = true;
+				mbuf_t skb = buffer_info->skb;
+#ifdef NETIF_F_TSO
+				unsigned int segs, bytecount;
+				segs = skb_shinfo(skb)->gso_segs ?: 1;
+				/* multiply data chunks by size of headers */
+				bytecount = ((segs - 1) * skb_headlen(skb)) +
+				skb->len;
+				total_tx_packets += segs;
+				total_tx_bytes += bytecount;
+#else
+				total_tx_packets++;
+				total_tx_bytes += mbuf_pkthdr_len(skb);
+#endif
+				netStats->outputPackets++;
 			}
-			
+				
+			// e1000_put_txbuf
 			if (buffer_info->skb) {
 				freePacket(buffer_info->skb);
 				buffer_info->skb = NULL;
 			}
-			
 			tx_desc->upper.data = 0;
 			
 			i++;
-			if (i >= adapter.tx_ring->count)
+			if (i >= adapter->tx_ring->count)
 				i = 0;
 		}
 		
-		eop = adapter.tx_ring->buffer_info[i].next_to_watch;
-		eop_desc = &tx_desc_array[eop];
+		eop = tx_ring->buffer_info[i].next_to_watch;
+		eop_desc = E1000_TX_DESC(*tx_ring, eop);
 	}
 	
-	adapter.tx_ring->next_to_clean = i;
-	
-	
-	if (do_service) {
-		transmitQueue->service();
+	tx_ring->next_to_clean = i;
+
+	if (adapter->detect_tx_hung) {
+		/*
+		 * Detect a transmit hang in hardware, this serializes the
+		 * check with the clearing of time_stamp and movement of i
+		 */
+		adapter->detect_tx_hung = 0;
+		if (tx_ring->buffer_info[eop].dma && !(er32(STATUS) & E1000_STATUS_TXOFF)) {
+			//schedule_work(&adapter->print_hang_task);
+			//queueRunning = false;
+		}
 	}
+	adapter->total_tx_bytes += total_tx_bytes;
+	adapter->total_tx_packets += total_tx_packets;
+#ifdef HAVE_NETDEV_STATS_IN_NETDEV
+	netdev->stats.tx_bytes += total_tx_bytes;
+	netdev->stats.tx_packets += total_tx_packets;
+#else
+	adapter->net_stats.tx_bytes += total_tx_bytes;
+	adapter->net_stats.tx_packets += total_tx_packets;
+#endif
 	
 	return retval;
 }
@@ -1883,19 +2762,21 @@ bool AppleIntelE1000e::e1000_clean_tx_irq()
 
 void AppleIntelE1000e::e1000e_enable_receives()
 {
+	e1000_adapter *adapter = &priv_adapter;
 	/* make sure the receive unit is started */
-	if ((adapter.flags & FLAG_RX_NEEDS_RESTART) &&
-	    (adapter.flags & FLAG_RX_RESTART_NOW)) {
-		struct e1000_hw *hw = &adapter.hw;
+	if ((adapter->flags & FLAG_RX_NEEDS_RESTART) &&
+	    (adapter->flags & FLAG_RX_RESTART_NOW)) {
+		struct e1000_hw *hw = &adapter->hw;
 		u32 rctl = er32(RCTL);
 		ew32(RCTL, rctl | E1000_RCTL_EN);
-		adapter.flags &= ~FLAG_RX_RESTART_NOW;
+		adapter->flags &= ~FLAG_RX_RESTART_NOW;
 	}
 }
 
 bool AppleIntelE1000e::e1000e_has_link()
 {
-	struct e1000_hw *hw = &adapter.hw;
+	e1000_adapter *adapter = &priv_adapter;
+	struct e1000_hw *hw = &priv_adapter.hw;
 	bool link_active = 0;
 	SInt32 ret_val = 0;
 	
@@ -1920,7 +2801,7 @@ bool AppleIntelE1000e::e1000e_has_link()
 		break;
 	case e1000_media_type_internal_serdes:
 		ret_val = hw->mac.ops.check_for_link(hw);
-		link_active = adapter.hw.mac.serdes_has_link;
+		link_active = adapter->hw.mac.serdes_has_link;
 		break;
 	default:
 	case e1000_media_type_unknown:
@@ -1936,161 +2817,11 @@ bool AppleIntelE1000e::e1000e_has_link()
 	return link_active;
 }
 
-
-/**
- * e1000e_reset - bring the hardware into a known good state
- *
- * This function boots the hardware and enables some settings that
- * require a configuration cycle of the hardware - those cannot be
- * set/changed during runtime. After reset the device needs to be
- * properly configured for Rx, Tx etc.
- */
-void AppleIntelE1000e::e1000e_reset()
+void AppleIntelE1000e::e1000_put_txbuf(e1000_buffer *buffer_info)
 {
-	struct e1000_mac_info *mac = &adapter.hw.mac;
-	struct e1000_fc_info *fc = &adapter.hw.fc;
-	struct e1000_hw *hw = &adapter.hw;
-	u32 tx_space, min_tx_space, min_rx_space;
-	u32 pba = adapter.pba;
-	u16 hwm;
-	
-	/* reset Packet Buffer Allocation to default */
-	ew32(PBA, pba);
-	
-	if (adapter.max_frame_size > ETH_FRAME_LEN + ETH_FCS_LEN) {
-		/*
-		 * To maintain wire speed transmits, the Tx FIFO should be
-		 * large enough to accommodate two full transmit packets,
-		 * rounded up to the next 1KB and expressed in KB.  Likewise,
-		 * the Rx FIFO should be large enough to accommodate at least
-		 * one full receive packet and is similarly rounded up and
-		 * expressed in KB.
-		 */
-		pba = er32(PBA);
-		/* upper 16 bits has Tx packet buffer allocation size in KB */
-		tx_space = pba >> 16;
-		/* lower 16 bits has Rx packet buffer allocation size in KB */
-		pba &= 0xffff;
-		/*
-		 * the Tx fifo also stores 16 bytes of information about the tx
-		 * but don't include ethernet FCS because hardware appends it
-		 */
-		min_tx_space = (adapter.max_frame_size +
-						sizeof(struct e1000_tx_desc) -
-						ETH_FCS_LEN) * 2;
-		min_tx_space = ALIGN(min_tx_space, 1024);
-		min_tx_space >>= 10;
-		/* software strips receive CRC, so leave room for it */
-		min_rx_space = adapter.max_frame_size;
-		min_rx_space = ALIGN(min_rx_space, 1024);
-		min_rx_space >>= 10;
-		
-		/*
-		 * If current Tx allocation is less than the min Tx FIFO size,
-		 * and the min Tx FIFO size is less than the current Rx FIFO
-		 * allocation, take space away from current Rx allocation
-		 */
-		if ((tx_space < min_tx_space) &&
-		    ((min_tx_space - tx_space) < pba)) {
-			pba -= min_tx_space - tx_space;
-			
-			/*
-			 * if short on Rx space, Rx wins and must trump tx
-			 * adjustment or use Early Receive if available
-			 */
-			if ((pba < min_rx_space) &&
-			    (!(adapter.flags & FLAG_HAS_ERT)))
-			/* ERT enabled in e1000_configure_rx */
-				pba = min_rx_space;
-		}
-		
-		ew32(PBA, pba);
-	}
-	
-	
-	/*
-	 * flow control settings
-	 *
-	 * The high water mark must be low enough to fit two full frames
-	 * (or the size used for early receive) above it in the Rx FIFO.
-	 * Set it to the lower of:
-	 * - 90% of the Rx FIFO size, and
-	 * - the full Rx FIFO size minus the early receive size (for parts
-	 *   with ERT support assuming ERT set to E1000_ERT_2048), or
-	 * - the full Rx FIFO size minus two full frames
-	 */
-	if (hw->mac.type == e1000_pchlan) {
-		/*
-		 * Workaround PCH LOM adapter hangs with certain network
-		 * loads.  If hangs persist, try disabling Tx flow control.
-		 */
-		if (mtu > ETH_DATA_LEN) {
-			fc->high_water = 0x3500;
-			fc->low_water  = 0x1500;
-		} else {
-			fc->high_water = 0x5000;
-			fc->low_water  = 0x3000;
-		}
-		fc->refresh_time = 0x1000;
-	} else {
-		if ((adapter.flags & FLAG_HAS_ERT) &&
-		    (mtu > ETH_DATA_LEN))
-			hwm = min(((pba << 10) * 9 / 10),
-					  ((pba << 10) - (E1000_ERT_2048 << 3)));
-		else
-			hwm = min(((pba << 10) * 9 / 10),
-					  ((pba << 10) - (2*adapter.max_frame_size)));
-		
-		fc->high_water = hwm & E1000_FCRTH_RTH; /* 8-byte granularity */
-		fc->low_water = (fc->high_water - (2*adapter.max_frame_size));
-		fc->low_water &= E1000_FCRTL_RTL; /* 8-byte granularity */
-	}
-	
-	if (adapter.flags & FLAG_DISABLE_FC_PAUSE_TIME)
-		fc->pause_time = 0xFFFF;
-	else
-		fc->pause_time = E1000_FC_PAUSE_TIME;
-	fc->send_xon = 1;
-	fc->current_mode = fc->requested_mode;
-	
-	/* Allow time for pending master requests to run */
-	mac->ops.reset_hw(hw);
-	
-	/*
-	 * For parts with AMT enabled, let the firmware know
-	 * that the network interface is in control
-	 */
-	if (adapter.flags & FLAG_HAS_AMT)
-		e1000_get_hw_control(&adapter);
-	
-	ew32(WUC, 0);
-	if (adapter.flags2 & FLAG2_HAS_PHY_WAKEUP)
-		e1e_wphy(&adapter.hw, BM_WUC, 0);
-	
-	if (mac->ops.init_hw(hw))
-		e_err("Hardware Error\n");
-	
-#ifdef NETIF_F_HW_VLAN_TX
-	e1000_update_mng_vlan(adapter);
-	
-	/* Enable h/w to recognize an 802.1Q VLAN Ethernet packet */
-	ew32(VET, ETH_P_8021Q);
-	
-#endif
-	e1000e_reset_adaptive(hw);
-	e1000_get_phy_info(hw);
-	
-	if ((adapter.flags & FLAG_HAS_SMART_POWER_DOWN) &&
-	    !(adapter.flags & FLAG_SMART_POWER_DOWN)) {
-		u16 phy_data = 0;
-		/*
-		 * speed up time to link by disabling smart power down, ignore
-		 * the return value of this function because there is nothing
-		 * different we would do if it failed
-		 */
-		e1e_rphy(hw, IGP02E1000_PHY_POWER_MGMT, &phy_data);
-		phy_data &= ~IGP02E1000_PM_SPD;
-		e1e_wphy(hw, IGP02E1000_PHY_POWER_MGMT, phy_data);
+	if (buffer_info->skb) {
+		freePacket(buffer_info->skb);
+		buffer_info->skb = NULL;
 	}
 }
 
@@ -2101,35 +2832,84 @@ void AppleIntelE1000e::e1000e_reset()
  **/
 void AppleIntelE1000e::e1000_clean_tx_ring()
 {
-	struct e1000_hw* hw = &adapter.hw;
+	struct e1000_adapter *adapter = &priv_adapter;	
+	struct e1000_ring *tx_ring = adapter->tx_ring;
+	struct e1000_buffer *buffer_info;
+	unsigned long size;
+	unsigned int i;
 	
-	bzero(tx_buffer_info, sizeof(tx_buffer_info));
-	
-	if (adapter.rx_ring->desc) {
-		clear_desc(adapter.tx_ring->desc, SIZE_RING_DESC);
+	for (i = 0; i < tx_ring->count; i++) {
+		buffer_info = &tx_ring->buffer_info[i];
+		e1000_put_txbuf(buffer_info);
 	}
 	
-	adapter.tx_ring->next_to_use = 0;
-	adapter.tx_ring->next_to_clean = 0;
+	size = sizeof(struct e1000_buffer) * tx_ring->count;
+	bzero(tx_ring->buffer_info, size);
 	
-	E1000_WRITE_REG(hw, adapter.tx_ring->head, 0);
-	E1000_WRITE_REG(hw, adapter.tx_ring->tail, 0);
-
-	//writel(0, adapter.hw.hw_addr + tx_ring->head);
-	//writel(0, adapter.hw.hw_addr + tx_ring->tail);
+	bzero(tx_ring->desc, tx_ring->size);
+	
+	tx_ring->next_to_use = 0;
+	tx_ring->next_to_clean = 0;
+	
+	writel(0, adapter->hw.hw_addr + tx_ring->head);
+	writel(0, adapter->hw.hw_addr + tx_ring->tail);
 }
 
 
 /**
- * e1000_free_tx_resources - Free Tx Resources per Queue
+ * e1000e_free_tx_resources - Free Tx Resources per Queue
  * @adapter: board private structure
  *
  * Free all transmit software resources
  **/
-void AppleIntelE1000e::e1000_free_tx_resources()
+void AppleIntelE1000e::e1000e_free_tx_resources()
 {
-	e1000_free_ring_resources(adapter.tx_ring);
+	e1000_adapter *adapter = &priv_adapter;
+	struct e1000_ring *tx_ring = adapter->tx_ring;
+	
+	e1000_clean_tx_ring();
+	
+	vm_size_t size = sizeof(struct e1000_buffer) * tx_ring->count;
+	IOFree(tx_ring->buffer_info,size);
+	tx_ring->buffer_info = NULL;
+	
+	tx_ring->pool->complete();
+	tx_ring->pool->release();
+
+	tx_ring->pool = NULL;
+	tx_ring->desc = NULL;
 }
+
+/**
+ * e1000e_free_rx_resources - Free Rx Resources
+ * @adapter: board private structure
+ *
+ * Free all receive software resources
+ **/
+
+void AppleIntelE1000e::e1000e_free_rx_resources()
+{
+	e1000_adapter *adapter = &priv_adapter;
+	struct e1000_ring *rx_ring = adapter->rx_ring;
+	int i;
+	
+	e1000_clean_rx_ring();
+	
+	for (i = 0; i < rx_ring->count; i++) {
+		IOFree(rx_ring->buffer_info->ps_pages, PS_PAGE_BUFFERS * sizeof(struct e1000_ps_page));
+	}
+
+	vm_size_t size = sizeof(struct e1000_buffer) * rx_ring->count;
+	IOFree(rx_ring->buffer_info, size);
+	rx_ring->buffer_info = NULL;
+
+	rx_ring->pool->complete();
+	rx_ring->pool->release();
+	rx_ring->pool = NULL;
+
+	rx_ring->desc = NULL;
+}
+
 
 
 /**
@@ -2138,55 +2918,83 @@ void AppleIntelE1000e::e1000_free_tx_resources()
  **/
 void AppleIntelE1000e::e1000_clean_rx_ring()
 {
-	struct e1000_hw* hw = &adapter.hw;
-	unsigned int i;
+	struct e1000_adapter *adapter = &priv_adapter;
+	struct e1000_ring *rx_ring = adapter->rx_ring;
+	struct e1000_buffer *buffer_info;
+	struct e1000_ps_page *ps_page;
+	unsigned int i, j;
 	
-	for (i = 0; i < adapter.rx_ring->count; i++) {
-		if (adapter.rx_ring->buffer_info[i].skb != NULL) {
-			freePacket(adapter.rx_ring->buffer_info[i].skb);
-			adapter.rx_ring->buffer_info[i].skb = NULL;
+	/* Free all the Rx ring sk_buffs */
+	for (i = 0; i < rx_ring->count; i++) {
+		buffer_info = &rx_ring->buffer_info[i];
+		if (buffer_info->dma) {
+			buffer_info->dma = 0;
+		}
+		
+		if (buffer_info->page) {
+			//put_page(buffer_info->page);
+			buffer_info->page = NULL;
+		}
+		
+		if (buffer_info->skb) {
+			freePacket(buffer_info->skb);
+			buffer_info->skb = NULL;
+		}
+		
+#if			USE_COPY_BUFFER
+		if (buffer_info->pool) {
+			buffer_info->pool->complete();
+			buffer_info->pool->release();
+			buffer_info->pool = NULL;
+		}
+#endif		
+		
+		for (j = 0; j < PS_PAGE_BUFFERS; j++) {
+			ps_page = &buffer_info->ps_pages[j];
+			if (!ps_page->page)
+				break;
+			ps_page->dma = 0;
+
+			ps_page->pool->complete();
+			ps_page->pool->release();
+			ps_page->pool = 0;
+			//put_page(ps_page->page);
+			ps_page->page = NULL;
 		}
 	}
 	
-	if (adapter.rx_ring->desc) {
-		clear_desc(adapter.rx_ring->desc, SIZE_RING_DESC);
+#ifdef CONFIG_E1000E_NAPI
+	/* there also may be some cached data from a chained receive */
+	if (rx_ring->rx_skb_top) {
+		dev_kfree_skb(rx_ring->rx_skb_top);
+		rx_ring->rx_skb_top = NULL;
 	}
+#endif
 	
-	adapter.rx_ring->next_to_use = 0;
-	adapter.rx_ring->next_to_clean = 0;
-	adapter.flags2 &= ~FLAG2_IS_DISCARDING;
+	/* Zero out the descriptor ring */
+	bzero(rx_ring->desc, rx_ring->size);
 	
-	E1000_WRITE_REG(hw, adapter.rx_ring->head, 0);
-	E1000_WRITE_REG(hw, adapter.rx_ring->tail, 0);
+	rx_ring->next_to_clean = 0;
+	rx_ring->next_to_use = 0;
+	adapter->flags2 &= ~FLAG2_IS_DISCARDING;
 	
-	//writel(0, adapter.hw.hw_addr + rx_ring->head);
-	//writel(0, adapter.hw.hw_addr + rx_ring->tail);
+	writel(0, adapter->hw.hw_addr + rx_ring->head);
+	writel(0, adapter->hw.hw_addr + rx_ring->tail);
 }
 
-
-/**
- * e1000_free_rx_resources - Free Rx Resources
- * @adapter: board private structure
- *
- * Free all receive software resources
- **/
-
-void AppleIntelE1000e::e1000_free_rx_resources()
-{
-	e1000_free_ring_resources(adapter.rx_ring);
-}
 
 void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 {
-	watchdogSource->setTimeoutMS(3000);
+	watchdogSource->setTimeoutMS(200);
 	
-	struct e1000_mac_info *mac = &adapter.hw.mac;
-	struct e1000_hw *hw = &adapter.hw;
+	e1000_adapter *adapter = &priv_adapter;
+	struct e1000_mac_info *mac = &adapter->hw.mac;
+	struct e1000_hw *hw = &adapter->hw;
 	UInt32 link, tctl;
 	
 	link = e1000e_has_link();
 	
-	//e_dbg("timeout link:%d, preLinkStatus:%d.\n", link, preLinkStatus);
+	//e_dbg("timeout link:%d, preLinkStatus:%d.\n", (int)link, (int)preLinkStatus);
 	if (link && link == preLinkStatus) {
 		//e1000e_enable_receives();
 		goto link_up;
@@ -2199,9 +3007,9 @@ void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 	
 #endif
 	if (link) {
-		mac->ops.get_link_up_info(&adapter.hw,
-								  &adapter.link_speed,
-								  &adapter.link_duplex);
+		mac->ops.get_link_up_info(hw,
+								  &adapter->link_speed,
+								  &adapter->link_duplex);
 		e1000_print_link_info();
 		/*
 		 * On supported PHYs, check for duplex mismatch only
@@ -2210,9 +3018,9 @@ void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 		if ((hw->phy.type == e1000_phy_igp_3 ||
 		     hw->phy.type == e1000_phy_bm) &&
 		    (hw->mac.autoneg == true) &&
-		    (adapter.link_speed == SPEED_10 ||
-		     adapter.link_speed == SPEED_100) &&
-		    (adapter.link_duplex == HALF_DUPLEX)) {
+		    (adapter->link_speed == SPEED_10 ||
+		     adapter->link_speed == SPEED_100) &&
+		    (adapter->link_duplex == HALF_DUPLEX)) {
 			UInt16 autoneg_exp;
 			
 			hw->phy.ops.read_reg(hw, PHY_AUTONEG_EXP,
@@ -2235,9 +3043,9 @@ void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 		e1000e_enable_receives();
 		E1000_READ_REG(hw, E1000_STATUS);
 		UInt32 speed = 1000 * MBit;
-		if(adapter.link_speed == SPEED_100)
+		if(adapter->link_speed == SPEED_100)
 			speed = 100 * MBit;
-		else if(adapter.link_speed == SPEED_10)
+		else if(adapter->link_speed == SPEED_10)
 			speed = 10 * MBit;
 		setLinkStatus(kIONetworkLinkValid | kIONetworkLinkActive, getCurrentMedium(), speed);
 		if (transmitQueue) {
@@ -2247,8 +3055,8 @@ void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 	} else {
 		
 		if (link != preLinkStatus) {
-			adapter.link_speed = 0;
-			adapter.link_duplex = 0;
+			adapter->link_speed = 0;
+			adapter->link_duplex = 0;
 			e_info("Link is Down\n");
 			
 			transmitQueue->stop();
@@ -2271,14 +3079,14 @@ link_up:
 	ew32(ICS, E1000_ICS_RXDMT0);
 #endif
 	/* Force detection of hung controller every watchdog period */
-	adapter.detect_tx_hung = 1;
+	adapter->detect_tx_hung = 1;
 	
 	/*
 	 * With 82571 controllers, LAA may be overwritten due to controller
 	 * reset from the other port. Set the appropriate LAA in RAR[0]
 	 */
 	if (e1000e_get_laa_state_82571(hw))
-		e1000e_rar_set(hw, adapter.hw.mac.addr, 0);
+		e1000e_rar_set(hw, adapter->hw.mac.addr, 0);
 	
 	preLinkStatus = link;
 }
@@ -2293,12 +3101,13 @@ void AppleIntelE1000e::timeoutHandler(OSObject * target, IOTimerEventSource * sr
 
 void AppleIntelE1000e::e1000_print_link_info()
 {
-	struct e1000_hw *hw = &adapter.hw;
+	e1000_adapter *adapter = &priv_adapter;
+	struct e1000_hw *hw = &adapter->hw;
 	UInt32 ctrl = E1000_READ_REG(hw, E1000_CTRL);
 	
 	e_info("Link is Up %d Mbps %s, Flow Control: %s\n",
-		   adapter.link_speed,
-		   (adapter.link_duplex == FULL_DUPLEX) ?
+		   adapter->link_speed,
+		   (adapter->link_duplex == FULL_DUPLEX) ?
 	       "Full Duplex" : "Half Duplex",
 		   ((ctrl & E1000_CTRL_TFCE) && (ctrl & E1000_CTRL_RFCE)) ?
 	       "RX/TX" :
@@ -2308,7 +3117,8 @@ void AppleIntelE1000e::e1000_print_link_info()
 
 void AppleIntelE1000e::e1000_set_multi()
 {
-	struct e1000_hw *hw = &adapter.hw;
+	e1000_adapter *adapter = &priv_adapter;
+	struct e1000_hw *hw = &adapter->hw;
 	u32 rctl;
 	
 	/* Check for Promiscuous and All Multicast modes */
@@ -2325,7 +3135,7 @@ void AppleIntelE1000e::e1000_set_multi()
 		} else {
 			rctl &= ~(E1000_RCTL_UPE | E1000_RCTL_MPE);
 		}
-		if (adapter.flags & FLAG_HAS_HW_VLAN_FILTER)
+		if (adapter->flags & FLAG_HAS_HW_VLAN_FILTER)
 			rctl |= E1000_RCTL_VFE;
 	}
 	
@@ -2338,62 +3148,60 @@ void AppleIntelE1000e::e1000_set_multi()
  **/
 void AppleIntelE1000e::e1000_configure()
 {
+	e1000_adapter *adapter = &priv_adapter;
+
 	setMulticastList(NULL,0);
 #ifdef NETIF_F_HW_VLAN_TX
-	e1000_restore_vlan(&adapter);
+	e1000_restore_vlan(adapter);
 #endif
 	e1000_init_manageability_pt();
 
 	e1000_configure_tx();
 	e1000_setup_rctl();
 	e1000_configure_rx();
-	e1000_alloc_rx_buffers();
+
+	this->alloc_rx_buf(e1000_desc_unused(adapter->rx_ring));
+}
+	
+/**
+ * e1000_receive_skb - helper function to handle Rx indications
+ * @adapter: board private structure
+ * @status: descriptor status field as written by hardware
+ * @vlan: descriptor vlan field as written by hardware (no le/be conversion)
+ * @skb: pointer to sk_buff to be indicated to stack
+ **/
+void AppleIntelE1000e::e1000_receive_skb(mbuf_t skb, u32 length, u8 status, __le16 vlan)
+{
+	//skb->protocol = eth_type_trans(skb, netdev);
+	
+#ifdef NETIF_F_HW_VLAN_TX
+	if (adapter->vlgrp && (status & E1000_RXD_STAT_VP))
+		ret = vlan_hwaccel_rx(skb, adapter->vlgrp, le16_to_cpu(vlan));
+	else
+#endif
+	netStats->inputPackets += netif->inputPacket(skb, length, IONetworkInterface::kInputOptionQueuePacket);
 }
 
-/**
- * e1000_irq_disable - Mask off interrupt generation on the NIC
- **/
-void AppleIntelE1000e::e1000_irq_disable()
+void AppleIntelE1000e::e1000_rx_checksum(mbuf_t skb, u32 status)
 {
-	struct e1000_hw *hw = &adapter.hw;
-
-	interruptEnabled = false;
-
-	ew32(IMC, ~0);
-#ifdef CONFIG_E1000E_MSIX
-	if (adapter.msix_entries)
-		ew32(EIAC_82574, 0);
-#endif /* CONFIG_E1000E_MSIX */
-	e1e_flush();
-	// synchronize_irq(adapter.pdev->irq);
-}
-
-/**
- * e1000_irq_enable - Enable default interrupt generation settings
- **/
-void AppleIntelE1000e::e1000_irq_enable()
-{
-	struct e1000_hw *hw = &adapter.hw;
-
-#ifdef CONFIG_E1000E_MSIX
-	if (adapter.msix_entries) {
-		ew32(EIAC_82574, adapter.eiac_mask & E1000_EIAC_MASK_82574);
-		ew32(IMS, adapter.eiac_mask | E1000_IMS_OTHER | E1000_IMS_LSC);
-	} else {
-		ew32(IMS, IMS_ENABLE_MASK);
+	UInt32 ckResult = 0;
+	if (status & E1000_RXD_STAT_IPCS) {
+		ckResult |= kChecksumIP;
 	}
-#else
-	ew32(IMS, IMS_ENABLE_MASK);
-#endif /* CONFIG_E1000E_MSIX */
-	e1e_flush();
-
-	interruptEnabled = true;
+	if (status & E1000_RXD_STAT_UDPCS) {
+		ckResult |= kChecksumUDP;
+	}
+	if (status & E1000_RXD_STAT_TCPCS) {
+		ckResult |= kChecksumTCP;
+	} 
+	setChecksumResult(skb, kChecksumFamilyTCPIP, kChecksumIP | kChecksumTCP | kChecksumUDP, ckResult);
 }
 
 
 bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 {
-	struct e1000_ring *tx_ring = adapter.tx_ring;
+	struct e1000_adapter *adapter = &priv_adapter;
+	struct e1000_ring *tx_ring = adapter->tx_ring;
 	struct e1000_context_desc *context_desc;
 	struct e1000_buffer *buffer_info;
 	unsigned int i;
@@ -2429,15 +3237,6 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 	context_desc->upper_setup.tcp_fields.tucse = 0;
 	context_desc->tcp_seg_setup.data = 0;
 	context_desc->cmd_and_length = cpu_to_le32(cmd_len);
-#if defined(MAC_OS_X_VERSION_10_6)
-	clock_sec_t seconds;
-	clock_usec_t microsecs;
-#else
-	uint32_t seconds;
-	uint32_t microsecs;
-#endif
-	clock_get_system_microtime(&seconds, &microsecs);
-	buffer_info->time_stamp =  seconds * 100 + microsecs / 10000; // 10 ms
 	buffer_info->next_to_watch = i;
 	
 	i++;
@@ -2482,8 +3281,9 @@ IOReturn AppleIntelE1000e::setPowerState( unsigned long powerStateOrdinal,
 }
 
 IOReturn AppleIntelE1000e::getMaxPacketSize (UInt32 *maxSize) const {
+	const e1000_adapter *adapter = &priv_adapter;
 	if (maxSize)
-		*maxSize = adapter.max_hw_frame_size - (ETH_HLEN + ETH_FCS_LEN);
+		*maxSize = adapter->max_hw_frame_size - (ETH_HLEN + ETH_FCS_LEN);
 	
 	return kIOReturnSuccess;
 }
@@ -2496,15 +3296,16 @@ IOReturn AppleIntelE1000e::getMinPacketSize (UInt32 *minSize) const {
 }
 
 /**
- * e1000_set_mtu - Change the Maximum Transfer Unit
+ * e1000_change_mtu - Change the Maximum Transfer Unit
  **/
 
-void AppleIntelE1000e::e1000_set_mtu(UInt32 maxSize){
-	UInt32 max_frame = maxSize + ETH_HLEN + ETH_FCS_LEN;
+void AppleIntelE1000e::e1000_change_mtu(UInt32 new_mtu){
+	UInt32 max_frame = new_mtu + ETH_HLEN + ETH_FCS_LEN;
+	e1000_adapter *adapter = &priv_adapter;
 
-	adapter.max_frame_size = max_frame;
-	e_info("changing MTU from %d to %d\n", (int)mtu, (int)maxSize);
-	mtu = maxSize;
+	adapter->max_frame_size = max_frame;
+	e_info("changing MTU from %d to %d\n", (int)priv_netdev.mtu, (int)new_mtu);
+	priv_netdev.mtu = new_mtu;
 	
 	/*
 	 * NOTE: netdev_alloc_skb reserves 16 bytes, and typically NET_IP_ALIGN
@@ -2516,21 +3317,19 @@ void AppleIntelE1000e::e1000_set_mtu(UInt32 maxSize){
 	 */
 	
 	if (max_frame <= 2048)
-		adapter.rx_buffer_len = 2048;
+		adapter->rx_buffer_len = 2048;
 	else if (max_frame <= 4096)
-		adapter.rx_buffer_len = 4096;
+		adapter->rx_buffer_len = 4096;
 	else if (max_frame <= 8192)
-		adapter.rx_buffer_len = 8192;
+		adapter->rx_buffer_len = 8192;
 	else if (max_frame <= 16384)
-		adapter.rx_buffer_len = 16384;
+		adapter->rx_buffer_len = 16384;
 	
 	/* adjust allocation if LPE protects us, and we aren't using SBP */
 	if ((max_frame == ETH_FRAME_LEN + ETH_FCS_LEN) ||
 		(max_frame == ETH_FRAME_LEN + VLAN_HLEN + ETH_FCS_LEN))
-		adapter.rx_buffer_len = ETH_FRAME_LEN + VLAN_HLEN
+		adapter->rx_buffer_len = ETH_FRAME_LEN + VLAN_HLEN
 		+ ETH_FCS_LEN;
-
-	adapter.min_frame_size = ETHER_MIN_LEN;
 
 	RELEASE(rxMbufCursor);
 	RELEASE(txMbufCursor);
@@ -2539,16 +3338,32 @@ void AppleIntelE1000e::e1000_set_mtu(UInt32 maxSize){
 }
 
 IOReturn AppleIntelE1000e::setMaxPacketSize (UInt32 maxSize){
-	if(maxSize == mtu)
+	if(maxSize == priv_netdev.mtu)
 		return kIOReturnSuccess;
 
 	//if (netif_running(netdev))
 	//	e1000e_down(adapter);
 	
-	e1000_set_mtu(maxSize);
+	e1000_change_mtu(maxSize);
 	
-	e1000e_reset();
+	e1000e_reset(&priv_adapter);
 	
 	return kIOReturnSuccess;
 }
+
+bool AppleIntelE1000e::clean_rx_irq()
+{
+	if(priv_adapter.rx_ps_pages)
+		return e1000_clean_rx_irq_ps();
+	return e1000_clean_rx_irq();
+	
+}
+
+void AppleIntelE1000e::alloc_rx_buf(int cleaned_count)
+{
+	if(priv_adapter.rx_ps_pages)
+		e1000_alloc_rx_buffers_ps(cleaned_count);
+	e1000_alloc_rx_buffers(cleaned_count);
+}
+
 

@@ -156,6 +156,9 @@ struct e1000_queue_stats {
 };
 
 struct e1000_ps_page {
+#ifdef	__APPLE__
+	IOBufferMemoryDescriptor* pool;
+#endif
 	struct page *page;
 	u64 dma; /* must be u64 - written to hw */
 };
@@ -186,10 +189,9 @@ struct e1000_buffer {
 
 struct e1000_ring {
 #ifdef	__APPLE__
-	IOBufferMemoryDescriptor* desc;
-#else
-	void *desc;			/* pointer to ring memory  */
+	IOBufferMemoryDescriptor* pool;
 #endif
+	void *desc;			/* pointer to ring memory  */
 	dma_addr_t dma;			/* phys address of ring    */
 	unsigned int size;		/* length of ring in bytes */
 	unsigned int count;		/* number of desc. in ring */
@@ -296,6 +298,7 @@ struct e1000_adapter {
 	/*
 	 * Rx
 	 */
+#ifndef	__APPLE__
 #ifdef CONFIG_E1000E_NAPI
 	bool (*clean_rx) (struct e1000_adapter *adapter,
 			  int *work_done, int work_to_do)
@@ -306,6 +309,7 @@ struct e1000_adapter {
 #endif
 	void (*alloc_rx_buf) (struct e1000_adapter *adapter,
 			      int cleaned_count);
+#endif
 	struct e1000_ring *rx_ring;
 
 	u32 rx_int_delay;
@@ -428,16 +432,13 @@ struct e1000_info {
 #define FLAG2_IS_DISCARDING               (1 << 2)
 #define FLAG2_DISABLE_ASPM_L1             (1 << 3)
 
-#ifdef	__APPLE__
 /**/
-#else
 #define E1000_RX_DESC_PS(R, i)	    \
 	(&(((union e1000_rx_desc_packet_split *)((R).desc))[i]))
 #define E1000_GET_DESC(R, i, type)	(&(((struct type *)((R).desc))[i]))
 #define E1000_RX_DESC(R, i)		E1000_GET_DESC(R, i, e1000_rx_desc)
 #define E1000_TX_DESC(R, i)		E1000_GET_DESC(R, i, e1000_tx_desc)
 #define E1000_CONTEXT_DESC(R, i)	E1000_GET_DESC(R, i, e1000_context_desc)
-#endif
 
 enum e1000_state_t {
 	__E1000_TESTING,
@@ -658,22 +659,6 @@ static inline s32 e1000_get_phy_info(struct e1000_hw *hw)
 extern bool e1000e_enable_tx_pkt_filtering(struct e1000_hw *hw);
 extern s32 e1000e_mng_write_dhcp_info(struct e1000_hw *hw, u8 *buffer, u16 length);
 
-#ifdef	__APPLE__
-static inline u32 __er32(struct e1000_hw* hw, u32 reg)
-{
-	u8* base = (u8*) hw->hw_addr;
-	base += reg;
-	return OSReadLittleInt32(base, 0);
-}
-
-static inline void __ew32(struct e1000_hw* hw, u32 reg, u32 value)
-{
-	u8* base = (u8*) hw->hw_addr;
-	base += reg;
-	OSWriteLittleInt32(base, 0, value);
-	OSSynchronizeIO();
-}
-#else
 static inline u32 __er32(struct e1000_hw *hw, unsigned long reg)
 {
 	return readl(hw->hw_addr + reg);
@@ -683,22 +668,11 @@ static inline void __ew32(struct e1000_hw *hw, unsigned long reg, u32 val)
 {
 	writel(val, hw->hw_addr + reg);
 }
-#endif
 
 #define er32(reg)	__er32(hw, E1000_##reg)
 #define ew32(reg, val)	__ew32(hw, E1000_##reg, (val))
 #define e1e_flush()	er32(STATUS)
 
-#ifdef	__APPLE__
-#define E1000_WRITE_REG(a, reg, value) (__ew32(a,reg,value))
-
-#define E1000_READ_REG(a, reg) (__er32(a,reg))
-
-#define E1000_WRITE_REG_ARRAY(a, reg, offset, value) (__ew32(a,(reg+((offset) << 2)),value))
-
-#define E1000_READ_REG_ARRAY(a, reg, offset) (__er32(a,(reg + ((offset) << 2))))
-
-#else
 #define E1000_WRITE_REG(a, reg, value) ( \
     writel((value), ((a)->hw_addr + reg)))
 
@@ -709,39 +683,7 @@ static inline void __ew32(struct e1000_hw *hw, unsigned long reg, u32 val)
 
 #define E1000_READ_REG_ARRAY(a, reg, offset) ( \
     readl((a)->hw_addr + reg + ((offset) << 2)))
-#endif
 
-#ifdef	__APPLE__
-static inline u16 __er16flash(struct e1000_hw *hw, unsigned long reg)
-{
-	u8* base = (u8*) hw->flash_address;
-	base += reg;
-	return OSReadLittleInt16(base, 0);
-}
-
-static inline u32 __er32flash(struct e1000_hw *hw, unsigned long reg)
-{
-	u8* base = (u8*) hw->flash_address;
-	base += reg;
-	return OSReadLittleInt32(base, 0);
-}
-
-static inline void __ew16flash(struct e1000_hw *hw, unsigned long reg, u16 val)
-{
-	u8* base = (u8*) hw->flash_address;
-	base += reg;
-	OSWriteLittleInt16(base, 0, val);
-	OSSynchronizeIO();
-}
-
-static inline void __ew32flash(struct e1000_hw *hw, unsigned long reg, u32 val)
-{
-	u8* base = (u8*) hw->flash_address;
-	base += reg;
-	OSWriteLittleInt32(base, 0, val);
-	OSSynchronizeIO();
-}
-#else
 static inline u16 __er16flash(struct e1000_hw *hw, unsigned long reg)
 {
 	return readw(hw->flash_address + reg);
@@ -761,7 +703,6 @@ static inline void __ew32flash(struct e1000_hw *hw, unsigned long reg, u32 val)
 {
 	writel(val, hw->flash_address + reg);
 }
-#endif
 
 #define er16flash(reg)		__er16flash(hw, (reg))
 #define er32flash(reg)		__er32flash(hw, (reg))
