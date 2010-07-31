@@ -135,6 +135,7 @@ struct work_struct {
 #define NET_IP_ALIGN	2
 
 #define	PCI_EXP_LNKCTL	16
+#define PCIE_LINK_STATE_L1 2
 
 #define	EIO		5
 #define	ENOMEM	12

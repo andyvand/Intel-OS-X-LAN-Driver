@@ -630,9 +630,10 @@ s32 e1000e_copper_link_setup_m88(struct e1000_hw *hw)
 	if (ret_val)
 		goto out;
 
+	phy_data |= M88E1000_PSCR_ASSERT_CRS_ON_TX;
 	/* For BM PHY this bit is downshift enable */
-	if (phy->type != e1000_phy_bm)
-		phy_data |= M88E1000_PSCR_ASSERT_CRS_ON_TX;
+	if (phy->type == e1000_phy_bm)
+		phy_data &= ~M88E1000_PSCR_ASSERT_CRS_ON_TX;
 
 	/*
 	 * Options:
@@ -2302,6 +2303,9 @@ enum e1000_phy_type e1000e_get_phy_type_from_id(u32 phy_id)
 		break;
 	case I82577_E_PHY_ID:
 		phy_type = e1000_phy_82577;
+		break;
+	case I82579_E_PHY_ID:
+		phy_type = e1000_phy_82579;
 		break;
 	default:
 		phy_type = e1000_phy_unknown;

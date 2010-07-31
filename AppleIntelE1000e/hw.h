@@ -85,6 +85,8 @@ struct e1000_hw;
 #define E1000_DEV_ID_PCH_M_HV_LC              0x10EB
 #define E1000_DEV_ID_PCH_D_HV_DM              0x10EF
 #define E1000_DEV_ID_PCH_D_HV_DC              0x10F0
+#define E1000_DEV_ID_PCH2_LV_LM               0x1502
+#define E1000_DEV_ID_PCH2_LV_V                0x1503
 #define E1000_REVISION_0 0
 #define E1000_REVISION_1 1
 #define E1000_REVISION_2 2
@@ -109,6 +111,7 @@ enum e1000_mac_type {
 	e1000_ich9lan,
 	e1000_ich10lan,
 	e1000_pchlan,
+	e1000_pch2lan,
 	e1000_num_macs  /* List is 1-based, so subtract 1 for true count. */
 };
 
@@ -146,6 +149,7 @@ enum e1000_phy_type {
 	e1000_phy_bm,
 	e1000_phy_82578,
 	e1000_phy_82577,
+	e1000_phy_82579,
 };
 
 enum e1000_bus_type {
@@ -219,6 +223,16 @@ enum e1000_serdes_link_state {
 	e1000_serdes_link_forced_up
 };
 
+#ifndef __le16
+#define __le16 u16
+#endif
+#ifndef __le32
+#define __le32 u32
+#endif
+#ifndef __le64
+#define __le64 u64
+
+#endif /* EXTERNAL_RELEASE */
 /* Receive Descriptor */
 struct e1000_rx_desc {
 	__le64 buffer_addr; /* Address of the descriptor's data buffer */
@@ -672,6 +686,7 @@ struct e1000_dev_spec_ich8lan {
 	bool kmrn_lock_loss_workaround_enabled;
 	struct e1000_shadow_ram shadow_ram[E1000_ICH8_SHADOW_RAM_WORDS];
 	bool nvm_k1_enabled;
+	bool eee_disable;
 };
 
 struct e1000_hw {

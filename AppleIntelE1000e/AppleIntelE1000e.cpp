@@ -76,22 +76,28 @@ static int e1000_desc_unused(struct e1000_ring *ring)
 }
 
 
-static void e1000e_disable_l1aspm(IOPCIDevice* pdev)
+static void e1000e_disable_aspm(IOPCIDevice *pci_dev, u16 state)
 {
 	int pos;
-	u16 val;
+	u16 reg16;
 	
 	/*
-	 * Workaround for 82571/82572 Errata 13 - Device Does Not Support
-	 * PCIe Active State Power Management L1 State (ASPM L1).
+	 * Both device and parent should have the same ASPM setting.
+	 * Disable ASPM in downstream component first and then upstream.
 	 */
-	pos = pdev->findPCICapability(kIOPCIPCIExpressCapability);
-	val = pdev->configRead16(pos + PCI_EXP_LNKCTL);
-	if (val & 0x2) {
-		IOLog("Disabling L1 ASPM\n");
-		val &= ~0x2;
-		pdev->configWrite16(pos + PCI_EXP_LNKCTL, val);
-	}
+	pos = pci_dev->findPCICapability(kIOPCIPCIExpressCapability);
+	reg16 = pci_dev->configRead16(pos + PCI_EXP_LNKCTL);
+	reg16 &= ~state;
+	pci_dev->configWrite16(pos + PCI_EXP_LNKCTL, reg16);
+#if	0
+	if (!pdev->bus->self)
+		return;
+	
+	pos = pci_pcie_cap(pdev->bus->self);
+	pci_read_config_word(pdev->bus->self, pos + PCI_EXP_LNKCTL, &reg16);
+	reg16 &= ~state;
+	pci_write_config_word(pdev->bus->self, pos + PCI_EXP_LNKCTL, reg16);
+#endif
 }
 
 /**
@@ -491,38 +497,48 @@ void e1000e_reset(struct e1000_adapter *adapter)
 	 *   with ERT support assuming ERT set to E1000_ERT_2048), or
 	 * - the full Rx FIFO size minus one full frame
 	 */
-	if (hw->mac.type == e1000_pchlan) {
-		/*
-		 * Workaround PCH LOM adapter hangs with certain network
-		 * loads.  If hangs persist, try disabling Tx flow control.
-		 */
-		if (adapter->netdev->mtu > ETH_DATA_LEN) {
-			fc->high_water = 0x3500;
-			fc->low_water  = 0x1500;
-		} else {
-			fc->high_water = 0x5000;
-			fc->low_water  = 0x3000;
-		}
-		fc->refresh_time = 0x1000;
-	} else {
-		if ((adapter->flags & FLAG_HAS_ERT) &&
-		    (adapter->netdev->mtu > ETH_DATA_LEN))
-			hwm = min(((pba << 10) * 9 / 10),
-					  ((pba << 10) - (E1000_ERT_2048 << 3)));
-		else
-			hwm = min(((pba << 10) * 9 / 10),
-					  ((pba << 10) - adapter->max_frame_size));
-		
-		fc->high_water = hwm & E1000_FCRTH_RTH; /* 8-byte granularity */
-		fc->low_water = fc->high_water - 8;
-	}
-	
 	if (adapter->flags & FLAG_DISABLE_FC_PAUSE_TIME)
 		fc->pause_time = 0xFFFF;
 	else
 		fc->pause_time = E1000_FC_PAUSE_TIME;
 	fc->send_xon = 1;
 	fc->current_mode = fc->requested_mode;
+
+	switch (hw->mac.type) {
+		default:
+			if ((adapter->flags & FLAG_HAS_ERT) &&
+				(adapter->netdev->mtu > ETH_DATA_LEN))
+				hwm = min(((pba << 10) * 9 / 10),
+						  ((pba << 10) - (E1000_ERT_2048 << 3)));
+			else
+				hwm = min(((pba << 10) * 9 / 10),
+						  ((pba << 10) - adapter->max_frame_size));
+			
+			fc->high_water = hwm & E1000_FCRTH_RTH; /* 8-byte granularity */
+			fc->low_water = fc->high_water - 8;
+			break;
+		case e1000_pchlan:
+			/*
+			 * Workaround PCH LOM adapter hangs with certain network
+			 * loads.  If hangs persist, try disabling Tx flow control.
+			 */
+			if (adapter->netdev->mtu > ETH_DATA_LEN) {
+				fc->high_water = 0x3500;
+				fc->low_water  = 0x1500;
+			} else {
+				fc->high_water = 0x5000;
+				fc->low_water  = 0x3000;
+			}
+			fc->refresh_time = 0x1000;
+			break;
+		case e1000_pch2lan:
+			/* TODO: validate with these values, adjust as needed */
+			fc->high_water = 0x05C20;
+			fc->low_water = 0x05048;
+			fc->pause_time = 0x0650;
+			fc->refresh_time = 0x0400;
+			break;
+	}
 	
 	/* Allow time for pending master requests to run */
 	mac->ops.reset_hw(hw);
@@ -721,7 +737,7 @@ static int e1000_tx_map(struct e1000_adapter *adapter, mbuf_t skb, unsigned int 
 	struct e1000_ring *tx_ring = adapter->tx_ring;
 	struct e1000_buffer *buffer_info;
 	unsigned int count = 0, i;
-	unsigned int f;
+	unsigned int f, bytecount, segs;
 
 	unsigned int nr_frags;
 	IOPhysicalSegment tx_segments[TBDS_PER_TCB];
@@ -730,9 +746,11 @@ static int e1000_tx_map(struct e1000_adapter *adapter, mbuf_t skb, unsigned int 
 	
 	i = tx_ring->next_to_use;
 	
+	bytecount = 0;
 	for(f = 0; f < nr_frags; f++) {
 		buffer_info = &tx_ring->buffer_info[i];
 		buffer_info->length = tx_segments[f].length;
+		bytecount += tx_segments[f].length;
 		/* set time_stamp *before* dma to help avoid a possible race */
 		// buffer_info->time_stamp = jiffies;
 		buffer_info->dma = tx_segments[f].location;
@@ -752,7 +770,17 @@ static int e1000_tx_map(struct e1000_adapter *adapter, mbuf_t skb, unsigned int 
 	else
 		i--;
 	
+#ifdef NETIF_F_TSO
+	segs = skb_shinfo(skb)->gso_segs ?: 1;
+#else
+	segs = 1;
+#endif
+	/* multiply data chunks by size of headers */
+	//bytecount = ((segs - 1) * mbuf_pkthdr_len(skb)) +mbuf_len(skb);
+
 	tx_ring->buffer_info[i].skb = skb;
+	tx_ring->buffer_info[i].segs = segs;
+	tx_ring->buffer_info[i].bytecount = bytecount;
 	tx_ring->buffer_info[first].next_to_watch = i;
 	
 	return count;
@@ -987,7 +1015,7 @@ bool AppleIntelE1000e::start(IOService* provider)
 			break;
 		}
 		if (ei->flags2 & FLAG2_DISABLE_ASPM_L1)
-			e1000e_disable_l1aspm(pciDevice);
+			e1000e_disable_aspm(pciDevice,PCIE_LINK_STATE_L1);
 		
 		adapter->ei = ei;
 		adapter->pba = ei->pba;
@@ -1380,8 +1408,9 @@ IOReturn AppleIntelE1000e::disable(IONetworkInterface * netif)
 	enabledForNetif = false;
 
 	e1000e_down();
-	e1000_power_down_phy(adapter);
 	//e1000_free_irq(adapter);
+
+	e1000_power_down_phy(adapter);
 	
 	e1000e_free_tx_resources();
 	e1000e_free_rx_resources();
@@ -1830,7 +1859,7 @@ void AppleIntelE1000e::e1000_init_manageability_pt()
 				mdef = er32(MDEF(i));
 				
 				/* Ignore filters with anything other than IPMI ports */
-				if (mdef & !(E1000_MDEF_PORT_623 | E1000_MDEF_PORT_664))
+				if (mdef & ~(E1000_MDEF_PORT_623 | E1000_MDEF_PORT_664))
 					continue;
 				
 				/* Enable this decision filter in MANC2H */
@@ -1986,19 +2015,12 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	
 	/* Workaround Si errata on 82577 PHY - configure IPG for jumbos */
 	if ((hw->phy.type == e1000_phy_82577) && (rctl & E1000_RCTL_LPE)) {
-		u16 phy_data;
+		s32 ret_val;
 		
-		e1e_rphy(hw, PHY_REG(770, 26), &phy_data);
-		phy_data &= 0xfff8;
-		phy_data |= (1 << 2);
-		e1e_wphy(hw, PHY_REG(770, 26), phy_data);
-		
-		e1e_rphy(hw, 22, &phy_data);
-		phy_data &= 0x0fff;
-		phy_data |= (1 << 14);
-		e1e_wphy(hw, 0x10, 0x2823);
-		e1e_wphy(hw, 0x11, 0x0003);
-		e1e_wphy(hw, 22, phy_data);
+		if (rctl & E1000_RCTL_LPE)
+			ret_val = e1000_lv_jumbo_workaround_ich8lan(hw, true);
+		else
+			ret_val = e1000_lv_jumbo_workaround_ich8lan(hw, false);
 	}
 	
 	/* Setup buffer sizes */
@@ -2037,7 +2059,7 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	 * per packet.
 	 */
 	pages = PAGE_USE_COUNT(adapter->netdev->mtu);
-	if (!(adapter->flags & FLAG_IS_ICH) && (pages <= 3) &&
+	if (!(adapter->flags & FLAG_HAS_ERT) && (pages <= 3) &&
 	    (PAGE_SIZE <= 16384) && (rctl & E1000_RCTL_LPE))
 		adapter->rx_ps_pages = pages;
 	else
@@ -2233,6 +2255,17 @@ void AppleIntelE1000e::e1000_alloc_rx_buffers(int cleaned_count)
 
 		rx_desc = E1000_RX_DESC(*rx_ring, i);
 		rx_desc->buffer_addr = cpu_to_le64(buffer_info->dma);
+
+		if (unlikely(!(i & (E1000_RX_BUFFER_WRITE - 1)))) {
+			/*
+			 * Force memory writes to complete before letting h/w
+			 * know there are new descriptors to fetch.  (Only
+			 * applicable for weak-ordered memory model archs,
+			 * such as IA-64).
+			 */
+			wmb();
+			writel(i, adapter->hw.hw_addr + rx_ring->tail);
+		}
 		
 		i++;
 		if (i == rx_ring->count)
@@ -2240,20 +2273,7 @@ void AppleIntelE1000e::e1000_alloc_rx_buffers(int cleaned_count)
 		buffer_info = &rx_ring->buffer_info[i];
 	}
 	
-	if (rx_ring->next_to_use != i) {
-		rx_ring->next_to_use = i;
-		if (i-- == 0)
-			i = (rx_ring->count - 1);
-		
-		/*
-		 * Force memory writes to complete before letting h/w
-		 * know there are new descriptors to fetch.  (Only
-		 * applicable for weak-ordered memory model archs,
-		 * such as IA-64).
-		 */
-		wmb();
-		writel(i, adapter->hw.hw_addr + rx_ring->tail);
-	}
+	rx_ring->next_to_use = i;
 	
 }
 
@@ -2335,6 +2355,17 @@ void AppleIntelE1000e::e1000_alloc_rx_buffers_ps( int cleaned_count )
 		}
 		
 		rx_desc->read.buffer_addr[0] = cpu_to_le64(buffer_info->dma);
+
+		if (unlikely(!(i & (E1000_RX_BUFFER_WRITE - 1)))) {
+			/*
+			 * Force memory writes to complete before letting h/w
+			 * know there are new descriptors to fetch.  (Only
+			 * applicable for weak-ordered memory model archs,
+			 * such as IA-64).
+			 */
+			wmb();
+			writel(i<<1, adapter->hw.hw_addr + rx_ring->tail);
+		}
 		
 		i++;
 		if (i == rx_ring->count)
@@ -2343,26 +2374,7 @@ void AppleIntelE1000e::e1000_alloc_rx_buffers_ps( int cleaned_count )
 	}
 	
 no_buffers:
-	if (rx_ring->next_to_use != i) {
-		rx_ring->next_to_use = i;
-		
-		if (!(i--))
-			i = (rx_ring->count - 1);
-		
-		/*
-		 * Force memory writes to complete before letting h/w
-		 * know there are new descriptors to fetch.  (Only
-		 * applicable for weak-ordered memory model archs,
-		 * such as IA-64).
-		 */
-		wmb();
-		/*
-		 * Hardware increments by 16 bytes, but packet split
-		 * descriptors are 32 bytes...so we increment tail
-		 * twice as much.
-		 */
-		writel(i<<1, adapter->hw.hw_addr + rx_ring->tail);
-	}
+	rx_ring->next_to_use = i;
 }
 
 
@@ -2701,19 +2713,9 @@ bool AppleIntelE1000e::e1000_clean_tx_irq()
 			cleaned = (i == eop);
 			
 			if (cleaned) {
-				mbuf_t skb = buffer_info->skb;
-#ifdef NETIF_F_TSO
-				unsigned int segs, bytecount;
-				segs = skb_shinfo(skb)->gso_segs ?: 1;
-				/* multiply data chunks by size of headers */
-				bytecount = ((segs - 1) * skb_headlen(skb)) +
-				skb->len;
-				total_tx_packets += segs;
-				total_tx_bytes += bytecount;
-#else
 				total_tx_packets++;
-				total_tx_bytes += mbuf_pkthdr_len(skb);
-#endif
+				total_tx_bytes += buffer_info->bytecount;
+
 				netStats->outputPackets++;
 			}
 				
@@ -2729,6 +2731,8 @@ bool AppleIntelE1000e::e1000_clean_tx_irq()
 				i = 0;
 		}
 		
+		if (i == tx_ring->next_to_use)
+			break;
 		eop = tx_ring->buffer_info[i].next_to_watch;
 		eop_desc = E1000_TX_DESC(*tx_ring, eop);
 	}
@@ -2989,6 +2993,7 @@ void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 	
 	e1000_adapter *adapter = &priv_adapter;
 	struct e1000_mac_info *mac = &adapter->hw.mac;
+	struct e1000_phy_info *phy = &adapter->hw.phy;
 	struct e1000_hw *hw = &adapter->hw;
 	UInt32 link, tctl;
 	
@@ -3037,9 +3042,17 @@ void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 		 * enable transmits in the hardware, need to do this
 		 * after setting TARC(0)
 		 */
-		tctl = E1000_READ_REG(hw, E1000_TCTL);
+		tctl = er32(TCTL);
 		tctl |= E1000_TCTL_EN;
-		E1000_WRITE_REG(hw, E1000_TCTL, tctl);
+		ew32(TCTL, tctl);
+
+		/*
+		 * Perform any post-link-up configuration before
+		 * reporting link up.
+		 */
+		if (phy->ops.cfg_on_link_up)
+			phy->ops.cfg_on_link_up(hw);
+
 		e1000e_enable_receives();
 		E1000_READ_REG(hw, E1000_STATUS);
 		UInt32 speed = 1000 * MBit;
@@ -3069,6 +3082,23 @@ link_up:
 	// e1000e_update_stats(adapter);
 	// e1000e_update_adaptive(&adapter->hw);
 
+	
+	/* Simple mode for Interrupt Throttle Rate (ITR) */
+	if (adapter->itr_setting == 4) {
+		/*
+		 * Symmetric Tx/Rx gets a reduced ITR=2000;
+		 * Total asymmetrical Tx or Rx gets ITR=8000;
+		 * everyone else is between 2000-8000.
+		 */
+		u32 goc = (adapter->gotc + adapter->gorc) / 10000;
+		u32 dif = (adapter->gotc > adapter->gorc ?
+				   adapter->gotc - adapter->gorc :
+				   adapter->gorc - adapter->gotc) / 10000;
+		u32 itr = goc > 0 ? (dif * 6000 / goc + 2000) : 8000;
+		
+		ew32(ITR, 1000000000 / (itr * 256));
+	}
+	
 	/* Cause software interrupt to ensure Rx ring is cleaned */
 #ifdef CONFIG_E1000E_MSIX
 	if (adapter->msix_entries)

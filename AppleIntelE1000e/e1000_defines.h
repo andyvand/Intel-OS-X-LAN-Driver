@@ -43,6 +43,8 @@
 #define E1000_WUC_LSCWO      0x00000020 /* Link Status wake up override */
 #define E1000_WUC_SPM        0x80000000 /* Enable SPM */
 #define E1000_WUC_PHY_WAKE   0x00000100 /* if PHY supports wakeup */
+#define E1000_WUC_FLX6_PHY  0x4000 /* Flexible Filter 6 Enable */
+#define E1000_WUC_FLX7_PHY  0x8000 /* Flexible Filter 7 Enable */
 
 /* Wake Up Filter Control */
 #define E1000_WUFC_LNKC 0x00000001 /* Link Status Change Wakeup Enable */
@@ -67,6 +69,8 @@
 #define E1000_WUFC_FLX3 0x00080000 /* Flexible Filter 3 Enable */
 #define E1000_WUFC_FLX4 0x00100000 /* Flexible Filter 4 Enable */
 #define E1000_WUFC_FLX5 0x00200000 /* Flexible Filter 5 Enable */
+#define E1000_WUFC_FLX6  0x00400000 /* Flexible Filter 6 Enable */
+#define E1000_WUFC_FLX7  0x00800000 /* Flexible Filter 7 Enable */
 #define E1000_WUFC_ALL_FILTERS_PHY_4 0x0000F0FF /*Mask for all wakeup filters*/
 #define E1000_WUFC_FLX_OFFSET_PHY 12 /* Offset to the Flexible Filters bits */
 #define E1000_WUFC_FLX_FILTERS_PHY_4 0x0000F000 /*Mask for 4 flexible filters*/
@@ -74,9 +78,11 @@
 #define E1000_WUFC_FLX_FILTERS_PHY_6 0x0000F600 /*Mask for 6 flexible filters*/
 #define E1000_WUFC_ALL_FILTERS  0x000F00FF /* Mask for all wakeup filters */
 #define E1000_WUFC_ALL_FILTERS_6  0x003F00FF /* Mask for all 6 wakeup filters*/
+#define E1000_WUFC_ALL_FILTERS_8  0x00FF00FF /* Mask for all 8 wakeup filters*/
 #define E1000_WUFC_FLX_OFFSET   16 /* Offset to the Flexible Filters bits */
 #define E1000_WUFC_FLX_FILTERS  0x000F0000 /*Mask for the 4 flexible filters */
 #define E1000_WUFC_FLX_FILTERS_6  0x003F0000 /* Mask for 6 flexible filters */
+#define E1000_WUFC_FLX_FILTERS_8  0x00FF0000 /* Mask for 8 flexible filters */
 
 /* Wake Up Status */
 #define E1000_WUS_LNKC         E1000_WUFC_LNKC
@@ -98,10 +104,15 @@
 #define E1000_WUS_FLX3         E1000_WUFC_FLX3
 #define E1000_WUS_FLX4         E1000_WUFC_FLX4
 #define E1000_WUS_FLX5         E1000_WUFC_FLX5
+#define E1000_WUS_FLX6         E1000_WUFC_FLX6
+#define E1000_WUS_FLX7         E1000_WUFC_FLX7
 #define E1000_WUS_FLX4_PHY         E1000_WUFC_FLX4_PHY
 #define E1000_WUS_FLX5_PHY         E1000_WUFC_FLX5_PHY
+#define E1000_WUS_FLX6_PHY         0x0400
+#define E1000_WUS_FLX7_PHY         0x0800
 #define E1000_WUS_FLX_FILTERS  E1000_WUFC_FLX_FILTERS
 #define E1000_WUS_FLX_FILTERS_6  E1000_WUFC_FLX_FILTERS_6
+#define E1000_WUS_FLX_FILTERS_8  E1000_WUFC_FLX_FILTERS_8
 #define E1000_WUS_FLX_FILTERS_PHY_6  E1000_WUFC_FLX_FILTERS_PHY_6
 
 /* Wake Up Packet Length */
@@ -111,12 +122,15 @@
 #define E1000_FLEXIBLE_FILTER_COUNT_MAX 4
 /* Six Flexible Filters are supported */
 #define E1000_FLEXIBLE_FILTER_COUNT_MAX_6   6
+/* Eight Flexible Filters are supported */
+#define E1000_FLEXIBLE_FILTER_COUNT_MAX_8   8
 
 /* Each Flexible Filter is at most 128 (0x80) bytes in length */
 #define E1000_FLEXIBLE_FILTER_SIZE_MAX  128
 
 #define E1000_FFLT_SIZE E1000_FLEXIBLE_FILTER_COUNT_MAX
 #define E1000_FFLT_SIZE_6 E1000_FLEXIBLE_FILTER_COUNT_MAX_6
+#define E1000_FFLT_SIZE_8 E1000_FLEXIBLE_FILTER_COUNT_MAX_8
 #define E1000_FFMT_SIZE E1000_FLEXIBLE_FILTER_SIZE_MAX
 #define E1000_FFVT_SIZE E1000_FLEXIBLE_FILTER_SIZE_MAX
 
@@ -680,6 +694,7 @@
 #define E1000_EXTCNF_CTRL_LCD_WRITE_ENABLE       0x00000001
 #define E1000_EXTCNF_CTRL_OEM_WRITE_ENABLE       0x00000008
 #define E1000_EXTCNF_CTRL_SWFLAG                 0x00000020
+#define E1000_EXTCNF_CTRL_GATE_PHY_CFG           0x00000080
 #define E1000_EXTCNF_SIZE_EXT_PCIE_LENGTH_MASK   0x00FF0000
 #define E1000_EXTCNF_SIZE_EXT_PCIE_LENGTH_SHIFT          16
 #define E1000_EXTCNF_CTRL_EXT_CNF_POINTER_MASK   0x0FFF0000
@@ -1269,6 +1284,7 @@
 #define BME1000_E_PHY_ID_R2  0x01410CB1
 #define I82577_E_PHY_ID 0x01540050
 #define I82578_E_PHY_ID 0x004DD040
+#define I82579_E_PHY_ID    0x01540090
 #define M88_VENDOR           0x0141
 
 /* M88E1000 Specific Registers */
@@ -1467,11 +1483,13 @@
 #define E1000_MDIC_READY     0x10000000
 #define E1000_MDIC_INT_EN    0x20000000
 #define E1000_MDIC_ERROR     0x40000000
+#define E1000_MDIC_DEST      0x80000000
 
 /* SerDes Control */
 #define E1000_GEN_CTL_READY             0x80000000
 #define E1000_GEN_CTL_ADDRESS_SHIFT     8
 #define E1000_GEN_POLL_TIMEOUT          640
+
 
 
 
