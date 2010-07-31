@@ -54,8 +54,12 @@
 
 struct e1000_info;
 #ifdef	__APPLE__
+#ifdef	DEBUG
 #define netdev_dbg(netdev, format, arg...) \
-	IOLog("AppleIntelE1000e(Debug): " format, ## arg)
+IOLog("AppleIntelE1000e(Debug): " format, ## arg)
+#else
+#define netdev_dbg(netdev, format, arg...)
+#endif
 #define netdev_err(netdev, format, arg...) \
 	IOLog("AppleIntelE1000e(Err): " format, ## arg)
 #define netdev_info(netdev, format, arg...) \
