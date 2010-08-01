@@ -171,6 +171,15 @@ E1000_PARAM(KumeranLockLoss, "Enable Kumeran lock loss workaround");
 E1000_PARAM(CrcStripping, "Enable CRC Stripping, disable if your BMC needs " \
                           "the CRC");
 
+/*
+ * Enable/disable EEE (a.k.a. IEEE802.3az)
+ *
+ * Valid Range: 0, 1
+ *
+ * Default Value: 1
+ */
+E1000_PARAM(EEE, "Enable/disable on parts that support the feature");
+
 struct e1000_option {
 	enum { enable_option, range_option, list_option } type;
 	const char *name;
@@ -361,6 +370,11 @@ void __devinit e1000e_check_options(struct e1000_adapter *adapter)
 				adapter->itr_setting = adapter->itr;
 				adapter->itr = 20000;
 				break;
+			case 4:
+				e_info("%s set to simplified (2000-8000 ints) "
+				       "mode\n", opt.name);
+				adapter->itr_setting = 4;
+				break;
 			default:
 				/*
 				 * Save the setting, because the dynamic bits
@@ -461,6 +475,25 @@ void __devinit e1000e_check_options(struct e1000_adapter *adapter)
 			if (hw->mac.type == e1000_ich8lan)
 				e1000e_set_kmrn_lock_loss_workaround_ich8lan(hw,
 								       opt.def);
+		}
+	}
+	{ /* EEE for parts supporting the feature */
+		static const struct e1000_option opt = {
+			.type = enable_option,
+			.name = "EEE Support",
+			.err  = "defaulting to Enabled",
+			.def  = OPTION_ENABLED
+		};
+
+		if (adapter->flags2 & FLAG2_HAS_EEE) {
+			/* Currently only supported on 82579 */
+			if (num_EEE > bd) {
+				unsigned int eee = EEE[bd];
+				e1000_validate_option(&eee, &opt, adapter);
+				hw->dev_spec.ich8lan.eee_disable = !eee;
+			} else {
+				hw->dev_spec.ich8lan.eee_disable = !opt.def;
+			}
 		}
 	}
 }

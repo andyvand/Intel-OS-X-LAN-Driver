@@ -1277,6 +1277,42 @@ static s32 e1000_led_on_82574(struct e1000_hw *hw)
 	return E1000_SUCCESS;
 }
 
+/**
+ *  e1000_check_phy_82574 - check 82574 phy hung state
+ *  @hw: pointer to the HW structure
+ *
+ *  Returns whether phy is hung or not
+ **/
+bool e1000_check_phy_82574(struct e1000_hw *hw)
+{
+	u16 status_1kbt = 0;
+	u16 receive_errors = 0;
+	bool phy_hung = false;
+	s32 ret_val = E1000_SUCCESS;
+
+	/*
+	 * Read PHY Receive Error counter first, if its is max - all F's then
+	 * read the Base1000T status register If both are max then PHY is hung.
+	 */
+	ret_val = e1e_rphy(hw, E1000_RECEIVE_ERROR_COUNTER,
+	                               &receive_errors);
+	if (ret_val)
+		goto out;
+	/* CMW: test output of phy read */
+	//printk("CMW:check_phy:receive_errors=%x\n", receive_errors);
+	if (receive_errors == E1000_RECEIVE_ERROR_MAX)  {
+		ret_val = e1e_rphy(hw, E1000_BASE1000T_STATUS,
+		                               &status_1kbt);
+		if (ret_val)
+			goto out;
+		if ((status_1kbt & E1000_IDLE_ERROR_COUNT_MASK) ==
+		    E1000_IDLE_ERROR_COUNT_MASK)
+			phy_hung = true;
+	}
+out:
+	return phy_hung;
+}
+
 
 /**
  *  e1000_setup_link_82571 - Setup flow control and link settings

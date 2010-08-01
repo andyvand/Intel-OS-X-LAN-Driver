@@ -265,6 +265,7 @@ struct e1000_adapter {
 	u32 txd_cmd;
 
 	bool detect_tx_hung;
+	int phy_hang_count;
 	u8 tx_timeout_factor;
 
 	u32 tx_int_delay;
@@ -425,6 +426,7 @@ struct e1000_info {
 #define FLAG2_DISABLE_ASPM_L1             (1 << 3)
 #define FLAG2_HAS_PHY_STATS               (1 << 4)
 #define FLAG2_HAS_EEE                     (1 << 5)
+#define FLAG2_CHECK_PHY_HANG              (1 << 6)
 
 #define E1000_RX_DESC_PS(R, i)	    \
 	(&(((union e1000_rx_desc_packet_split *)((R).desc))[i]))
@@ -562,6 +564,7 @@ extern s32 e1000e_phy_reset_dsp(struct e1000_hw *hw);
 extern s32 e1000e_read_phy_reg_mdic(struct e1000_hw *hw, u32 offset, u16 *data);
 extern s32 e1000e_write_phy_reg_mdic(struct e1000_hw *hw, u32 offset, u16 data);
 extern s32 e1000e_check_downshift(struct e1000_hw *hw);
+extern bool e1000_check_phy_82574(struct e1000_hw *hw);
 
 static inline s32 e1000_phy_hw_reset(struct e1000_hw *hw)
 {

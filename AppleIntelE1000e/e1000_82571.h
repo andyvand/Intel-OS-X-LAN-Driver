@@ -47,6 +47,11 @@
 
 #define E1000_RXCFGL    0x0B634 /* TimeSync Rx EtherType & Msg Type Reg - RW */
 
+#define E1000_BASE1000T_STATUS 10
+#define E1000_IDLE_ERROR_COUNT_MASK 0xFF
+#define E1000_RECEIVE_ERROR_COUNTER 21
+#define E1000_RECEIVE_ERROR_MAX 0xFFFF
+bool e1000_check_phy_82574(struct e1000_hw *hw);
 bool e1000e_get_laa_state_82571(struct e1000_hw *hw);
 void e1000e_set_laa_state_82571(struct e1000_hw *hw, bool state);
 

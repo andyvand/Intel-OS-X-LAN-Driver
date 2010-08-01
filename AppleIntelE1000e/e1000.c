@@ -210,7 +210,8 @@ static struct e1000_info e1000_82574_info = {
 	| FLAG_RX_CSUM_ENABLED
 	| FLAG_HAS_SMART_POWER_DOWN
 	| FLAG_HAS_AMT
-	| FLAG_HAS_CTRLEXT_ON_LOAD,
+	| FLAG_HAS_CTRLEXT_ON_LOAD
+	| FLAG2_CHECK_PHY_HANG, /*errata */
 	.pba			= 32,
 	.max_hw_frame_size	= DEFAULT_JUMBO,
 	.init_ops		= e1000_init_function_pointers_82571,

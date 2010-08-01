@@ -59,7 +59,7 @@
 #define DRV_EXTRAVERSION 
 #endif
 
-#define DRV_VERSION "1.2.8" DRV_EXTRAVERSION
+#define DRV_VERSION "1.2.10" DRV_EXTRAVERSION
 char e1000e_driver_name[] = "e1000e";
 const char e1000e_driver_version[] = DRV_VERSION;
 
@@ -187,7 +187,8 @@ static struct e1000_info e1000_82574_info = {
 				  | FLAG_RX_CSUM_ENABLED
 				  | FLAG_HAS_SMART_POWER_DOWN
 				  | FLAG_HAS_AMT
-				  | FLAG_HAS_CTRLEXT_ON_LOAD,
+				  | FLAG_HAS_CTRLEXT_ON_LOAD
+				  | FLAG2_CHECK_PHY_HANG, /*errata */
 	.pba			= 32,
 	.max_hw_frame_size	= DEFAULT_JUMBO,
 	.init_ops		= e1000_init_function_pointers_82571,
@@ -493,10 +494,10 @@ static void e1000e_dump(struct e1000_adapter *adapter)
 	buffer_info = &tx_ring->buffer_info[tx_ring->next_to_clean];
 	printk(KERN_INFO " %5d %5X %5X %016llX %04X %3X %016llX\n",
 		0, tx_ring->next_to_use, tx_ring->next_to_clean,
-		(u64)buffer_info->dma,
+		(unsigned long long)buffer_info->dma,
 		buffer_info->length,
 		buffer_info->next_to_watch,
-		(u64)buffer_info->time_stamp);
+		(unsigned long long)buffer_info->time_stamp);
 
 	/* Print TX Rings */
 	if (!netif_msg_tx_done(adapter))
@@ -548,9 +549,11 @@ static void e1000e_dump(struct e1000_adapter *adapter)
 			"%04X  %3X %016llX %p",
 		       (!(le64_to_cpu(u0->b) & (1<<29)) ? 'l' :
 			((le64_to_cpu(u0->b) & (1<<20)) ? 'd' : 'c')), i,
-		       le64_to_cpu(u0->a), le64_to_cpu(u0->b),
-		       (u64)buffer_info->dma, buffer_info->length,
-		       buffer_info->next_to_watch, (u64)buffer_info->time_stamp,
+		       (unsigned long long)le64_to_cpu(u0->a),
+		       (unsigned long long)le64_to_cpu(u0->b),
+		       (unsigned long long)buffer_info->dma,
+		       buffer_info->length, buffer_info->next_to_watch,
+		       (unsigned long long)buffer_info->time_stamp,
 		       buffer_info->skb);
 		if (i == tx_ring->next_to_use && i == tx_ring->next_to_clean)
 			printk(KERN_CONT " NTC/U\n");
@@ -625,19 +628,19 @@ rx_ring_summary:
 				printk(KERN_INFO "RWB[0x%03X]     %016llX "
 					"%016llX %016llX %016llX "
 					"---------------- %p", i,
-					le64_to_cpu(u1->a),
-					le64_to_cpu(u1->b),
-					le64_to_cpu(u1->c),
-					le64_to_cpu(u1->d),
+					(unsigned long long)le64_to_cpu(u1->a),
+					(unsigned long long)le64_to_cpu(u1->b),
+					(unsigned long long)le64_to_cpu(u1->c),
+					(unsigned long long)le64_to_cpu(u1->d),
 					buffer_info->skb);
 			} else {
 				printk(KERN_INFO "R  [0x%03X]     %016llX "
 					"%016llX %016llX %016llX %016llX %p", i,
-					le64_to_cpu(u1->a),
-					le64_to_cpu(u1->b),
-					le64_to_cpu(u1->c),
-					le64_to_cpu(u1->d),
-					(u64)buffer_info->dma,
+					(unsigned long long)le64_to_cpu(u1->a),
+					(unsigned long long)le64_to_cpu(u1->b),
+					(unsigned long long)le64_to_cpu(u1->c),
+					(unsigned long long)le64_to_cpu(u1->d),
+					(unsigned long long)buffer_info->dma,
 					buffer_info->skb);
 
 				if (netif_msg_pktdata(adapter))
@@ -674,9 +677,11 @@ rx_ring_summary:
 			buffer_info = &rx_ring->buffer_info[i];
 			u0 = (struct my_u0 *)rx_desc;
 			printk(KERN_INFO "Rl[0x%03X]    %016llX %016llX "
-				"%016llX %p",
-				i, le64_to_cpu(u0->a), le64_to_cpu(u0->b),
-				(u64)buffer_info->dma, buffer_info->skb);
+				"%016llX %p", i,
+				(unsigned long long)le64_to_cpu(u0->a),
+				(unsigned long long)le64_to_cpu(u0->b),
+				(unsigned long long)buffer_info->dma,
+				buffer_info->skb);
 			if (i == rx_ring->next_to_use)
 				printk(KERN_CONT " NTU\n");
 			else if (i == rx_ring->next_to_clean)
@@ -4660,6 +4665,26 @@ static void e1000e_enable_receives(struct e1000_adapter *adapter)
 	}
 }
 
+static void e1000e_check_82574_phy_workaround(struct e1000_adapter *adapter)
+{
+	struct e1000_hw *hw = &adapter->hw;
+
+	/*
+	 * With 82574 controllers, PHY needs to be checked periodically
+	 * for hung state and reset, if two calls return true
+	 */
+
+	if (e1000_check_phy_82574(hw)) 
+		adapter->phy_hang_count++;
+	else
+		adapter->phy_hang_count = 0;
+
+	if (adapter->phy_hang_count > 1) {
+		adapter->phy_hang_count = 0;
+		schedule_work(&adapter->reset_task);
+	}
+}
+
 /**
  * e1000_watchdog - Timer Call-back
  * @data: pointer to adapter cast into an unsigned long
@@ -4898,6 +4923,9 @@ link_up:
 	 */
 	if (e1000e_get_laa_state_82571(hw))
 		e1000e_rar_set(hw, adapter->hw.mac.addr, 0);
+
+	if (adapter->flags2 & FLAG2_CHECK_PHY_HANG)
+		e1000e_check_82574_phy_workaround(adapter);
 
 	/* Reset the timer */
 	if (!test_bit(__E1000_DOWN, &adapter->state))
@@ -6036,6 +6064,7 @@ static int e1000_resume(struct pci_dev *pdev)
 #endif /* CONFIG_PM_SLEEP */
 
 #ifdef CONFIG_PM_RUNTIME
+#ifdef HAVE_SYSTEM_SLEEP_PM_OPS
 static int e1000_runtime_suspend(struct device *dev)
 {
 	struct pci_dev *pdev = to_pci_dev(dev);
@@ -6081,6 +6110,7 @@ static int e1000_runtime_resume(struct device *dev)
 	adapter->idle_check = !dev->power.runtime_auto;
 	return __e1000_resume(pdev);
 }
+#endif /* HAVE_SYSTEM_SLEEP_PM_OPS */
 #endif /* CONFIG_PM_RUNTIME */
 #endif /* CONFIG_PM_OPS */
 

@@ -850,6 +850,26 @@ static void e1000_tx_queue(struct e1000_adapter *adapter,
 	mmiowb();
 }
 
+static void e1000e_check_82574_phy_workaround(struct e1000_adapter *adapter)
+{
+	struct e1000_hw *hw = &adapter->hw;
+	
+	/*
+	 * With 82574 controllers, PHY needs to be checked periodically
+	 * for hung state and reset, if two calls return true
+	 */
+	
+	if (e1000_check_phy_82574(hw)) 
+		adapter->phy_hang_count++;
+	else
+		adapter->phy_hang_count = 0;
+	
+	if (adapter->phy_hang_count > 1) {
+		adapter->phy_hang_count = 0;
+		//schedule_work(&adapter->reset_task);
+	}
+}
+
 
 /////////////////
 
@@ -3118,6 +3138,9 @@ link_up:
 	if (e1000e_get_laa_state_82571(hw))
 		e1000e_rar_set(hw, adapter->hw.mac.addr, 0);
 	
+	if (adapter->flags2 & FLAG2_CHECK_PHY_HANG)
+		e1000e_check_82574_phy_workaround(adapter);
+
 	preLinkStatus = link;
 }
 
