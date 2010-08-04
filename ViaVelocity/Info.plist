@@ -19,9 +19,9 @@
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>1.0.0</string>
+	<string>1.30.0</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.0b</string>
+	<string>1.30.0</string>
 	<key>IOKitPersonalities</key>
 	<dict>
 		<key>ViaVelocity</key>
