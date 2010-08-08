@@ -149,9 +149,13 @@ private:
 	bool e1000_clean_tx_irq();
 	bool e1000_clean_rx_irq();
 	bool e1000_clean_rx_irq_ps();
+	bool e1000_clean_jumbo_rx_irq();
+
 	void e1000_put_txbuf(e1000_buffer *buffer_info);
 	void e1000_alloc_rx_buffers(int cleaned_count);
 	void e1000_alloc_rx_buffers_ps(int cleaned_count);
+	void e1000_alloc_jumbo_rx_buffers(int cleaned_count);
+	
 	void e1000_configure_rx();
 	void e1000_setup_rctl();
 	void e1000_init_manageability_pt();
@@ -161,6 +165,7 @@ private:
 	void e1000_rx_checksum(mbuf_t skb, u32 status);
 	void e1000_receive_skb(mbuf_t skb, u32 length, u8 status, __le16 vlan);
 	void e1000_configure();
+	void e1000e_up();
 	void e1000e_down();
 	void e1000_change_mtu(UInt32 maxSize);
 

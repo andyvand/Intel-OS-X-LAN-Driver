@@ -128,11 +128,6 @@ static s32 e1000_get_variants_82571(struct e1000_adapter *adapter)
 #if	0
 			/* Disable ASPM L0s due to hardware errata */
 			e1000e_disable_aspm(adapter->pdev, PCIE_LINK_STATE_L0S);
-			
-			if (pdev->device == E1000_DEV_ID_82573L) {
-				adapter->flags |= FLAG_HAS_JUMBO_FRAMES;
-				adapter->max_hw_frame_size = DEFAULT_JUMBO;
-			}
 #endif
 
 			if (pdev->device == E1000_DEV_ID_82573L) {

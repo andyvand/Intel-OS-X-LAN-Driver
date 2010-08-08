@@ -21,7 +21,7 @@
 	<key>CFBundleVersion</key>
 	<string>1.2.10</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.2.10</string>
+	<string>1.2.10-1</string>
 	<key>IOKitPersonalities</key>
 	<dict>
 		<key>Intel 82571</key>
