@@ -931,6 +931,7 @@ static int e1000_validate_option(unsigned int *value,
 	return -1;
 }
 
+
 /**
  * e1000e_check_options - Range Checking for Command Line Parameters
  * @adapter: board private structure

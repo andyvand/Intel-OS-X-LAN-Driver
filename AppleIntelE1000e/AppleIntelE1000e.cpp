@@ -907,7 +907,7 @@ bool AppleIntelE1000e::init(OSDictionary *properties)
 	
 	if (super::init(properties) == false) 
 		return false;
-	
+		
 	enabledForNetif = false;
 	
 	pciDevice = NULL;
@@ -930,7 +930,6 @@ bool AppleIntelE1000e::init(OSDictionary *properties)
 	adapter->pdev = &priv_pdev;
 	adapter->netdev = &priv_netdev;
 	
-	suspend = false;
 	return true;
 }
 
@@ -1716,8 +1715,7 @@ IOReturn AppleIntelE1000e::getChecksumSupport(UInt32 *checksumMask, UInt32 check
 		if( !isOutput ) {
 			*checksumMask = kChecksumIP | kChecksumTCP | kChecksumUDP;
 		} else {
-			//*checksumMask = kChecksumIP | kChecksumTCP | kChecksumUDP;
-			*checksumMask = 0;
+			*checksumMask = kChecksumTCP | kChecksumUDP;
 		}
 		return kIOReturnSuccess;
 	}
@@ -3376,38 +3374,82 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 	struct e1000_context_desc *context_desc;
 	struct e1000_buffer *buffer_info;
 	unsigned int i;
-	u8 css, cso;
-	u32 cmd_len = E1000_TXD_CMD_DEXT;
-	//__be16 protocol;
 
+	struct ip *ip = NULL;
+	u32 ip_hlen, hdr_len;
+	int ehdrlen;
+	u32 cmd = 0;
+	
 	UInt32 checksumDemanded;
 	getChecksumDemand(skb, kChecksumFamilyTCPIP, &checksumDemanded);
 	if((checksumDemanded & (kChecksumIP|kChecksumTCP|kChecksumUDP)) == 0)
 		return false;
 
-	if(	checksumDemanded & kChecksumTCP )
-		cmd_len |= E1000_TXD_CMD_TCP;
-
-	
-	css = ETHER_HDR_LEN;
-	struct ip* iphdr = (struct ip*)((u8*)mbuf_data(skb) + ETHER_HDR_LEN);
-	css += iphdr->ip_hl << 2;
-	//IOLog("IP Header Len = %d\n", css - ETHER_HDR_LEN);
-	if(checksumDemanded & kChecksumTCP)
-		cso = css + offsetof(struct tcphdr, th_sum);
-	else if(checksumDemanded & kChecksumUDP)
-		cso = css + offsetof(struct udphdr, uh_sum);
-	
 	i = tx_ring->next_to_use;
 	buffer_info = &tx_ring->buffer_info[i];
 	context_desc = E1000_CONTEXT_DESC(*tx_ring, i);
 	
-	context_desc->lower_setup.ip_config = 0;
-	context_desc->upper_setup.tcp_fields.tucss = css;
-	context_desc->upper_setup.tcp_fields.tucso = cso;
-	context_desc->upper_setup.tcp_fields.tucse = 0;
-	context_desc->tcp_seg_setup.data = 0;
-	context_desc->cmd_and_length = cpu_to_le32(cmd_len);
+	// from FreeBSD
+	ehdrlen = ETHER_HDR_LEN;
+	ip = (struct ip *)((u8*)mbuf_data(skb) + ehdrlen);
+	ip_hlen = ip->ip_hl << 2;
+	hdr_len = ehdrlen + ip_hlen;
+
+	if(	checksumDemanded & kChecksumIP ){
+		/*
+		 * Start offset for header checksum calculation.
+		 * End offset for header checksum calculation.
+		 * Offset of place to put the checksum.
+		 */
+		context_desc->lower_setup.ip_fields.ipcss = ehdrlen;
+		context_desc->lower_setup.ip_fields.ipcse = cpu_to_le16(ehdrlen + ip_hlen);
+		context_desc->lower_setup.ip_fields.ipcso = ehdrlen + offsetof(struct ip, ip_sum);
+		cmd |= E1000_TXD_CMD_IP;
+#if	0
+		*txd_upper |= E1000_TXD_POPTS_IXSM << 8;
+#endif
+	}
+	if(	checksumDemanded & kChecksumTCP ){
+#if	0
+		*txd_lower = E1000_TXD_CMD_DEXT | E1000_TXD_DTYP_D;
+		*txd_upper |= E1000_TXD_POPTS_TXSM << 8;
+		/* no need for context if already set */
+		if (adapter->last_hw_offload == CSUM_TCP)
+			return;
+		adapter->last_hw_offload = CSUM_TCP;
+#endif
+		/*
+		 * Start offset for payload checksum calculation.
+		 * End offset for payload checksum calculation.
+		 * Offset of place to put the checksum.
+		 */
+		context_desc->upper_setup.tcp_fields.tucss = hdr_len;
+		context_desc->upper_setup.tcp_fields.tucse = cpu_to_le16(0);
+		context_desc->upper_setup.tcp_fields.tucso = hdr_len + offsetof(struct tcphdr, th_sum);
+		cmd |= E1000_TXD_CMD_TCP;
+	}
+	if(	checksumDemanded & kChecksumUDP ){
+#if	0
+		*txd_lower = E1000_TXD_CMD_DEXT | E1000_TXD_DTYP_D;
+		*txd_upper |= E1000_TXD_POPTS_TXSM << 8;
+		/* no need for context if already set */
+		if (adapter->last_hw_offload == CSUM_UDP)
+			return;
+		adapter->last_hw_offload = CSUM_UDP;
+#endif
+		/*
+		 * Start offset for header checksum calculation.
+		 * End offset for header checksum calculation.
+		 * Offset of place to put the checksum.
+		 */
+		context_desc->upper_setup.tcp_fields.tucss = hdr_len;
+		context_desc->upper_setup.tcp_fields.tucse = cpu_to_le16(0);
+		context_desc->upper_setup.tcp_fields.tucso = hdr_len + offsetof(struct udphdr, uh_sum);
+	}
+	
+	context_desc->tcp_seg_setup.data = cpu_to_le32(0);
+	context_desc->cmd_and_length = cpu_to_le32(adapter->txd_cmd | E1000_TXD_CMD_DEXT | cmd);
+	
 	buffer_info->next_to_watch = i;
 	
 	i++;
@@ -3437,16 +3479,7 @@ IOReturn AppleIntelE1000e::setPowerState( unsigned long powerStateOrdinal,
 		return IOPMAckImplied;
 	powerState = powerStateOrdinal;
 
-	if(powerState == 1){	//
-		;
-	} else {
-		suspend = true;
-	}
 	/* acknowledge the completion of our power state change */
-#if	0
-	policyMaker->acknowledgeSetPowerState();	
-#endif
-
     return IOPMAckImplied;
 }
 
@@ -3544,6 +3577,17 @@ void AppleIntelE1000e::alloc_rx_buf(int cleaned_count)
 		e1000_alloc_jumbo_rx_buffers(cleaned_count);
 	else
 		e1000_alloc_rx_buffers(cleaned_count);
+}
+
+
+int AppleIntelE1000e::getIntOption( int def, const char *name )
+{
+	int val = def;
+	OSNumber* numObj = OSDynamicCast( OSNumber, getProperty(name) );
+	if ( numObj ){
+		val = (int)numObj->unsigned32BitValue();
+	}
+	return val;
 }
 
 

@@ -125,8 +125,6 @@ private:
 	UInt32 preLinkStatus;
 	UInt32 powerState;
 
-	bool suspend;
-	
 	struct e1000_adapter priv_adapter;
 	struct pci_dev priv_pdev;
 	struct net_device priv_netdev;
@@ -172,6 +170,7 @@ private:
 private:
 	bool clean_rx_irq();
 	void alloc_rx_buf(int cleaned_count);
+	int getIntOption( int def, const char *name );
 
 public:
 	static void interruptHandler(OSObject * target,

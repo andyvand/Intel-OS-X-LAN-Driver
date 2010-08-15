@@ -45,6 +45,8 @@
 			<string>0x107d8086 0x107e8086 0x107f8086 0x10b98086</string>
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
+			<key>TX_CSUM</key>
+			<integer>0</integer>
 		</dict>
 		<key>Intel 82573</key>
 		<dict>

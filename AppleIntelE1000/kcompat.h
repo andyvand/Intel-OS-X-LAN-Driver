@@ -46,9 +46,11 @@ typedef struct { int dummy; } spinlock_t;
 #define true 1
 #define false 0
 
-#define cpu_to_le64(x)	OSSwapHostToLittleConstInt64(x)
+#define cpu_to_le16(x)	OSSwapHostToLittleConstInt16(x)
 #define cpu_to_le32(x)	OSSwapHostToLittleConstInt32(x)
+#define	cpu_to_le64(x)	OSSwapHostToLittleConstInt64(x)
 #define	le16_to_cpu(x)	OSSwapLittleToHostInt16(x)
+#define	le32_to_cpu(x)	OSSwapLittleToHostInt32(x)
 
 #define ALIGN(x,a) (((x)+(a)-1)&~((a)-1))
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
@@ -222,8 +224,10 @@ outl (unsigned int value, unsigned short port)
 	__asm__ __volatile__ ("outl %0,%w1": :"a" (value), "Nd" (port));
 }
 
-#define	writel(val, reg)	OSWriteLittleInt32(reg, 0, val)
-#define	readl(reg)	OSReadLittleInt32(reg, 0)
+#define	writel(val, reg)	_OSWriteInt32(reg, 0, val)
+#define	writew(val, reg)	_OSWriteInt16(reg, 0, val)
+#define	readl(reg)	_OSReadInt32(reg, 0)
+#define	readw(reg)	_OSReadInt16(reg, 0)
 
 #define	KERN_ERR
 #define printk(args...)	IOLog(args)
