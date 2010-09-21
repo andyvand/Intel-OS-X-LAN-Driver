@@ -624,18 +624,17 @@ static int e1000_setup_tx_resources(struct e1000_adapter *adapter,
 	tx_ring->size = tx_ring->count * sizeof(struct e1000_tx_desc);
 	tx_ring->size = ALIGN(tx_ring->size, 4096);
 	
-	{
-		tx_ring->pool = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
-							kIODirectionInOut | kIOMemoryPhysicallyContiguous, 
-							tx_ring->size,
-							0xFFFF0000UL);	// 32-bits, 64K-aligned
-		if(tx_ring->pool){
-			tx_ring->pool->prepare();
-			tx_ring->desc = (void*)tx_ring->pool->getBytesNoCopy();
-			tx_ring->dma = (void*)tx_ring->pool->getPhysicalAddress();
-		}
-	}
-	if (!tx_ring->desc) {
+	tx_ring->pool = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
+						kIODirectionInOut | kIOMemoryPhysicallyContiguous, 
+						tx_ring->size,
+						0xFFFF0000UL);	// 32-bits, 64K-aligned
+	if(tx_ring->pool){
+		tx_ring->pool->prepare();
+		tx_ring->desc = (void*)tx_ring->pool->getBytesNoCopy();
+		tx_ring->dma = (void*)tx_ring->pool->getPhysicalAddress();
+		
+		bzero(tx_ring->desc, tx_ring->size);
+	} else {
 	setup_tx_desc_die:
 		IOFreePageable(tx_ring->buffer_info,size);
 		DPRINTK(PROBE, ERR,
@@ -824,9 +823,9 @@ static int e1000_setup_rx_resources(struct e1000_adapter *adapter,
 		rx_ring->pool->prepare();
 		rx_ring->desc = (void*)rx_ring->pool->getBytesNoCopy();
 		rx_ring->dma = (void*)rx_ring->pool->getPhysicalAddress();
-	}
-	
-	if (!rx_ring->desc) {
+		
+		bzero(rx_ring->desc, rx_ring->size);
+	} else {
 		IOLog("Unable to allocate memory for the receive descriptor ring\n");
 setup_rx_desc_die:
 		IOFreePageable(rx_ring->buffer_info, size);
@@ -2267,11 +2266,6 @@ void AppleIntelE1000::free()
 	RELEASE(workLoop);
 	RELEASE(pciDevice);
 	RELEASE(mediumDict);
-	
-	int i;
-	for (i = 0; i < MEDIUM_INDEX_COUNT; i++) {
-		RELEASE(mediumTable[i]);
-	}
 	
 	RELEASE(csrPCIAddress);
 	RELEASE(flashPCIAddress);
