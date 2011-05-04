@@ -330,15 +330,15 @@ err:
 
 
 /**
- * e1000_get_hw_control - get control of the h/w from f/w
+ * e1000e_get_hw_control - get control of the h/w from f/w
  * @adapter: address of board private structure
  *
- * e1000_get_hw_control sets {CTRL_EXT|SWSM}:DRV_LOAD bit.
+ * e1000e_get_hw_control sets {CTRL_EXT|SWSM}:DRV_LOAD bit.
  * For ASF and Pass Through versions of f/w this means that
  * the driver is loaded. For AMT version (only with 82573)
  * of the f/w this means that the network i/f is open.
  **/
-static void e1000_get_hw_control(struct e1000_adapter *adapter)
+void e1000e_get_hw_control(struct e1000_adapter *adapter)
 {
 	struct e1000_hw *hw = &adapter->hw;
 	u32 ctrl_ext;
@@ -355,16 +355,16 @@ static void e1000_get_hw_control(struct e1000_adapter *adapter)
 }
 
 /**
- * e1000_release_hw_control - release control of the h/w to f/w
+ * e1000e_release_hw_control - release control of the h/w to f/w
  * @adapter: address of board private structure
  *
- * e1000_release_hw_control resets {CTRL_EXT|SWSM}:DRV_LOAD bit.
+ * e1000e_release_hw_control resets {CTRL_EXT|SWSM}:DRV_LOAD bit.
  * For ASF and Pass Through versions of f/w this means that the
  * driver is no longer loaded. For AMT version (only with 82573) i
  * of the f/w this means that the network i/f is closed.
  *
  **/
-static void e1000_release_hw_control(struct e1000_adapter *adapter)
+void e1000e_release_hw_control(struct e1000_adapter *adapter)
 {
 	struct e1000_hw *hw = &adapter->hw;
 	u32 ctrl_ext;
@@ -449,7 +449,7 @@ void e1000e_reset(struct e1000_adapter *adapter)
 		/* lower 16 bits has Rx packet buffer allocation size in KB */
 		pba &= 0xffff;
 		/*
-		 * the Tx fifo also stores 16 bytes of information about the tx
+		 * the Tx fifo also stores 16 bytes of information about the Tx
 		 * but don't include ethernet FCS because hardware appends it
 		 */
 		min_tx_space = (adapter->max_frame_size +
@@ -472,7 +472,7 @@ void e1000e_reset(struct e1000_adapter *adapter)
 			pba -= min_tx_space - tx_space;
 			
 			/*
-			 * if short on Rx space, Rx wins and must trump tx
+			 * if short on Rx space, Rx wins and must trump Tx
 			 * adjustment or use Early Receive if available
 			 */
 			if ((pba < min_rx_space) &&
@@ -536,9 +536,33 @@ void e1000e_reset(struct e1000_adapter *adapter)
 			fc->low_water = 0x05048;
 			fc->pause_time = 0x0650;
 			fc->refresh_time = 0x0400;
+            if (adapter->netdev->mtu > ETH_DATA_LEN) {
+                pba = 14;
+                ew32(PBA, pba);
+            }
 			break;
 	}
-	
+
+	/*
+	 * Disable Adaptive Interrupt Moderation if 2 full packets cannot
+	 * fit in receive buffer and early-receive not supported.
+	 */
+	if (adapter->itr_setting & 0x3) {
+		if (((adapter->max_frame_size * 2) > (pba << 10)) &&
+		    !(adapter->flags & FLAG_HAS_ERT)) {
+			if (!(adapter->flags2 & FLAG2_DISABLE_AIM)) {
+				IOLog("Interrupt Throttle Rate turned off\n");
+				adapter->flags2 |= FLAG2_DISABLE_AIM;
+				ew32(ITR, 0);
+			}
+		} else if (adapter->flags2 & FLAG2_DISABLE_AIM) {
+			IOLog( "Interrupt Throttle Rate turned on\n");
+			adapter->flags2 &= ~FLAG2_DISABLE_AIM;
+			adapter->itr = 20000;
+			ew32(ITR, 1000000000 / (adapter->itr * 256));
+		}
+	}
+
 	/* Allow time for pending master requests to run */
 	mac->ops.reset_hw(hw);
 	
@@ -547,7 +571,7 @@ void e1000e_reset(struct e1000_adapter *adapter)
 	 * that the network interface is in control
 	 */
 	if (adapter->flags & FLAG_HAS_AMT)
-		e1000_get_hw_control(adapter);
+		e1000e_get_hw_control(adapter);
 	
 	ew32(WUC, 0);
 	if (adapter->flags2 & FLAG2_HAS_PHY_WAKEUP)
@@ -564,6 +588,15 @@ void e1000e_reset(struct e1000_adapter *adapter)
 	
 #endif
 	e1000e_reset_adaptive(hw);
+
+#if 0
+	if (!netif_running(adapter->netdev) &&
+	    !test_bit(__E1000_TESTING, &adapter->state)) {
+		e1000_power_down_phy(adapter);
+		return;
+	}
+#endif
+    
 	e1000_get_phy_info(hw);
 	
 	if ((adapter->flags & FLAG_HAS_SMART_POWER_DOWN) &&
@@ -627,20 +660,18 @@ static unsigned int e1000_update_itr(struct e1000_adapter *adapter,
 			/* handle TSO and jumbo frames */
 			if (bytes/packets > 8000)
 				retval = bulk_latency;
-			else if ((packets < 5) && (bytes > 512)) {
+			else if ((packets < 5) && (bytes > 512))
 				retval = low_latency;
-			}
 			break;
 		case low_latency:  /* 50 usec aka 20000 ints/s */
 			if (bytes > 10000) {
 				/* this if handles the TSO accounting */
-				if (bytes/packets > 8000) {
+				if (bytes/packets > 8000)
 					retval = bulk_latency;
-				} else if ((packets < 10) || ((bytes/packets) > 1200)) {
+				else if ((packets < 10) || ((bytes/packets) > 1200))
 					retval = bulk_latency;
-				} else if ((packets > 35)) {
+				else if ((packets > 35))
 					retval = lowest_latency;
-				}
 			} else if (bytes/packets > 2000) {
 				retval = bulk_latency;
 			} else if (packets <= 2 && bytes < 512) {
@@ -649,9 +680,8 @@ static unsigned int e1000_update_itr(struct e1000_adapter *adapter,
 			break;
 		case bulk_latency: /* 250 usec aka 4000 ints/s */
 			if (bytes > 25000) {
-				if (packets > 35) {
+				if (packets > 35)
 					retval = low_latency;
-				}
 			} else if (bytes < 6000) {
 				retval = low_latency;
 			}
@@ -675,6 +705,11 @@ static void e1000_set_itr(struct e1000_adapter *adapter)
 		goto set_itr_now;
 	}
 	
+	if (adapter->flags2 & FLAG2_DISABLE_AIM) {
+		new_itr = 0;
+		goto set_itr_now;
+	}
+
 	adapter->tx_itr = e1000_update_itr(adapter,
 									   adapter->tx_itr,
 									   adapter->total_tx_packets,
@@ -724,9 +759,15 @@ set_itr_now:
 		if (adapter->msix_entries)
 			adapter->rx_ring->set_itr = 1;
 		else
-			ew32(ITR, 1000000000 / (new_itr * 256));
+			if (new_itr)
+				ew32(ITR, 1000000000 / (new_itr * 256));
+			else
+				ew32(ITR, 0);
 #else
-		ew32(ITR, 1000000000 / (new_itr * 256));
+		if (new_itr)
+			ew32(ITR, 1000000000 / (new_itr * 256));
+		else
+			ew32(ITR, 0);
 #endif
 	}
 }
@@ -817,7 +858,7 @@ static void e1000_tx_queue(struct e1000_adapter *adapter,
 	
 	i = tx_ring->next_to_use;
 	
-	while (count--) {
+	do {
 		buffer_info = &tx_ring->buffer_info[i];
 		tx_desc = E1000_TX_DESC(*tx_ring, i);
 		tx_desc->buffer_addr = cpu_to_le64(buffer_info->dma);
@@ -828,7 +869,7 @@ static void e1000_tx_queue(struct e1000_adapter *adapter,
 		i++;
 		if (i == tx_ring->count)
 			i = 0;
-	}
+	} while (--count > 0);
 	
 	tx_desc->lower.data |= cpu_to_le32(adapter->txd_cmd);
 	
@@ -857,7 +898,6 @@ static void e1000e_check_82574_phy_workaround(struct e1000_adapter *adapter)
 	 * With 82574 controllers, PHY needs to be checked periodically
 	 * for hung state and reset, if two calls return true
 	 */
-	
 	if (e1000_check_phy_82574(hw)) 
 		adapter->phy_hang_count++;
 	else
@@ -869,6 +909,20 @@ static void e1000e_check_82574_phy_workaround(struct e1000_adapter *adapter)
 	}
 }
 
+static void e1000e_flush_descriptors(struct e1000_adapter *adapter)
+{
+	struct e1000_hw *hw = &adapter->hw;
+    
+	if (!(adapter->flags2 & FLAG2_DMA_BURST))
+		return;
+    
+	/* flush pending descriptor writebacks to memory */
+	ew32(TIDV, adapter->tx_int_delay | E1000_TIDV_FPD);
+	ew32(RDTR, adapter->rx_int_delay | E1000_RDTR_FPD);
+    
+	/* execute the writes immediately */
+	e1e_flush();
+}
 
 /////////////////
 
@@ -927,6 +981,7 @@ bool AppleIntelE1000e::init(OSDictionary *properties)
 	// for ich8lan
 	init_mutex();
 
+    adapter->node = -1;
 	adapter->pdev = &priv_pdev;
 	adapter->netdev = &priv_netdev;
 	
@@ -958,7 +1013,7 @@ void AppleIntelE1000e::stop(IOService* provider)
 	 * Release control of h/w to f/w.  If f/w is AMT enabled, this
 	 * would have already happened in close and is redundant.
 	 */
-	e1000_release_hw_control(adapter);
+	e1000e_release_hw_control(adapter);
 	
 #ifdef CONFIG_E1000E_MSIX
 	e1000e_reset_interrupt_capability(adapter);
@@ -1124,7 +1179,7 @@ bool AppleIntelE1000e::start(IOService* provider)
 
 		e1000_eeprom_checks(adapter);
 
-		/* copy the MAC address out of the NVM */
+		/* copy the MAC address */
 		if (e1000e_read_mac_addr(&adapter->hw))
 			e_dbg("NVM Read Error while reading MAC address\n");
 		
@@ -1154,7 +1209,8 @@ bool AppleIntelE1000e::start(IOService* provider)
 			/* APME bit in EEPROM is mapped to WUC.APME */
 			eeprom_data = er32(WUC);
 			eeprom_apme_mask = E1000_WUC_APME;
-			if (eeprom_data & E1000_WUC_PHY_WAKE)
+            if ((hw->mac.type > e1000_ich10lan) &&
+                (eeprom_data & E1000_WUC_PHY_WAKE))
 				adapter->flags2 |= FLAG2_HAS_PHY_WAKEUP;
 		} else if (adapter->flags & FLAG_APME_IN_CTRL3) {
 			if (adapter->flags & FLAG_APME_CHECK_PORT_B &&
@@ -1194,7 +1250,7 @@ bool AppleIntelE1000e::start(IOService* provider)
 		 * under the control of the driver.
 		 */
 		if (!(adapter->flags & FLAG_HAS_AMT))
-			e1000_get_hw_control(adapter);
+			e1000e_get_hw_control(adapter);
 		
 		
 		success = true;
@@ -1318,7 +1374,7 @@ IOReturn AppleIntelE1000e::enable(IONetworkInterface * netif)
 	 * interface is now open
 	 */
 	if (adapter->flags & FLAG_HAS_AMT){
-		e1000_get_hw_control(adapter);
+		e1000e_get_hw_control(adapter);
 		e1000e_reset(adapter);
 	}
 	
@@ -1332,7 +1388,13 @@ IOReturn AppleIntelE1000e::enable(IONetworkInterface * netif)
 		e1000_update_mng_vlan(adapter);
 	
 #endif
-	/* From here on the code is the same as e1000e_up() */
+	/* DMA latency requirement to workaround early-receive/jumbo issue */
+#if 0
+	if ((adapter->flags & FLAG_HAS_ERT) ||
+	    (adapter->hw.mac.type == e1000_pch2lan))
+        ;
+#endif
+    /* From here on the code is the same as e1000e_up() */
 	e1000e_up();
 
 	enabledForNetif = true;
@@ -1381,7 +1443,12 @@ IOReturn AppleIntelE1000e::disable(IONetworkInterface * netif)
 	 * interface is now closed
 	 */
 	if (adapter->flags & FLAG_HAS_AMT)
-		e1000_release_hw_control(adapter);
+		e1000e_release_hw_control(adapter);
+#if 0
+	if ((adapter->flags & FLAG_HAS_ERT) ||
+	    (adapter->hw.mac.type == e1000_pch2lan))
+        ;
+#endif
 
 	pciDevice->close(this);
 
@@ -1392,8 +1459,6 @@ void AppleIntelE1000e::e1000e_up()
 {
 	struct e1000_adapter *adapter = &priv_adapter;
 	struct e1000_hw *hw = &adapter->hw;
-	
-	/* DMA latency requirement to workaround early-receive/jumbo issue */
 	
 	/* hardware has been reset, we need to reload some things */
 	e1000_configure();
@@ -1474,6 +1539,8 @@ void AppleIntelE1000e::e1000e_down()
 	adapter->link_duplex = 0;
 	
 	e1000e_reset(adapter);
+
+	e1000e_flush_descriptors(adapter);
 
 	e1000_clean_tx_ring();
 	e1000_clean_rx_ring();
@@ -1876,7 +1943,7 @@ void AppleIntelE1000e::e1000_init_manageability_pt()
 
 
 /**
- * e1000_configure_tx - Configure 8254x Transmit Unit after Reset
+ * e1000_configure_tx - Configure Transmit Unit after Reset
  * @adapter: board private structure
  *
  * Configure the Tx unit of the MAC after a reset.
@@ -1917,7 +1984,27 @@ void AppleIntelE1000e::e1000_configure_tx()
 	ew32(TIDV, adapter->tx_int_delay);
 	/* Tx irq moderation */
 	ew32(TADV, adapter->tx_abs_int_delay);
-	
+
+	if (adapter->flags2 & FLAG2_DMA_BURST) {
+		u32 txdctl = er32(TXDCTL(0));
+		txdctl &= ~(E1000_TXDCTL_PTHRESH | E1000_TXDCTL_HTHRESH |
+                    E1000_TXDCTL_WTHRESH);
+		/*
+		 * set up some performance related parameters to encourage the
+		 * hardware to use the bus more efficiently in bursts, depends
+		 * on the tx_int_delay to be enabled,
+		 * wthresh = 5 ==> burst write a cacheline (64 bytes) at a time
+		 * hthresh = 1 ==> prefetch when one or more available
+		 * pthresh = 0x1f ==> prefetch if internal cache 31 or less
+		 * BEWARE: this seems to work but should be considered first if
+		 * there are Tx hangs or other Tx related bugs
+		 */
+		txdctl |= E1000_TXDCTL_DMA_BURST_ENABLE;
+		ew32(TXDCTL(0), txdctl);
+		/* erratum work around: set txdctl the same for both queues */
+		ew32(TXDCTL(1), txdctl);
+	}
+
 	/* Program the Transmit Control Register */
 	tctl = er32(TCTL);
 	tctl &= ~E1000_TCTL_CT;
@@ -1971,9 +2058,21 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	e1000_adapter *adapter = &priv_adapter;
 	struct e1000_hw *hw = &adapter->hw;
 	u32 rctl, rfctl;
-	u32 psrctl = 0;
 	u32 pages = 0;
-	
+
+	/* Workaround Si errata on 82579 - configure jumbo frame flow */
+	if (hw->mac.type == e1000_pch2lan) {
+		s32 ret_val;
+        
+		if (adapter->netdev->mtu > ETH_DATA_LEN)
+			ret_val = e1000_lv_jumbo_workaround_ich8lan(hw, true);
+		else
+			ret_val = e1000_lv_jumbo_workaround_ich8lan(hw, false);
+        
+		if (ret_val)
+			e_dbg("failed to enable jumbo frame workaround mode\n");
+	}
+
 	/* Program MC offset vector base */
 	rctl = er32(RCTL);
 	rctl &= ~(3 << E1000_RCTL_MO_SHIFT);
@@ -1995,16 +2094,6 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	 * host memory when this is enabled */
 	if (adapter->flags2 & FLAG2_CRC_STRIPPING)
 		rctl |= E1000_RCTL_SECRC;
-	
-	/* Workaround Si errata on 82577 PHY - configure IPG for jumbos */
-	if ((hw->phy.type == e1000_phy_82577) && (rctl & E1000_RCTL_LPE)) {
-		s32 ret_val;
-		
-		if (rctl & E1000_RCTL_LPE)
-			ret_val = e1000_lv_jumbo_workaround_ich8lan(hw, true);
-		else
-			ret_val = e1000_lv_jumbo_workaround_ich8lan(hw, false);
-	}
 	
 	/* Setup buffer sizes */
 	rctl &= ~E1000_RCTL_SZ_4096;
@@ -2053,6 +2142,8 @@ void AppleIntelE1000e::e1000_setup_rctl()
 #endif
 	
 	if (adapter->rx_ps_pages) {
+		u32 psrctl = 0;
+
 		/* Configure extra packet-split registers */
 		rfctl = er32(RFCTL);
 		rfctl |= E1000_RFCTL_EXTEN;
@@ -2107,7 +2198,7 @@ void AppleIntelE1000e::e1000_configure_rx()
 		/* this is a 32 byte descriptor */
 		e_dbg("32 byte descriptor.\n");
 		rdlen = rx_ring->count *
-		sizeof(union e1000_rx_desc_packet_split);
+			sizeof(union e1000_rx_desc_packet_split);
 	} else {
 		rdlen = rx_ring->count * sizeof(struct e1000_rx_desc);
 	}
@@ -2117,13 +2208,36 @@ void AppleIntelE1000e::e1000_configure_rx()
 	ew32(RCTL, rctl & ~E1000_RCTL_EN);
 	e1e_flush();
 	msleep(10);
-	
+
+	if (adapter->flags2 & FLAG2_DMA_BURST) {
+		/*
+		 * set the writeback threshold (only takes effect if the RDTR
+		 * is set). set GRAN=1 and write back up to 0x4 worth, and
+		 * enable prefetching of 0x20 Rx descriptors
+		 * granularity = 01
+		 * wthresh = 04,
+		 * hthresh = 04,
+		 * pthresh = 0x20
+		 */
+		ew32(RXDCTL(0), E1000_RXDCTL_DMA_BURST_ENABLE);
+		ew32(RXDCTL(1), E1000_RXDCTL_DMA_BURST_ENABLE);
+        
+		/*
+		 * override the delay timers for enabling bursting, only if
+		 * the value was not set by the user via module options
+		 */
+		if (adapter->rx_int_delay == DEFAULT_RDTR)
+			adapter->rx_int_delay = BURST_RDTR;
+		if (adapter->rx_abs_int_delay == DEFAULT_RADV)
+			adapter->rx_abs_int_delay = BURST_RADV;
+	}
+
 	/* set the Receive Delay Timer Register */
 	ew32(RDTR, adapter->rx_int_delay);
 	
 	/* irq moderation */
 	ew32(RADV, adapter->rx_abs_int_delay);
-	if (adapter->itr_setting != 0)
+	if ((adapter->itr_setting != 0) && (adapter->itr != 0))
 		ew32(ITR, 1000000000 / (adapter->itr * 256));
 	
 	ctrl_ext = er32(CTRL_EXT);
@@ -2165,11 +2279,13 @@ void AppleIntelE1000e::e1000_configure_rx()
 	 * packet size is equal or larger than the specified value (in 8 byte
 	 * units), e.g. using jumbo frames when setting to E1000_ERT_2048
 	 */
-	if (adapter->flags & FLAG_HAS_ERT) {
+	if ((adapter->flags & FLAG_HAS_ERT) ||
+	    (adapter->hw.mac.type == e1000_pch2lan)) {
 		if (priv_netdev.mtu > ETH_DATA_LEN) {
 			u32 rxdctl = er32(RXDCTL(0));
 			ew32(RXDCTL(0), rxdctl | 0x3);
-			ew32(ERT, E1000_ERT_2048 | (1 << 13));
+			if (adapter->flags & FLAG_HAS_ERT)
+				ew32(ERT, E1000_ERT_2048 | (1 << 13));
 			/*
 			 * With jumbo frames and early-receive enabled,
 			 * excessive C-state transition latencies result in
@@ -2289,7 +2405,7 @@ void AppleIntelE1000e::e1000_alloc_rx_buffers_ps( int cleaned_count )
 			ps_page = &buffer_info->ps_pages[j];
 			if (j >= adapter->rx_ps_pages) {
 				/* all unused desc entries get hw null ptr */
-				rx_desc->read.buffer_addr[j+1] = ~cpu_to_le64(0);
+				rx_desc->read.buffer_addr[j + 1] = ~cpu_to_le64(0);
 				continue;
 			}
 			if (!ps_page->page) {
@@ -2308,7 +2424,7 @@ void AppleIntelE1000e::e1000_alloc_rx_buffers_ps( int cleaned_count )
 			 * didn't change because each write-back
 			 * erases this info.
 			 */
-			rx_desc->read.buffer_addr[j+1] = cpu_to_le64(ps_page->dma);
+			rx_desc->read.buffer_addr[j + 1] = cpu_to_le64(ps_page->dma);
 		}
 		
 		skb = buffer_info->skb;
@@ -3217,7 +3333,20 @@ link_up:
 	// e1000e_update_stats(adapter);
 	// e1000e_update_adaptive(&adapter->hw);
 
-	
+#if 0
+	if (!netif_carrier_ok(netdev) &&
+	    (e1000_desc_unused(tx_ring) + 1 < tx_ring->count)) {
+		/*
+		 * We've lost link, so the controller stops DMA,
+		 * but we've got queued Tx work that's never going
+		 * to get done, so reset controller to flush Tx.
+		 * (Do the reset outside of interrupt context).
+		 */
+		schedule_work(&adapter->reset_task);
+		/* return immediately since reset is imminent */
+		return;
+	}
+#endif
 	/* Simple mode for Interrupt Throttle Rate (ITR) */
 	if (adapter->itr_setting == 4) {
 		/*
@@ -3243,6 +3372,10 @@ link_up:
 #else
 	ew32(ICS, E1000_ICS_RXDMT0);
 #endif
+
+	/* flush pending descriptors to memory before detecting Tx hang */
+	e1000e_flush_descriptors(adapter);
+
 	/* Force detection of hung controller every watchdog period */
 	adapter->detect_tx_hung = 1;
 	
@@ -3278,9 +3411,9 @@ void AppleIntelE1000e::e1000_print_link_info()
 		   (adapter->link_duplex == FULL_DUPLEX) ?
 	       "Full Duplex" : "Half Duplex",
 		   ((ctrl & E1000_CTRL_TFCE) && (ctrl & E1000_CTRL_RFCE)) ?
-	       "RX/TX" :
-		   ((ctrl & E1000_CTRL_RFCE) ? "RX" :
-			((ctrl & E1000_CTRL_TFCE) ? "TX" : "None" )));
+	       "Rx/Tx" :
+		   ((ctrl & E1000_CTRL_RFCE) ? "Rx" :
+			((ctrl & E1000_CTRL_TFCE) ? "Tx" : "None" )));
 }
 
 void AppleIntelE1000e::e1000_set_multi()
@@ -3505,6 +3638,16 @@ IOReturn AppleIntelE1000e::getMinPacketSize (UInt32 *minSize) const {
 void AppleIntelE1000e::e1000_change_mtu(UInt32 new_mtu){
 	UInt32 max_frame = new_mtu + ETH_HLEN + ETH_FCS_LEN;
 	e1000_adapter *adapter = &priv_adapter;
+
+
+	/* Jumbo frame workaround on 82579 requires CRC be stripped */
+	if ((adapter->hw.mac.type == e1000_pch2lan) &&
+	    !(adapter->flags2 & FLAG2_CRC_STRIPPING) &&
+	    (new_mtu > ETH_DATA_LEN)) {
+		e_err("Jumbo Frames not supported on 82579 when CRC "
+		      "stripping is disabled.\n");
+		return;
+	}
 
 	adapter->max_frame_size = max_frame;
 	e_info("changing MTU from %d to %d\n", (int)priv_netdev.mtu, (int)new_mtu);

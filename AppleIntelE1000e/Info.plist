@@ -6,24 +6,68 @@
 	<string>English</string>
 	<key>CFBundleExecutable</key>
 	<string>${EXECUTABLE_NAME}</string>
-	<key>CFBundleName</key>
-	<string>${PRODUCT_NAME}</string>
 	<key>CFBundleIconFile</key>
 	<string></string>
 	<key>CFBundleIdentifier</key>
 	<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>${PRODUCT_NAME}</string>
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.3.10a</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>1.2.10</string>
-	<key>CFBundleShortVersionString</key>
-	<string>1.2.10-1</string>
+	<string>1.3.10</string>
 	<key>IOKitPersonalities</key>
 	<dict>
+		<key>80003ES2</key>
+		<dict>
+			<key>CFBundleIdentifier</key>
+			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
+			<key>IOClass</key>
+			<string>${PRODUCT_NAME}</string>
+			<key>IOPCIMatch</key>
+			<string>0x10968086 0x10988086 0x10ba8086 0x10bb8086</string>
+			<key>IOProviderClass</key>
+			<string>IOPCIDevice</string>
+		</dict>
+		<key>ICH10</key>
+		<dict>
+			<key>CFBundleIdentifier</key>
+			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
+			<key>IOClass</key>
+			<string>${PRODUCT_NAME}</string>
+			<key>IOPCIMatch</key>
+			<string>0x10cc8086 0x10cd8086 0x10ce8086 0x10de8086 0x10df8086 0x15258086</string>
+			<key>IOProviderClass</key>
+			<string>IOPCIDevice</string>
+		</dict>
+		<key>ICH8</key>
+		<dict>
+			<key>CFBundleIdentifier</key>
+			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
+			<key>IOClass</key>
+			<string>${PRODUCT_NAME}</string>
+			<key>IOPCIMatch</key>
+			<string>0x15018086 0x10498086 0x104a8086 0x104b8086 0x104c8086 0x104d8086 0x10c48086 0x10c58086</string>
+			<key>IOProviderClass</key>
+			<string>IOPCIDevice</string>
+		</dict>
+		<key>ICH9</key>
+		<dict>
+			<key>CFBundleIdentifier</key>
+			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
+			<key>IOClass</key>
+			<string>${PRODUCT_NAME}</string>
+			<key>IOPCIMatch</key>
+			<string>0x10bd8086 0x10bf8086 0x10c08086 0x10c28086 0x10c38086  0x10cb8086 0x10e58086 0x10f58086 0x294c8086</string>
+			<key>IOProviderClass</key>
+			<string>IOPCIDevice</string>
+		</dict>
 		<key>Intel 82571</key>
 		<dict>
 			<key>CFBundleIdentifier</key>
@@ -100,50 +144,6 @@
 			<string>${PRODUCT_NAME}</string>
 			<key>IOPCIMatch</key>
 			<string>0x150c8086</string>
-			<key>IOProviderClass</key>
-			<string>IOPCIDevice</string>
-		</dict>
-		<key>ICH8</key>
-		<dict>
-			<key>CFBundleIdentifier</key>
-			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
-			<key>IOClass</key>
-			<string>${PRODUCT_NAME}</string>
-			<key>IOPCIMatch</key>
-			<string>0x15018086 0x10498086 0x104a8086 0x104b8086 0x104c8086 0x104d8086 0x10c48086 0x10c58086</string>
-			<key>IOProviderClass</key>
-			<string>IOPCIDevice</string>
-		</dict>
-		<key>ICH9</key>
-		<dict>
-			<key>CFBundleIdentifier</key>
-			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
-			<key>IOClass</key>
-			<string>${PRODUCT_NAME}</string>
-			<key>IOPCIMatch</key>
-			<string>0x10bd8086 0x10bf8086 0x10c08086 0x10c28086 0x10c38086  0x10cb8086 0x10e58086 0x10f58086 0x294c8086</string>
-			<key>IOProviderClass</key>
-			<string>IOPCIDevice</string>
-		</dict>
-		<key>ICH10</key>
-		<dict>
-			<key>CFBundleIdentifier</key>
-			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
-			<key>IOClass</key>
-			<string>${PRODUCT_NAME}</string>
-			<key>IOPCIMatch</key>
-			<string>0x10cc8086 0x10cd8086 0x10ce8086 0x10de8086 0x10df8086 0x15258086</string>
-			<key>IOProviderClass</key>
-			<string>IOPCIDevice</string>
-		</dict>
-		<key>80003ES2</key>
-		<dict>
-			<key>CFBundleIdentifier</key>
-			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
-			<key>IOClass</key>
-			<string>${PRODUCT_NAME}</string>
-			<key>IOPCIMatch</key>
-			<string>0x10968086 0x10988086 0x10ba8086 0x10bb8086</string>
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
 		</dict>

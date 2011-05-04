@@ -28,6 +28,12 @@
 #ifndef __be16
 #define __be16 __uint16_t
 #endif
+#ifndef __be32
+#define __be32 __uint32_t
+#endif
+#ifndef __be64
+#define __be64 __uint64_t
+#endif
 
 #define	sk_buff	__mbuf
 
@@ -136,6 +142,27 @@ struct work_struct {
 
 #define	PCI_EXP_LNKCTL	16
 #define PCIE_LINK_STATE_L1 2
+
+#define MAX_NUMNODES 1
+#define first_online_node 0
+#define node_online(node) ((node) == 0)
+#define ether_crc_le(length, data) _kc_ether_crc_le(length, data)
+static inline unsigned int _kc_ether_crc_le(int length, unsigned char *data)
+{
+	unsigned int crc = 0xffffffff;  /* Initial value. */
+	while(--length >= 0) {
+		unsigned char current_octet = *data++;
+		int bit;
+		for (bit = 8; --bit >= 0; current_octet >>= 1) {
+			if ((crc ^ current_octet) & 1) {
+				crc >>= 1;
+				crc ^= 0xedb88320U;
+			} else
+				crc >>= 1;
+		}
+	}
+	return crc;
+}
 
 #define	EIO		5
 #define	ENOMEM	12

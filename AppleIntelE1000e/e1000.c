@@ -155,7 +155,8 @@ static struct e1000_info e1000_82571_info = {
 	| FLAG_RESET_OVERWRITES_LAA /* errata */
 	| FLAG_TARC_SPEED_MODE_BIT /* errata */
 	| FLAG_APME_CHECK_PORT_B,
-	.flags2			= FLAG2_DISABLE_ASPM_L1, /* errata 13 */
+	.flags2			= FLAG2_DISABLE_ASPM_L1 /* errata 13 */
+					| FLAG2_DMA_BURST,
 	.pba			= 38,
 	.max_hw_frame_size	= DEFAULT_JUMBO,
 	.init_ops		= e1000_init_function_pointers_82571,
@@ -171,7 +172,8 @@ static struct e1000_info e1000_82572_info = {
 	| FLAG_RX_CSUM_ENABLED
 	| FLAG_HAS_CTRLEXT_ON_LOAD
 	| FLAG_TARC_SPEED_MODE_BIT, /* errata */
-	.flags2			= FLAG2_DISABLE_ASPM_L1, /* errata 13 */
+	.flags2			= FLAG2_DISABLE_ASPM_L1 /* errata 13 */
+					| FLAG2_DMA_BURST,    
 	.pba			= 38,
 	.max_hw_frame_size	= DEFAULT_JUMBO,
 	.init_ops		= e1000_init_function_pointers_82571,
@@ -187,6 +189,7 @@ static struct e1000_info e1000_82573_info = {
 	| FLAG_HAS_SMART_POWER_DOWN
 	| FLAG_HAS_AMT
 	| FLAG_HAS_SWSM_ON_LOAD,
+	.flags2			= FLAG2_DISABLE_ASPM_L1,
 	.pba			= 20,
 	.max_hw_frame_size	= ETH_FRAME_LEN + ETH_FCS_LEN,
 	.init_ops		= e1000_init_function_pointers_82571,
@@ -205,8 +208,8 @@ static struct e1000_info e1000_82574_info = {
 	| FLAG_RX_CSUM_ENABLED
 	| FLAG_HAS_SMART_POWER_DOWN
 	| FLAG_HAS_AMT
-	| FLAG_HAS_CTRLEXT_ON_LOAD
-	| FLAG2_CHECK_PHY_HANG, /*errata */
+	| FLAG_HAS_CTRLEXT_ON_LOAD,
+	.flags2			= FLAG2_CHECK_PHY_HANG, /* errata */
 	.pba			= 32,
 	.max_hw_frame_size	= DEFAULT_JUMBO,
 	.init_ops		= e1000_init_function_pointers_82571,
@@ -241,6 +244,7 @@ static struct e1000_info e1000_es2_info = {
 	| FLAG_APME_CHECK_PORT_B
 	| FLAG_DISABLE_FC_PAUSE_TIME /* errata */
 	| FLAG_TIPG_MEDIUM_FOR_80003ESLAN,
+	.flags2			= FLAG2_DMA_BURST,
 	.pba			= 38,
 	.max_hw_frame_size	= DEFAULT_JUMBO,
 	.init_ops		= e1000_init_function_pointers_80003es2lan,
@@ -249,15 +253,23 @@ static struct e1000_info e1000_es2_info = {
 
 static s32 e1000_get_variants_ich8lan(struct e1000_adapter *adapter)
 {
-	if (adapter->hw.phy.type == e1000_phy_ife) {
-		adapter->flags &= ~FLAG_HAS_JUMBO_FRAMES;
-		adapter->max_hw_frame_size = ETH_FRAME_LEN + ETH_FCS_LEN;
-	}
-	
+	struct e1000_hw *hw = &adapter->hw;
+    
+	/*
+	 * Disable Jumbo Frame support on parts with Intel 10/100 PHY or
+	 * on parts with MACsec enabled in NVM (reflected in CTRL_EXT).
+	 */
+	if ((adapter->hw.phy.type == e1000_phy_ife) ||
+	    ((adapter->hw.mac.type >= e1000_pch2lan) &&
+	     (!(er32(CTRL_EXT) & E1000_CTRL_EXT_LSECCK)))) {
+            adapter->flags &= ~FLAG_HAS_JUMBO_FRAMES;
+            adapter->max_hw_frame_size = ETH_FRAME_LEN + ETH_FCS_LEN;
+        }
+    
 	if ((adapter->hw.mac.type == e1000_ich8lan) &&
 	    (adapter->hw.phy.type == e1000_phy_igp_3))
 		adapter->flags |= FLAG_LSC_GIG_SPEED_DROP;
-	
+    
 	return 0;
 }
 
@@ -340,7 +352,7 @@ static struct e1000_info e1000_pch2_info = {
 	| FLAG_APME_IN_WUC,
 	.flags2			= FLAG2_HAS_PHY_STATS
 	| FLAG2_HAS_EEE,
-	.pba			= 18,
+	.pba			= 26,
 	.max_hw_frame_size	= DEFAULT_JUMBO,
 	.init_ops		= e1000_init_function_pointers_ich8lan,
 	.get_variants		= e1000_get_variants_ich8lan,
@@ -366,17 +378,17 @@ struct e1000_reg_info {
 	char *name;
 };
 
-#define E1000_RDFH	0x02410 /* Rx Data FIFO Head - RW */
-#define E1000_RDFT	0x02418 /* Rx Data FIFO Tail - RW */
-#define E1000_RDFHS	0x02420 /* Rx Data FIFO Head Saved - RW */
-#define E1000_RDFTS	0x02428 /* Rx Data FIFO Tail Saved - RW */
-#define E1000_RDFPC	0x02430 /* Rx Data FIFO Packet Count - RW */
+#define E1000_RDFH	0x02410	/* Rx Data FIFO Head - RW */
+#define E1000_RDFT	0x02418	/* Rx Data FIFO Tail - RW */
+#define E1000_RDFHS	0x02420	/* Rx Data FIFO Head Saved - RW */
+#define E1000_RDFTS	0x02428	/* Rx Data FIFO Tail Saved - RW */
+#define E1000_RDFPC	0x02430	/* Rx Data FIFO Packet Count - RW */
 
-#define E1000_TDFH	0x03410 /* Tx Data FIFO Head - RW */
-#define E1000_TDFT	0x03418 /* Tx Data FIFO Tail - RW */
-#define E1000_TDFHS	0x03420 /* Tx Data FIFO Head Saved - RW */
-#define E1000_TDFTS	0x03428 /* Tx Data FIFO Tail Saved - RW */
-#define E1000_TDFPC	0x03430 /* Tx Data FIFO Packet Count - RW */
+#define E1000_TDFH	0x03410	/* Tx Data FIFO Head - RW */
+#define E1000_TDFT	0x03418	/* Tx Data FIFO Tail - RW */
+#define E1000_TDFHS	0x03420	/* Tx Data FIFO Head Saved - RW */
+#define E1000_TDFTS	0x03428	/* Tx Data FIFO Tail Saved - RW */
+#define E1000_TDFPC	0x03430	/* Tx Data FIFO Packet Count - RW */
 
 static const struct e1000_reg_info e1000_reg_info_tbl[] = {
 	
@@ -388,7 +400,7 @@ static const struct e1000_reg_info e1000_reg_info_tbl[] = {
 	/* Interrupt Registers */
 	{E1000_ICR, "ICR"},
 	
-	/* RX Registers */
+	/* Rx Registers */
 	{E1000_RCTL, "RCTL"},
 	{E1000_RDLEN(0), "RDLEN"},
 	{E1000_RDH(0), "RDH"},
@@ -404,7 +416,7 @@ static const struct e1000_reg_info e1000_reg_info_tbl[] = {
 	{E1000_RDFTS, "RDFTS"},
 	{E1000_RDFPC, "RDFPC"},
 	
-	/* TX Registers */
+	/* Tx Registers */
 	{E1000_TCTL, "TCTL"},
 	{E1000_TDBAL(0), "TDBAL"},
 	{E1000_TDBAH(0), "TDBAH"},
@@ -462,7 +474,7 @@ static void e1000_regdump(struct e1000_hw *hw, struct e1000_reg_info *reginfo)
 
 
 /*
- * e1000e_dump - Print registers, tx-ring and rx-ring
+ * e1000e_dump - Print registers, Tx-ring and Rx-ring
  */
 static void e1000e_dump(struct e1000_adapter *adapter)
 {
@@ -471,12 +483,20 @@ static void e1000e_dump(struct e1000_adapter *adapter)
 	struct e1000_reg_info *reginfo;
 	struct e1000_ring *tx_ring = adapter->tx_ring;
 	struct e1000_tx_desc *tx_desc;
-	struct my_u0 { u64 a; u64 b; } *u0;
+	struct my_u0 {
+		u64 a;
+		u64 b;
+	} *u0;
 	struct e1000_buffer *buffer_info;
 	struct e1000_ring *rx_ring = adapter->rx_ring;
 	union e1000_rx_desc_packet_split *rx_desc_ps;
 	struct e1000_rx_desc *rx_desc;
-	struct my_u1 { u64 a; u64 b; u64 c; u64 d; } *u1;
+	struct my_u1 {
+		u64 a;
+		u64 b;
+		u64 c;
+		u64 d;
+	} *u1;
 	u32 staterr;
 	int i = 0;
 	
@@ -487,12 +507,10 @@ static void e1000e_dump(struct e1000_adapter *adapter)
 	if (netdev) {
 		dev_info(pci_dev_to_dev(adapter->pdev), "Net device Info\n");
 		printk(KERN_INFO "Device Name     state            "
-			   "trans_start      last_rx\n");
+		       "trans_start      last_rx\n");
 		printk(KERN_INFO "%-15s %016lX %016lX %016lX\n",
-			   netdev->name,
-			   netdev->state,
-			   netdev->trans_start,
-			   netdev->last_rx);
+		       netdev->name, netdev->state, netdev->trans_start,
+		       netdev->last_rx);
 	}
 	
 	/* Print Registers */
@@ -503,7 +521,7 @@ static void e1000e_dump(struct e1000_adapter *adapter)
 		e1000_regdump(hw, reginfo);
 	}
 	
-	/* Print TX Ring Summary */
+	/* Print Tx Ring Summary */
 	if (!netdev || !netif_running(netdev))
 		goto exit;
 	
@@ -518,11 +536,11 @@ static void e1000e_dump(struct e1000_adapter *adapter)
 		   buffer_info->next_to_watch,
 		   (u64)buffer_info->time_stamp);
 	
-	/* Print TX Rings */
+	/* Print Tx Rings */
 	if (!netif_msg_tx_done(adapter))
 		goto rx_ring_summary;
 	
-	dev_info(pci_dev_to_dev(adapter->pdev), "TX Rings Dump\n");
+	dev_info(pci_dev_to_dev(adapter->pdev), "Tx Rings Dump\n");
 	
 	/* Transmit Descriptor Formats - DEXT[29] is 0 (Legacy) or 1 (Extended)
 	 *
@@ -587,9 +605,9 @@ static void e1000e_dump(struct e1000_adapter *adapter)
 						   buffer_info->length, true);
 	}
 	
-	/* Print RX Rings Summary */
+	/* Print Rx Rings Summary */
 rx_ring_summary:
-	dev_info(pci_dev_to_dev(adapter->pdev), "RX Rings Summary\n");
+	dev_info(pci_dev_to_dev(adapter->pdev), "Rx Rings Summary\n");
 	printk(KERN_INFO "Queue [NTU] [NTC]\n");
 	printk(KERN_INFO " %5d %5X %5X\n", 0,
 		   rx_ring->next_to_use, rx_ring->next_to_clean);
@@ -598,7 +616,7 @@ rx_ring_summary:
 	if (!netif_msg_rx_status(adapter))
 		goto exit;
 	
-	dev_info(pci_dev_to_dev(adapter->pdev), "RX Rings Dump\n");
+	dev_info(pci_dev_to_dev(adapter->pdev), "Rx Rings Dump\n");
 	switch (adapter->rx_ps_pages) {
 		case 1:
 		case 2:
@@ -864,6 +882,17 @@ E1000_PARAM(CrcStripping, "Enable CRC Stripping, disable if your BMC needs " \
  */
 E1000_PARAM(EEE, "Enable/disable on parts that support the feature");
 
+/* Enable node specific allocation of all data structures, typically
+ *  specific to routing setups, not generally useful.
+ *
+ *  Depends on: NUMA configuration
+ *
+ * Valid Range: -1, 0-32768
+ *
+ * Default Value: -1 (disabled, default to kernel choice of node)
+ */
+E1000_PARAM(Node, "[ROUTING] Node to allocate memory on, default -1");
+
 struct e1000_option {
 	enum { enable_option, range_option, list_option } type;
 	const char *name;
@@ -1043,6 +1072,38 @@ void e1000e_check_options(struct e1000_adapter *adapter)
 			/* Currently only supported on 82579 */
 			hw->dev_spec.ich8lan.eee_disable = !opt.def;
 		}
+	}
+	{ /* configure node specific allocation */
+		static struct e1000_option opt = {
+			.type = range_option,
+			.name = "Node used to allocate memory",
+			.err  = "defaulting to -1 (disabled)",
+#ifdef HAVE_EARLY_VMALLOC_NODE
+			.def  = 0,
+#else
+			.def  = -1,
+#endif
+			.arg  = { .r = { .min = 0,
+                .max = MAX_NUMNODES - 1 } }
+		};
+		int node = opt.def;
+        
+		/* if the default was zero then we need to set the
+		 * default value to an online node, which is not
+		 * necessarily zero, and the constant initializer
+		 * above can't take first_online_node */
+		if (node == 0)
+        /* must set opt.def for validate */
+			opt.def = node = first_online_node;
+        
+        
+		/* check sanity of the value */
+		if ((node != -1) && !node_online(node)) {
+			e_info("ignoring node set to invalid value %d\n", node);
+			node = opt.def;
+		}
+        
+		adapter->node = node;
 	}
 }
 
