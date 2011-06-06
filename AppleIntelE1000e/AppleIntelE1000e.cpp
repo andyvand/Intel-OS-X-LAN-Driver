@@ -1563,18 +1563,15 @@ UInt32 AppleIntelE1000e::outputPacket(mbuf_t skb, void * param)
 	
 	if (enabledForNetif == false) {             // drop the packet.
 		e_dbg("not enabledForNetif in outputPacket.\n");
-		freePacket(skb);
-		return kIOReturnOutputDropped;
+		return kIOReturnOutputStall;
 	}
 
 	if (e1000_desc_unused(adapter->tx_ring) < TBDS_PER_TCB+2){
-		freePacket(skb);
-		return kIOReturnOutputDropped;
+		return kIOReturnOutputStall;
 	}
 	
 	if (mbuf_pkthdr_len(skb) <= 0) {
-		e_dbg("skb <=0 in outputPacket.\n");
-		freePacket(skb);
+		IOLog("skb <=0 in outputPacket.\n");
 		return kIOReturnOutputDropped;
 	}
 
@@ -1586,8 +1583,7 @@ UInt32 AppleIntelE1000e::outputPacket(mbuf_t skb, void * param)
 	count = e1000_tx_map(adapter, skb, first, txMbufCursor);
 	
 	if (count <= 0) {
-		e_dbg("failed to getphysicalsegment in outputPacket.\n");
-		freePacket(skb);
+		IOLog("failed to getphysicalsegment in outputPacket.\n");
 		return kIOReturnOutputDropped;
 	}
 
@@ -2702,7 +2698,7 @@ bool AppleIntelE1000e::e1000_clean_rx_irq_ps()
 			adapter->flags2 |= FLAG2_IS_DISCARDING;
 		
 		if (adapter->flags2 & FLAG2_IS_DISCARDING) {
-			e_dbg("Packet Split buffers didn't pick up the full "
+			IOLog("Packet Split buffers didn't pick up the full "
 			      "packet\n");
 			freePacket(skb);
 			if (staterr & E1000_RXD_STAT_EOP)

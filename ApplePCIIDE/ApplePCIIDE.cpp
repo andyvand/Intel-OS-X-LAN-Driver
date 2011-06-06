@@ -653,7 +653,9 @@ bool ApplePCIIDEChannel::init( IOService *       provider,
         return false;
     }
 	
-    setLocation( getChannelNumber() ? "1" : "0" );
+	char temp[] = {'0',0};
+	temp[0] = '0' + getChannelNumber();
+    setLocation( temp );
 	
     return true;
 }
@@ -915,23 +917,14 @@ bool ApplePCIIDEDriver::start( IOService * provider )
         goto fail;
     }
 	
-    // Must setup these variables inherited from IOPCIATA before it is started.
-	
-    _bmCommandReg   = IOATAIOReg8::withAddress( fBMBaseAddr + BM_COMMAND );
-    _bmStatusReg    = IOATAIOReg8::withAddress( fBMBaseAddr + BM_STATUS );
-    _bmPRDAddresReg = IOATAIOReg32::withAddress( fBMBaseAddr + BM_PRD_TABLE );
-	
-    // Reset bus timings for both drives.
-	
-    initializeHardware();
-    resetBusTimings();
-	
-    // Override P-ATA reporting in IOATAController::start()
+	// Override P-ATA reporting in IOATAController::start()
     // for SystemProfiler.
 	{
 		UInt16 vendor = fProvider->pciConfigRead16(kIOPCIConfigVendorID);
 		UInt16 device = fProvider->pciConfigRead16(kIOPCIConfigDeviceID);
-		
+		if(vendor == PCI_SIL_ID && isSataLink(device) && fChannelNumber >= 2){
+			fBMBaseAddr += 0x200;
+		}
 		if (vendor == PCI_SIL_ID && isSataLink(device) ||
 			vendor == PCI_VIA_ID && device == PCI_VIA_6421 && fChannelNumber < 2)
 		{
@@ -939,6 +932,19 @@ bool ApplePCIIDEDriver::start( IOService * provider )
 						kIOPropertyPhysicalInterconnectTypeSerialATA );
 		}
 	}
+	
+
+    // Must setup these variables inherited from IOPCIATA before it is started.
+	_bmCommandReg   = IOATAIOReg8::withAddress( fBMBaseAddr + BM_COMMAND );
+	_bmStatusReg    = IOATAIOReg8::withAddress( fBMBaseAddr + BM_STATUS );
+	_bmPRDAddresReg = IOATAIOReg32::withAddress( fBMBaseAddr + BM_PRD_TABLE );
+	
+	
+    // Reset bus timings for both drives.
+	
+    initializeHardware();
+    resetBusTimings();
+	
 	
     // Now we are ready to call super::start
 	
@@ -1165,7 +1171,7 @@ IOReturn ApplePCIIDEDriver::synchronousIO( void )
  *
  ---------------------------------------------------------------------------*/
 
-bool ApplePCIIDEDriver::getBMBaseAddress( UInt32   channel,
+bool ApplePCIIDEDriver::getBMBaseAddress( UInt32  channel,
 										 UInt16 * baseAddr )
 {
 	FEDE_LOG("FEDE - %s: %s( %p)\n", getName(), __FUNCTION__, this);
