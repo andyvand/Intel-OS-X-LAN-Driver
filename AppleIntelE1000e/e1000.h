@@ -390,13 +390,17 @@ struct e1000_adapter {
 
 	bool fc_autoneg;
 
+#ifndef HAVE_ETHTOOL_SET_PHYS_ID
 	unsigned long led_status;
 
+#endif
 	unsigned int flags;
 	unsigned int flags2;
 	struct work_struct downshift_task;
 	struct work_struct update_phy_task;
+#ifndef HAVE_ETHTOOL_SET_PHYS_ID
 	struct work_struct led_blink_task;
+#endif
 	struct work_struct print_hang_task;
 	u32 *config_space;
 
@@ -458,8 +462,9 @@ struct e1000_info {
 #define FLAG2_HAS_PHY_STATS               (1 << 4)
 #define FLAG2_HAS_EEE                     (1 << 5)
 #define FLAG2_DMA_BURST                   (1 << 6)
-#define FLAG2_CHECK_PHY_HANG              (1 << 7)
+#define FLAG2_DISABLE_ASPM_L0S            (1 << 7)
 #define FLAG2_DISABLE_AIM                 (1 << 8)
+#define FLAG2_CHECK_PHY_HANG              (1 << 9)
 
 #define E1000_RX_DESC_PS(R, i)	    \
 	(&(((union e1000_rx_desc_packet_split *)((R).desc))[i]))
@@ -486,7 +491,9 @@ extern const char e1000e_driver_version[];
 
 extern void e1000e_check_options(struct e1000_adapter *adapter);
 extern void e1000e_set_ethtool_ops(struct net_device *netdev);
+#ifndef HAVE_ETHTOOL_SET_PHYS_ID
 extern void e1000e_led_blink_task(struct work_struct *work);
+#endif
 #ifdef ETHTOOL_OPS_COMPAT
 extern int ethtool_ioctl(struct ifreq *ifr);
 #endif
@@ -563,7 +570,7 @@ extern s32 e1000e_valid_led_default(struct e1000_hw *hw, u16 *data);
 extern void e1000e_config_collision_dist(struct e1000_hw *hw);
 extern s32 e1000e_config_fc_after_link_up(struct e1000_hw *hw);
 extern s32 e1000e_force_mac_fc(struct e1000_hw *hw);
-extern s32 e1000e_blink_led(struct e1000_hw *hw);
+extern s32 e1000e_blink_led_generic(struct e1000_hw *hw);
 extern void e1000_write_vfta_generic(struct e1000_hw *hw, u32 offset, u32 value);
 extern void e1000e_reset_adaptive(struct e1000_hw *hw);
 extern void e1000e_update_adaptive(struct e1000_hw *hw);

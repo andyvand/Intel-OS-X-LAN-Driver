@@ -53,6 +53,7 @@ s32  e1000e_phy_hw_reset_generic(struct e1000_hw *hw);
 s32  e1000e_phy_reset_dsp(struct e1000_hw *hw);
 s32  e1000e_read_kmrn_reg(struct e1000_hw *hw, u32 offset, u16 *data);
 s32  e1000e_read_kmrn_reg_locked(struct e1000_hw *hw, u32 offset, u16 *data);
+s32  e1000_set_page_igp(struct e1000_hw *hw, u16 page);
 s32  e1000e_read_phy_reg_igp(struct e1000_hw *hw, u32 offset, u16 *data);
 s32  e1000e_read_phy_reg_igp_locked(struct e1000_hw *hw, u32 offset, u16 *data);
 s32  e1000e_read_phy_reg_m88(struct e1000_hw *hw, u32 offset, u16 *data);
@@ -72,6 +73,8 @@ enum e1000_phy_type e1000e_get_phy_type_from_id(u32 phy_id);
 s32  e1000e_determine_phy_address(struct e1000_hw *hw);
 s32  e1000e_write_phy_reg_bm(struct e1000_hw *hw, u32 offset, u16 data);
 s32  e1000e_read_phy_reg_bm(struct e1000_hw *hw, u32 offset, u16 *data);
+s32  e1000_enable_phy_wakeup_reg_access_bm(struct e1000_hw *hw, u16 *phy_reg);
+s32  e1000_disable_phy_wakeup_reg_access_bm(struct e1000_hw *hw, u16 *phy_reg);
 s32  e1000e_read_phy_reg_bm2(struct e1000_hw *hw, u32 offset, u16 *data);
 s32  e1000e_write_phy_reg_bm2(struct e1000_hw *hw, u32 offset, u16 data);
 void e1000_power_up_phy_copper(struct e1000_hw *hw);
@@ -80,8 +83,10 @@ s32  e1000e_read_phy_reg_mdic(struct e1000_hw *hw, u32 offset, u16 *data);
 s32  e1000e_write_phy_reg_mdic(struct e1000_hw *hw, u32 offset, u16 data);
 s32  e1000_read_phy_reg_hv(struct e1000_hw *hw, u32 offset, u16 *data);
 s32  e1000_read_phy_reg_hv_locked(struct e1000_hw *hw, u32 offset, u16 *data);
+s32  e1000_read_phy_reg_page_hv(struct e1000_hw *hw, u32 offset, u16 *data);
 s32  e1000_write_phy_reg_hv(struct e1000_hw *hw, u32 offset, u16 data);
 s32  e1000_write_phy_reg_hv_locked(struct e1000_hw *hw, u32 offset, u16 data);
+s32  e1000_write_phy_reg_page_hv(struct e1000_hw *hw, u32 offset, u16 data);
 s32  e1000_link_stall_workaround_hv(struct e1000_hw *hw);
 s32  e1000_copper_link_setup_82577(struct e1000_hw *hw);
 s32  e1000_check_polarity_82577(struct e1000_hw *hw);
@@ -115,6 +120,7 @@ s32  e1000_get_cable_length_82577(struct e1000_hw *hw);
 #define BM_WUC_ENABLE_REG                 17
 #define BM_WUC_ENABLE_BIT                 (1 << 2)
 #define BM_WUC_HOST_WU_BIT                (1 << 4)
+#define BM_WUC_ME_WU_BIT                  (1 << 5)
 
 #define PHY_UPPER_SHIFT                   21
 #define BM_PHY_REG(page, reg) \
@@ -227,6 +233,7 @@ s32  e1000_get_cable_length_82577(struct e1000_hw *hw);
 #define E1000_KMRNCTRLSTA_DIAG_OFFSET     0x3    /* Kumeran Diagnostic */
 #define E1000_KMRNCTRLSTA_TIMEOUTS        0x4    /* Kumeran Timeouts */
 #define E1000_KMRNCTRLSTA_INBAND_PARAM    0x9    /* Kumeran InBand Parameters */
+#define E1000_KMRNCTRLSTA_IBIST_DISABLE   0x0200 /* Kumeran IBIST Disable */
 #define E1000_KMRNCTRLSTA_DIAG_NELPBK     0x1000 /* Nearend Loopback mode */
 #define E1000_KMRNCTRLSTA_K1_CONFIG        0x7
 #define E1000_KMRNCTRLSTA_K1_ENABLE        0x0002

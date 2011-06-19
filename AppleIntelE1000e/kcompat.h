@@ -141,6 +141,7 @@ struct work_struct {
 #define NET_IP_ALIGN	2
 
 #define	PCI_EXP_LNKCTL	16
+#define PCIE_LINK_STATE_L0S     1
 #define PCIE_LINK_STATE_L1 2
 
 #define MAX_NUMNODES 1
@@ -172,6 +173,8 @@ static inline unsigned int _kc_ether_crc_le(int length, unsigned char *data)
 #define udelay(x)	IODelay(x)
 
 #define mdelay(x)	for(int i = 0; i < x; i++ )udelay(1000)
+#define DIV_ROUND_UP(n,d) (((n) + (d) - 1) / (d))
+#define usleep_range(min, max)	msleep(DIV_ROUND_UP(min, 1000))	
 
 
 /*****************************************************************************/

@@ -1087,8 +1087,15 @@ bool AppleIntelE1000e::start(IOService* provider)
 		if (ei == NULL) {
 			break;
 		}
-		if (ei->flags2 & FLAG2_DISABLE_ASPM_L1)
-			e1000e_disable_aspm(pciDevice,PCIE_LINK_STATE_L1);
+        {
+            u16 aspm_disable_flag = 0;
+            if (ei->flags2 & FLAG2_DISABLE_ASPM_L0S)
+                aspm_disable_flag = PCIE_LINK_STATE_L0S;
+            if (ei->flags2 & FLAG2_DISABLE_ASPM_L1)
+                aspm_disable_flag |= PCIE_LINK_STATE_L1;
+            if (aspm_disable_flag)
+                e1000e_disable_aspm(pciDevice, aspm_disable_flag);
+        }
 		
 		adapter->ei = ei;
 		adapter->pba = ei->pba;
@@ -1520,7 +1527,7 @@ void AppleIntelE1000e::e1000e_down()
 	ew32(TCTL, tctl);
 	/* flush both disables and wait for them to finish */
 	e1e_flush();
-	msleep(10);
+	usleep_range(10000, 20000);
 	
 #ifdef CONFIG_E1000E_NAPI
 	napi_disable(&adapter->napi);
@@ -1534,16 +1541,16 @@ void AppleIntelE1000e::e1000e_down()
 	
 	setLinkStatus( kIONetworkLinkValid );	// Valid sans kIONetworkLinkActive
 	preLinkStatus = 0;
+    
+	e1000e_flush_descriptors(adapter);
+	e1000_clean_tx_ring();
+	e1000_clean_rx_ring();
+    
 
 	adapter->link_speed = 0;
 	adapter->link_duplex = 0;
 	
 	e1000e_reset(adapter);
-
-	e1000e_flush_descriptors(adapter);
-
-	e1000_clean_tx_ring();
-	e1000_clean_rx_ring();
 
 	/*
 	 * TODO: for power management, we could drop the link and
@@ -2203,7 +2210,7 @@ void AppleIntelE1000e::e1000_configure_rx()
 	rctl = er32(RCTL);
 	ew32(RCTL, rctl & ~E1000_RCTL_EN);
 	e1e_flush();
-	msleep(10);
+	usleep_range(10000, 20000);
 
 	if (adapter->flags2 & FLAG2_DMA_BURST) {
 		/*
@@ -3308,10 +3315,11 @@ void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 		else if(adapter->link_speed == SPEED_10)
 			speed = 10 * MBit;
 		setLinkStatus(kIONetworkLinkValid | kIONetworkLinkActive, getCurrentMedium(), speed);
+#if 0	// 1.3.17, netif_wake_queue
 		if (transmitQueue) {
 			transmitQueue->start();
 		}
-		
+#endif	
 	} else {
 		
 		if (link != preLinkStatus) {
