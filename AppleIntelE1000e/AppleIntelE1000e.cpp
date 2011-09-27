@@ -3831,10 +3831,12 @@ IOReturn AppleIntelE1000e::getPacketFilters(const OSSymbol * group, UInt32 * fil
 		*filters = kIOEthernetWakeOnMagicPacket;
 		return kIOReturnSuccess;   
 	}
+#if defined(MAC_OS_X_VERSION_10_6)
 	if(group == gIOEthernetDisabledWakeOnLANFilterGroup){
 		*filters = 0;
 		return kIOReturnSuccess;   
 	}
+#endif
 	return super::getPacketFilters(group, filters);
 }
 

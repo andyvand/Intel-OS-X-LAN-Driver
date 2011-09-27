@@ -133,7 +133,7 @@ struct work_struct {
 	struct timer_list timer;
 };
 
-typedef unsigned gfp_t;
+//typedef unsigned gfp_t;
 
 #define ETH_ALEN		6			/* Octets in one ethernet addr   */
 #define ETH_HLEN		14			/* Total octets in header.       */
