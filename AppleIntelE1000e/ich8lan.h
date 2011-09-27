@@ -61,6 +61,8 @@
 #define E1000_ICH_FWSM_DISSW             0x10000000 /* FW Disables SW Writes */
 /* FW established a valid mode */
 #define E1000_ICH_FWSM_FW_VALID          0x00008000
+#define E1000_ICH_FWSM_PCIM2PCI          0x01000000 /* ME PCIm-to-PCI active */
+#define E1000_ICH_FWSM_PCIM2PCI_COUNT    2000
 
 #define E1000_ICH_MNG_IAMT_MODE          0x2
 
@@ -168,6 +170,15 @@
 
 #define E1000_FCRTV_PCH     0x05F40 /* PCH Flow Control Refresh Timer Value */
 
+/*
+ * For ICH, the name used for NVM word 17h is LED1 Config.
+ * For PCH, the word was re-named to OEM Config.
+ */
+#define E1000_NVM_LED1_CONFIG             0x17   /* NVM LED1/LPLU Config Word */
+#define E1000_NVM_LED1_CONFIG_LPLU_NONDOA 0x0400 /* NVM LPLU in non-D0a Bit */
+#define E1000_NVM_OEM_CONFIG              E1000_NVM_LED1_CONFIG
+#define E1000_NVM_OEM_CONFIG_LPLU_NONDOA  E1000_NVM_LED1_CONFIG_LPLU_NONDOA
+
 #define E1000_NVM_K1_CONFIG 0x1B /* NVM K1 Config Word */
 #define E1000_NVM_K1_ENABLE 0x1  /* NVM Enable K1 bit */
 
@@ -205,8 +216,9 @@
 #define SW_FLAG_TIMEOUT    1000 /* SW Semaphore flag timeout in milliseconds */
 
 /* PHY Low Power Idle Control */
-#define I82579_LPI_CTRL         PHY_REG(772, 20)
-#define I82579_LPI_CTRL_ENABLE_MASK     0x6000
+#define I82579_LPI_CTRL                         PHY_REG(772, 20)
+#define I82579_LPI_CTRL_ENABLE_MASK             0x6000
+#define I82579_LPI_CTRL_FORCE_PLL_LOCK_COUNT    0x80
 
 /* EMI Registers */
 #define I82579_EMI_ADDR         0x10

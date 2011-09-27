@@ -98,7 +98,9 @@ public:
 	virtual IOReturn setMaxPacketSize (UInt32 maxSize);
 	virtual IOReturn getMaxPacketSize (UInt32 *maxSize) const;
 	virtual IOReturn getMinPacketSize (UInt32 *minSize) const;
-	
+    virtual IOReturn setWakeOnMagicPacket(bool active);
+    virtual IOReturn getPacketFilters(const OSSymbol * group, UInt32 * filters) const;
+
 private:
 	IOWorkLoop* workLoop;
 	IOPCIDevice* pciDevice;

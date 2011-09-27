@@ -167,11 +167,6 @@ enum e1000_boards {
 	board_pch2lan,
 };
 
-struct e1000_queue_stats {
-	u64 packets;
-	u64 bytes;
-};
-
 struct e1000_ps_page {
 #ifdef	__APPLE__
 	IOBufferMemoryDescriptor* pool;
@@ -234,7 +229,6 @@ struct e1000_ring {
 #endif /* CONFIG_E1000E_MSIX */
 	struct sk_buff *rx_skb_top;
 
-	struct e1000_queue_stats stats;
 };
 
 #ifdef SIOCGMIIPHY
@@ -262,7 +256,11 @@ struct e1000_adapter {
 
 	const struct e1000_info *ei;
 
+#ifdef HAVE_VLAN_RX_REGISTER
 	struct vlan_group *vlgrp;
+#else
+	unsigned long active_vlans[BITS_TO_LONGS(VLAN_N_VID)];
+#endif
 	u32 bd_number;
 	u32 rx_buffer_len;
 	u16 mng_vlan_id;
@@ -328,7 +326,7 @@ struct e1000_adapter {
 						____cacheline_aligned_in_smp;
 #endif
 	void (*alloc_rx_buf) (struct e1000_adapter *adapter,
-			      int cleaned_count);
+			      int cleaned_count, gfp_t gfp);
 #endif
 	struct e1000_ring *rx_ring;
 
@@ -465,11 +463,14 @@ struct e1000_info {
 #define FLAG2_DISABLE_ASPM_L0S            (1 << 7)
 #define FLAG2_DISABLE_AIM                 (1 << 8)
 #define FLAG2_CHECK_PHY_HANG              (1 << 9)
+#define FLAG2_NO_DISABLE_RX               (1 << 10)
+#define FLAG2_PCIM2PCI_ARBITER_WA         (1 << 11)
 
 #define E1000_RX_DESC_PS(R, i)	    \
 	(&(((union e1000_rx_desc_packet_split *)((R).desc))[i]))
+#define E1000_RX_DESC_EXT(R, i)	    \
+(&(((union e1000_rx_desc_extended *)((R).desc))[i]))
 #define E1000_GET_DESC(R, i, type)	(&(((struct type *)((R).desc))[i]))
-#define E1000_RX_DESC(R, i)		E1000_GET_DESC(R, i, e1000_rx_desc)
 #define E1000_TX_DESC(R, i)		E1000_GET_DESC(R, i, e1000_tx_desc)
 #define E1000_CONTEXT_DESC(R, i)	E1000_GET_DESC(R, i, e1000_context_desc)
 

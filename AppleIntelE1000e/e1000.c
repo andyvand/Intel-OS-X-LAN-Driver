@@ -123,8 +123,6 @@ static s32 e1000_get_variants_82571(struct e1000_adapter *adapter)
 			break;
 			
 		case e1000_82573:
-		case e1000_82574:
-		case e1000_82583:
 			if (pdev->device == E1000_DEV_ID_82573L) {
 				adapter->flags |= FLAG_HAS_JUMBO_FRAMES;
 				adapter->max_hw_frame_size = DEFAULT_JUMBO;
@@ -206,7 +204,8 @@ static struct e1000_info e1000_82574_info = {
 	| FLAG_HAS_AMT
 	| FLAG_HAS_CTRLEXT_ON_LOAD,
 	.flags2			= FLAG2_CHECK_PHY_HANG
-					| FLAG2_DISABLE_ASPM_L0S,
+					| FLAG2_DISABLE_ASPM_L0S
+					| FLAG2_NO_DISABLE_RX,
 	.pba			= 32,
 	.max_hw_frame_size	= DEFAULT_JUMBO,
 	.init_ops		= e1000_init_function_pointers_82571,
@@ -221,10 +220,12 @@ static struct e1000_info e1000_82583_info = {
 	| FLAG_RX_CSUM_ENABLED
 	| FLAG_HAS_SMART_POWER_DOWN
 	| FLAG_HAS_AMT
+	| FLAG_HAS_JUMBO_FRAMES
 	| FLAG_HAS_CTRLEXT_ON_LOAD,
-	.flags2			= FLAG2_DISABLE_ASPM_L0S,
+	.flags2			= FLAG2_DISABLE_ASPM_L0S
+					| FLAG2_NO_DISABLE_RX,
 	.pba			= 32,
-	.max_hw_frame_size	= ETH_FRAME_LEN + ETH_FCS_LEN,
+	.max_hw_frame_size	= DEFAULT_JUMBO,
 	.init_ops		= e1000_init_function_pointers_82571,
 	.get_variants		= e1000_get_variants_82571,
 };
@@ -269,6 +270,11 @@ static s32 e1000_get_variants_ich8lan(struct e1000_adapter *adapter)
 	if ((adapter->hw.mac.type == e1000_ich8lan) &&
 	    (adapter->hw.phy.type == e1000_phy_igp_3))
 		adapter->flags |= FLAG_LSC_GIG_SPEED_DROP;
+    
+	/* Enable workaround for 82579 w/ ME enabled */
+	if ((adapter->hw.mac.type == e1000_pch2lan) &&
+		(er32(FWSM) & E1000_ICH_FWSM_FW_VALID))
+		adapter->flags2 |= FLAG2_PCIM2PCI_ARBITER_WA;
     
 	return 0;
 }
@@ -490,7 +496,7 @@ static void e1000e_dump(struct e1000_adapter *adapter)
 	struct e1000_buffer *buffer_info;
 	struct e1000_ring *rx_ring = adapter->rx_ring;
 	union e1000_rx_desc_packet_split *rx_desc_ps;
-	struct e1000_rx_desc *rx_desc;
+	struct e1000_rx_desc_extended *rx_desc;
 	struct my_u1 {
 		u64 a;
 		u64 b;
@@ -695,41 +701,70 @@ rx_ring_summary:
 			break;
 		default:
 		case 0:
-			/* Legacy Receive Descriptor Format
+			/* Extended Receive Descriptor (Read) Format
 			 *
-			 * +-----------------------------------------------------+
-			 * |                Buffer Address [63:0]                |
-			 * +-----------------------------------------------------+
-			 * | VLAN Tag | Errors | Status 0 | Packet csum | Length |
-			 * +-----------------------------------------------------+
-			 * 63       48 47    40 39      32 31         16 15      0
+			 *   +-----------------------------------------------------+
+			 * 0 |                Buffer Address [63:0]                |
+			 *   +-----------------------------------------------------+
+			 * 8 |                      Reserved                       |
+			 *   +-----------------------------------------------------+
 			 */
-			printk(KERN_INFO "Rl[desc]     [address 63:0  ] "
-				   "[vl er S cks ln] [bi->dma       ] [bi->skb] "
-				   "<-- Legacy format\n");
-			for (i = 0; rx_ring->desc && (i < rx_ring->count); i++) {
-				rx_desc = E1000_RX_DESC(*rx_ring, i);
+			printk(KERN_INFO "R  [desc]      [buf addr 63:0 ] "
+				   "[reserved 63:0 ] [bi->dma       ] "
+				   "[bi->skb] <-- Ext (Read) format\n");
+			/* Extended Receive Descriptor (Write-Back) Format
+			 *
+			 *   63       48 47    32 31    24 23            4 3        0
+			 *   +------------------------------------------------------+
+			 *   |     RSS Hash      |        |               |         |
+			 * 0 +-------------------+  Rsvd  |   Reserved    | MRQ RSS |
+			 *   | Packet   | IP     |        |               |  Type   |
+			 *   | Checksum | Ident  |        |               |         |
+			 *   +------------------------------------------------------+
+			 * 8 | VLAN Tag | Length | Extended Error | Extended Status |
+			 *   +------------------------------------------------------+
+			 *   63       48 47    32 31            20 19               0
+			 */
+			printk(KERN_INFO "RWB[desc]      [cs ipid    mrq] "
+				   "[vt   ln xe  xs] "
+				   "[bi->skb] <-- Ext (Write-Back) format\n");
+			
+			for (i = 0; i < rx_ring->count; i++) {
 				buffer_info = &rx_ring->buffer_info[i];
-				u0 = (struct my_u0 *)rx_desc;
-				printk(KERN_INFO "Rl[0x%03X]    %016llX %016llX "
-					   "%016llX %p",
-					   i, le64_to_cpu(u0->a), le64_to_cpu(u0->b),
-					   (u64)buffer_info->dma, buffer_info->skb);
+				rx_desc = E1000_RX_DESC_EXT(*rx_ring, i);
+				u1 = (struct my_u1 *)rx_desc;
+				staterr = le32_to_cpu(rx_desc->wb.upper.status_error);
+				if (staterr & E1000_RXD_STAT_DD) {
+					/* Descriptor Done */
+					printk(KERN_INFO "RWB[0x%03X]     %016llX "
+						   "%016llX ---------------- %p", i,
+						   (unsigned long long)le64_to_cpu(u1->a),
+						   (unsigned long long)le64_to_cpu(u1->b),
+						   buffer_info->skb);
+				} else {
+					printk(KERN_INFO "R  [0x%03X]     %016llX "
+						   "%016llX %016llX %p", i,
+						   (unsigned long long)le64_to_cpu(u1->a),
+						   (unsigned long long)le64_to_cpu(u1->b),
+						   (unsigned long long)buffer_info->dma,
+						   buffer_info->skb);
+					
+					if (netif_msg_pktdata(adapter))
+						print_hex_dump(KERN_INFO, "",
+									   DUMP_PREFIX_ADDRESS, 16, 1,
+									   phys_to_virt(buffer_info->dma),
+									   adapter->rx_buffer_len, true);
+				}
+				
 				if (i == rx_ring->next_to_use)
 					printk(KERN_CONT " NTU\n");
 				else if (i == rx_ring->next_to_clean)
 					printk(KERN_CONT " NTC\n");
 				else
 					printk(KERN_CONT "\n");
-				
-				if (netif_msg_pktdata(adapter))
-					print_hex_dump(KERN_INFO, "",
-								   DUMP_PREFIX_ADDRESS,
-								   16, 1, phys_to_virt(buffer_info->dma),
-								   adapter->rx_buffer_len, true);
 			}
 	}
-	
+
 exit:
 	return;
 }

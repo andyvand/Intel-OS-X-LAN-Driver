@@ -507,6 +507,7 @@ static s32 __e1000_read_kmrn_reg(struct e1000_hw *hw, u32 offset, u16 *data,
 	kmrnctrlsta = ((offset << E1000_KMRNCTRLSTA_OFFSET_SHIFT) &
 	               E1000_KMRNCTRLSTA_OFFSET) | E1000_KMRNCTRLSTA_REN;
 	ew32(KMRNCTRLSTA, kmrnctrlsta);
+	e1e_flush();
 
 	udelay(2);
 
@@ -579,6 +580,7 @@ static s32 __e1000_write_kmrn_reg(struct e1000_hw *hw, u32 offset, u16 data,
 	kmrnctrlsta = ((offset << E1000_KMRNCTRLSTA_OFFSET_SHIFT) &
 	               E1000_KMRNCTRLSTA_OFFSET) | data;
 	ew32(KMRNCTRLSTA, kmrnctrlsta);
+	e1e_flush();
 
 	udelay(2);
 
@@ -639,6 +641,37 @@ s32 e1000_copper_link_setup_82577(struct e1000_hw *hw)
 	phy_data |= I82577_CFG_ENABLE_DOWNSHIFT;
 
 	ret_val = e1e_wphy(hw, I82577_CFG_REG, phy_data);
+	if (ret_val)
+		goto out;
+
+	/* Resolve Master/Slave mode */
+	ret_val = e1e_rphy(hw, PHY_1000T_CTRL, &phy_data);
+	if (ret_val)
+		goto out;
+
+	/* load defaults for future use */
+	hw->phy.original_ms_type = (phy_data & CR_1000T_MS_ENABLE) ?
+				   ((phy_data & CR_1000T_MS_VALUE) ?
+				   e1000_ms_force_master :
+				   e1000_ms_force_slave) : e1000_ms_auto;
+
+	switch (hw->phy.ms_type) {
+	case e1000_ms_force_master:
+		phy_data |= (CR_1000T_MS_ENABLE | CR_1000T_MS_VALUE);
+		break;
+	case e1000_ms_force_slave:
+		phy_data |= CR_1000T_MS_ENABLE;
+		phy_data &= ~(CR_1000T_MS_VALUE);
+		break;
+	case e1000_ms_auto:
+		phy_data &= ~CR_1000T_MS_ENABLE;
+	default:
+		break;
+	}
+
+	ret_val = e1e_wphy(hw, PHY_1000T_CTRL, phy_data);
+	if (ret_val)
+		goto out;
 
 out:
 	return ret_val;

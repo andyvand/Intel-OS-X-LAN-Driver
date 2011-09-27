@@ -94,7 +94,7 @@ s32  e1000_get_phy_info_82577(struct e1000_hw *hw);
 s32  e1000_phy_force_speed_duplex_82577(struct e1000_hw *hw);
 s32  e1000_get_cable_length_82577(struct e1000_hw *hw);
 
-#define E1000_MAX_PHY_ADDR                4
+#define E1000_MAX_PHY_ADDR                8
 
 /* IGP01E1000 Specific Registers */
 #define IGP01E1000_PHY_PORT_CONFIG        0x10 /* Port Config */
@@ -111,7 +111,6 @@ s32  e1000_get_cable_length_82577(struct e1000_hw *hw);
 
 /* BM/HV Specific Registers */
 #define BM_PORT_CTRL_PAGE                 769
-#define BM_PORT_GEN_CFG_REG               PHY_REG(BM_PORT_CTRL_PAGE, 17)
 #define BM_PCIE_PAGE                      770
 #define BM_WUC_PAGE                       800
 #define BM_WUC_ADDRESS_OPCODE             0x11
@@ -261,5 +260,29 @@ s32  e1000_get_cable_length_82577(struct e1000_hw *hw);
 #define IFE_PMC_MDIX_STATUS      0x0020 /* 1=MDI-X, 0=MDI */
 #define IFE_PMC_FORCE_MDIX       0x0040 /* 1=force MDI-X, 0=force MDI */
 #define IFE_PMC_AUTO_MDIX        0x0080 /* 1=enable auto MDI/MDI-X, 0=disable */
+
+/* SFP modules ID memory locations */
+#define E1000_SFF_IDENTIFIER_OFFSET 0x00
+#define E1000_SFF_IDENTIFIER_SFF    0x02
+#define E1000_SFF_IDENTIFIER_SFP    0x03
+
+#define E1000_SFF_ETH_FLAGS_OFFSET  0x06
+/* Flags for SFP modules compatible with ETH up to 1Gb */
+struct sfp_e1000_flags {
+	u8 e1000_base_sx:1;
+	u8 e1000_base_lx:1;
+	u8 e1000_base_cx:1;
+	u8 e1000_base_t:1;
+	u8 e100_base_lx:1;
+	u8 e100_base_fx:1;
+	u8 e10_base_bx10:1;
+	u8 e10_base_px:1;
+};
+
+/* Vendor OUIs: format of OUI is 0x[byte0][byte1][byte2][00] */
+#define E1000_SFF_VENDOR_OUI_TYCO     0x00407600
+#define E1000_SFF_VENDOR_OUI_FTL      0x00906500
+#define E1000_SFF_VENDOR_OUI_AVAGO    0x00176A00
+#define E1000_SFF_VENDOR_OUI_INTEL    0x001B2100
 
 #endif

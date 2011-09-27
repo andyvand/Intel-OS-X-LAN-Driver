@@ -59,6 +59,14 @@
 
 #define ALIGN(x,a) (((x)+(a)-1)&~((a)-1))
 
+#define BITS_PER_LONG   32
+
+#define BITS_TO_LONGS(bits) \
+(((bits)+BITS_PER_LONG-1)/BITS_PER_LONG)
+
+/* GFP_ATOMIC means both !wait (__GFP_WAIT not set) and use emergency pool */
+#define GFP_ATOMIC      0
+
 struct net_device {
 	u32 mtu;
 };
@@ -125,6 +133,7 @@ struct work_struct {
 	struct timer_list timer;
 };
 
+typedef unsigned gfp_t;
 
 #define ETH_ALEN		6			/* Octets in one ethernet addr   */
 #define ETH_HLEN		14			/* Total octets in header.       */
@@ -137,6 +146,7 @@ struct work_struct {
 #define VLAN_ETH_ALEN	6			/* Octets in one ethernet addr   */
 #define VLAN_ETH_HLEN	18			/* Total octets in header.       */
 #define VLAN_ETH_ZLEN	64			/* Min. octets in frame sans FCS */
+#define VLAN_N_VID              4096
 
 #define NET_IP_ALIGN	2
 
@@ -148,6 +158,21 @@ struct work_struct {
 #define first_online_node 0
 #define node_online(node) ((node) == 0)
 #define ether_crc_le(length, data) _kc_ether_crc_le(length, data)
+#ifndef is_zero_ether_addr
+#define is_zero_ether_addr _kc_is_zero_ether_addr
+static inline int _kc_is_zero_ether_addr(const u8 *addr)
+{
+	return !(addr[0] | addr[1] | addr[2] | addr[3] | addr[4] | addr[5]);
+}
+#endif
+#ifndef is_multicast_ether_addr
+#define is_multicast_ether_addr _kc_is_multicast_ether_addr
+static inline int _kc_is_multicast_ether_addr(const u8 *addr)
+{
+	return addr[0] & 0x01;
+}
+#endif /* is_multicast_ether_addr */
+
 static inline unsigned int _kc_ether_crc_le(int length, unsigned char *data)
 {
 	unsigned int crc = 0xffffffff;  /* Initial value. */
@@ -176,6 +201,7 @@ static inline unsigned int _kc_ether_crc_le(int length, unsigned char *data)
 #define DIV_ROUND_UP(n,d) (((n) + (d) - 1) / (d))
 #define usleep_range(min, max)	msleep(DIV_ROUND_UP(min, 1000))	
 
+#define schedule_work(a)
 
 /*****************************************************************************/
 

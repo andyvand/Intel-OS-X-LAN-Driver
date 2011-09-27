@@ -531,7 +531,6 @@ void e1000e_reset(struct e1000_adapter *adapter)
 			fc->refresh_time = 0x1000;
 			break;
 		case e1000_pch2lan:
-			/* TODO: validate with these values, adjust as needed */
 			fc->high_water = 0x05C20;
 			fc->low_water = 0x05048;
 			fc->pause_time = 0x0650;
@@ -629,6 +628,62 @@ static void e1000_update_mc_addr_list(struct e1000_hw *hw, u8 *mc_addr_list,
 	hw->mac.ops.update_mc_addr_list(hw, mc_addr_list, mc_addr_count);
 }
 
+/**
+ * e1000e_update_tail_wa - helper function for e1000e_update_[rt]dt_wa()
+ * @hw: pointer to the HW structure
+ * @tail: address of tail descriptor register
+ * @i: value to write to tail descriptor register
+ *
+ * When updating the tail register, the ME could be accessing Host CSR
+ * registers at the same time.  Normally, this is handled in h/w by an
+ * arbiter but on some parts there is a bug that acknowledges Host accesses
+ * later than it should which could result in the descriptor register to
+ * have an incorrect value.  Workaround this by checking the FWSM register
+ * which has bit 24 set while ME is accessing Host CSR registers, wait
+ * if it is set and try again a number of times.
+ **/
+static inline s32 e1000e_update_tail_wa(struct e1000_hw *hw, u8 __iomem *tail,
+										unsigned int i)
+{
+	unsigned int j = 0;
+	
+	while ((j++ < E1000_ICH_FWSM_PCIM2PCI_COUNT) &&
+	       (er32(FWSM) & E1000_ICH_FWSM_PCIM2PCI))
+		udelay(50);
+	
+	writel(i, tail);
+	
+	if ((j == E1000_ICH_FWSM_PCIM2PCI_COUNT) && (i != readl(tail)))
+		return E1000_ERR_SWFW_SYNC;
+	
+	return 0;
+}
+
+static void e1000e_update_rdt_wa(struct e1000_adapter *adapter, unsigned int i)
+{
+	u8 __iomem *tail = (adapter->hw.hw_addr + adapter->rx_ring->tail);
+	struct e1000_hw *hw =  &adapter->hw;
+	
+	if (e1000e_update_tail_wa(hw, tail, i)) {
+		u32 rctl = er32(RCTL);
+		ew32(RCTL, rctl & ~E1000_RCTL_EN);
+		e_err("ME firmware caused invalid RDT - resetting\n");
+		schedule_work(&adapter->reset_task);
+	}
+}
+
+static void e1000e_update_tdt_wa(struct e1000_adapter *adapter, unsigned int i)
+{
+	u8 __iomem *tail = (adapter->hw.hw_addr + adapter->tx_ring->tail);
+	struct e1000_hw *hw =  &adapter->hw;
+	
+	if (e1000e_update_tail_wa(hw, tail, i)) {
+		u32 tctl = er32(TCTL);
+		ew32(TCTL, tctl & ~E1000_TCTL_EN);
+		e_err("ME firmware caused invalid TDT - resetting\n");
+		schedule_work(&adapter->reset_task);
+	}
+}
 
 /**
  * e1000_update_itr - update the dynamic ITR value based on statistics
@@ -882,7 +937,10 @@ static void e1000_tx_queue(struct e1000_adapter *adapter,
 	wmb();
 	
 	tx_ring->next_to_use = i;
-	writel(i, adapter->hw.hw_addr + tx_ring->tail);
+	if (adapter->flags2 & FLAG2_PCIM2PCI_ARBITER_WA)
+		e1000e_update_tdt_wa(adapter, i);
+	else
+		writel(i, adapter->hw.hw_addr + tx_ring->tail);
 	/*
 	 * we need this if more than one processor can write to our tail
 	 * at a time, it synchronizes IO on IA64/Altix systems
@@ -1243,6 +1301,7 @@ bool AppleIntelE1000e::start(IOService* provider)
 		
 		/* initialize the wol settings based on the eeprom settings */
 		adapter->wol = adapter->eeprom_wol;
+		e_info("AppleIntelE1000e:WOL = %d\n", (int)adapter->wol);
 		//device_set_wakeup_enable(&adapter->pdev->dev, adapter->wol);
 		
 		/* save off EEPROM version number */
@@ -1513,7 +1572,8 @@ void AppleIntelE1000e::e1000e_down()
 	
 	/* disable receives in the hardware */
 	rctl = er32(RCTL);
-	ew32(RCTL, rctl & ~E1000_RCTL_EN);
+	if (!(adapter->flags2 & FLAG2_NO_DISABLE_RX))
+		ew32(RCTL, rctl & ~E1000_RCTL_EN);
 	/* flush and sleep below */
 
 	if (transmitQueue) {
@@ -1525,6 +1585,7 @@ void AppleIntelE1000e::e1000e_down()
 	tctl = er32(TCTL);
 	tctl &= ~E1000_TCTL_EN;
 	ew32(TCTL, tctl);
+
 	/* flush both disables and wait for them to finish */
 	e1e_flush();
 	usleep_range(10000, 20000);
@@ -2091,12 +2152,35 @@ void AppleIntelE1000e::e1000_setup_rctl()
 		rctl &= ~E1000_RCTL_LPE;
 	else
 		rctl |= E1000_RCTL_LPE;
-	
+
 	/* Some systems expect that the CRC is included in SMBUS traffic.  The
 	 * hardware strips the CRC before sending to both SMBUS (BMC) and to
 	 * host memory when this is enabled */
 	if (adapter->flags2 & FLAG2_CRC_STRIPPING)
 		rctl |= E1000_RCTL_SECRC;
+	
+	/* Workaround Si errata on 82577 PHY - configure IPG for jumbos */
+	if ((hw->phy.type == e1000_phy_82577) && (rctl & E1000_RCTL_LPE)) {
+		u32 mac_data;
+		u16 phy_data;
+		
+		e1e_rphy(hw, PHY_REG(770, 26), &phy_data);
+		phy_data &= 0xfff8;
+		phy_data |= (1 << 2);
+		e1e_wphy(hw, PHY_REG(770, 26), phy_data);
+		
+		mac_data = er32(FFLT_DBG);
+		mac_data |= (1 << 17);
+		ew32(FFLT_DBG, mac_data);
+		
+		e1e_rphy(hw, 22, &phy_data);
+		phy_data &= 0x0fff;
+		phy_data |= (1 << 14);
+		e1e_wphy(hw, 0x10, 0x2823);
+		e1e_wphy(hw, 0x11, 0x0003);
+		e1e_wphy(hw, 22, phy_data);
+	}
+	
 	
 	/* Setup buffer sizes */
 	rctl &= ~E1000_RCTL_SZ_4096;
@@ -2117,6 +2201,10 @@ void AppleIntelE1000e::e1000_setup_rctl()
 			rctl |= E1000_RCTL_SZ_16384;
 			break;
 	}
+
+	/* Enable Extended Status in all Receive Descriptors */
+	rfctl = er32(RFCTL);
+	rfctl |= E1000_RFCTL_EXTEN;
 	
 	/*
 	 * 82571 and greater support packet-split where the protocol
@@ -2147,18 +2235,13 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	if (adapter->rx_ps_pages) {
 		u32 psrctl = 0;
 
-		/* Configure extra packet-split registers */
-		rfctl = er32(RFCTL);
-		rfctl |= E1000_RFCTL_EXTEN;
 		/*
 		 * disable packet split support for IPv6 extension headers,
 		 * because some malformed IPv6 headers can hang the Rx
 		 */
 		rfctl |= (E1000_RFCTL_IPV6_EX_DIS |
 				  E1000_RFCTL_NEW_IPV6_EXT_DIS);
-		
-		ew32(RFCTL, rfctl);
-		
+
 		/* Enable Packet split descriptors */
 		rctl |= E1000_RCTL_DTYP_PS;
 		
@@ -2177,6 +2260,7 @@ void AppleIntelE1000e::e1000_setup_rctl()
 		ew32(PSRCTL, psrctl);
 	}
 	
+	ew32(RFCTL, rfctl);
 	ew32(RCTL, rctl);
 
 	/* just started the receive unit, no need to restart */
@@ -2203,12 +2287,13 @@ void AppleIntelE1000e::e1000_configure_rx()
 		rdlen = rx_ring->count *
 			sizeof(union e1000_rx_desc_packet_split);
 	} else {
-		rdlen = rx_ring->count * sizeof(struct e1000_rx_desc);
+		rdlen = rx_ring->count * sizeof(union e1000_rx_desc_extended);
 	}
 	
 	/* disable receives while setting up the descriptors */
 	rctl = er32(RCTL);
-	ew32(RCTL, rctl & ~E1000_RCTL_EN);
+	if (!(adapter->flags2 & FLAG2_NO_DISABLE_RX))
+		ew32(RCTL, rctl & ~E1000_RCTL_EN);
 	e1e_flush();
 	usleep_range(10000, 20000);
 
@@ -2322,7 +2407,7 @@ void AppleIntelE1000e::e1000_alloc_rx_buffers(int cleaned_count)
 {
 	e1000_adapter *adapter = &priv_adapter;
 	struct e1000_ring *rx_ring = adapter->rx_ring;
-	struct e1000_rx_desc *rx_desc;
+	union e1000_rx_desc_extended *rx_desc;
 	struct e1000_buffer *buffer_info;
 	mbuf_t skb;
 	unsigned int i;
@@ -2359,8 +2444,8 @@ void AppleIntelE1000e::e1000_alloc_rx_buffers(int cleaned_count)
 			buffer_info->dma = vector.location;
 		}
 
-		rx_desc = E1000_RX_DESC(*rx_ring, i);
-		rx_desc->buffer_addr = cpu_to_le64(buffer_info->dma);
+		rx_desc = E1000_RX_DESC_EXT(*rx_ring, i);
+		rx_desc->read.buffer_addr = cpu_to_le64(buffer_info->dma);
 
 		if (unlikely(!(i & (E1000_RX_BUFFER_WRITE - 1)))) {
 			/*
@@ -2370,7 +2455,10 @@ void AppleIntelE1000e::e1000_alloc_rx_buffers(int cleaned_count)
 			 * such as IA-64).
 			 */
 			wmb();
-			writel(i, adapter->hw.hw_addr + rx_ring->tail);
+			if (adapter->flags2 & FLAG2_PCIM2PCI_ARBITER_WA)
+				e1000e_update_rdt_wa(adapter, i);
+			else
+				writel(i, adapter->hw.hw_addr + rx_ring->tail);
 		}
 		
 		i++;
@@ -2468,7 +2556,10 @@ void AppleIntelE1000e::e1000_alloc_rx_buffers_ps( int cleaned_count )
 			 * such as IA-64).
 			 */
 			wmb();
-			writel(i<<1, adapter->hw.hw_addr + rx_ring->tail);
+			if (adapter->flags2 & FLAG2_PCIM2PCI_ARBITER_WA)
+				e1000e_update_rdt_wa(adapter, i << 1);
+			else
+				writel(i<<1, adapter->hw.hw_addr + rx_ring->tail);
 		}
 		
 		i++;
@@ -2490,7 +2581,7 @@ no_buffers:
 void AppleIntelE1000e::e1000_alloc_jumbo_rx_buffers( int cleaned_count )
 {
 	e1000_adapter *adapter = &priv_adapter;
-	struct e1000_rx_desc *rx_desc;
+	union e1000_rx_desc_extended *rx_desc;
 	struct e1000_ring *rx_ring = adapter->rx_ring;
 	struct e1000_buffer *buffer_info;
 	struct e1000_ps_page *ps_page;
@@ -2500,8 +2591,8 @@ void AppleIntelE1000e::e1000_alloc_jumbo_rx_buffers( int cleaned_count )
 	buffer_info = &rx_ring->buffer_info[i];
 	
 	while (cleaned_count--) {
-		rx_desc = E1000_RX_DESC(*rx_ring, i);
 		ps_page = &buffer_info->ps_pages[0];
+		rx_desc = E1000_RX_DESC_EXT(*rx_ring, i);
 		if (!ps_page->page) {
 
 			ps_page->pool = IOBufferMemoryDescriptor::inTaskWithOptions( kernel_task, kIODirectionInOut | kIOMemoryPhysicallyContiguous,
@@ -2518,7 +2609,7 @@ void AppleIntelE1000e::e1000_alloc_jumbo_rx_buffers( int cleaned_count )
 			 * didn't change because each write-back
 			 * erases this info.
 			 */
-			rx_desc->buffer_addr = cpu_to_le64(ps_page->dma);
+			rx_desc->read.buffer_addr = cpu_to_le64(ps_page->dma);
 		}
 
 		if (unlikely(!(i & (E1000_RX_BUFFER_WRITE - 1)))) {
@@ -2529,7 +2620,10 @@ void AppleIntelE1000e::e1000_alloc_jumbo_rx_buffers( int cleaned_count )
 			 * such as IA-64).
 			 */
 			wmb();
-			writel(i, adapter->hw.hw_addr + rx_ring->tail);
+			if (adapter->flags2 & FLAG2_PCIM2PCI_ARBITER_WA)
+				e1000e_update_rdt_wa(adapter, i);
+			else
+				writel(i, adapter->hw.hw_addr + rx_ring->tail);
 		}
 		
 		i++;
@@ -2548,9 +2642,9 @@ bool AppleIntelE1000e::e1000_clean_rx_irq()
 	e1000_adapter *adapter = &priv_adapter;
 	//struct e1000_hw* hw = &adapter->hw;
 	struct e1000_ring *rx_ring = adapter->rx_ring;
-	struct e1000_rx_desc *rx_desc, *next_rxd;
+	union e1000_rx_desc_extended *rx_desc, *next_rxd;
 	struct e1000_buffer *buffer_info, *next_buffer;
-	u32 length;
+	u32 length, staterr;
 	unsigned int i;
 	int cleaned_count = 0;
 	bool cleaned = 0;
@@ -2558,15 +2652,13 @@ bool AppleIntelE1000e::e1000_clean_rx_irq()
 	
 	
 	i = rx_ring->next_to_clean;
-	rx_desc = E1000_RX_DESC(*rx_ring, i);
+	rx_desc = E1000_RX_DESC_EXT(*rx_ring, i);
+	staterr = le32_to_cpu(rx_desc->wb.upper.status_error);
 	buffer_info = &rx_ring->buffer_info[i];
 	
-	while (rx_desc->status & E1000_RXD_STAT_DD) {
+	while (staterr & E1000_RXD_STAT_DD) {
 		mbuf_t skb;
-		u8 status;
 		
-		status = rx_desc->status;
-
 		skb = buffer_info->skb;
 		buffer_info->skb = NULL;
 
@@ -2575,7 +2667,7 @@ bool AppleIntelE1000e::e1000_clean_rx_irq()
 		i++;
 		if (i == rx_ring->count)
 			i = 0;
-		next_rxd = E1000_RX_DESC(*rx_ring, i);
+		next_rxd = E1000_RX_DESC_EXT(*rx_ring, i);
 		prefetch(next_rxd);
 
 		next_buffer = &rx_ring->buffer_info[i];
@@ -2584,7 +2676,7 @@ bool AppleIntelE1000e::e1000_clean_rx_irq()
 		cleaned_count++;
 		buffer_info->dma = 0;
 
-		length = le16_to_cpu(rx_desc->length);
+		length = le16_to_cpu(rx_desc->wb.upper.length);
 
 		//e_dbg("e1000_clean_rx_irq: %d len = %d\n", i, (int)length );
 		/*
@@ -2594,7 +2686,7 @@ bool AppleIntelE1000e::e1000_clean_rx_irq()
 		 * next frame that _does_ have the EOP bit set, as it is by
 		 * definition only a frame fragment
 		 */
-		if (unlikely(!(status & E1000_RXD_STAT_EOP)))
+		if (unlikely(!(staterr & E1000_RXD_STAT_EOP)))
 			adapter->flags2 |= FLAG2_IS_DISCARDING;
 
 		if (adapter->flags2 & FLAG2_IS_DISCARDING) {
@@ -2602,9 +2694,9 @@ bool AppleIntelE1000e::e1000_clean_rx_irq()
 			e_dbg("Receive packet consumed multiple buffers\n");
 			/* recycle */
 			buffer_info->skb = skb;
-			if (status & E1000_RXD_STAT_EOP)
+			if (staterr & E1000_RXD_STAT_EOP)
 				adapter->flags2 &= ~FLAG2_IS_DISCARDING;
-		} else if (rx_desc->errors & E1000_RXD_ERR_FRAME_ERR_MASK) {
+		} else if (staterr & E1000_RXDEXT_ERR_FRAME_ERR_MASK) {
 			/* recycle */
 			buffer_info->skb = skb;
 		} else if(length > 4) {
@@ -2632,12 +2724,12 @@ bool AppleIntelE1000e::e1000_clean_rx_irq()
 			/* end copybreak code */
 			
 			/* Receive Checksum Offload */
-			e1000_rx_checksum(skb, status);
+			e1000_rx_checksum(skb, staterr);
 
-			e1000_receive_skb(skb, length, status, rx_desc->special);
+			e1000_receive_skb(skb, length, staterr, rx_desc->wb.upper.vlan);
 		}
 next_desc:		
-		rx_desc->status = 0;
+		rx_desc->wb.upper.status_error &= cpu_to_le32(~0xFF);
 
 		/* return some buffers to hardware, one at a time is too slow */
 		if (cleaned_count >= E1000_RX_BUFFER_WRITE) {
@@ -2648,6 +2740,7 @@ next_desc:
 		rx_desc = next_rxd;
 		buffer_info = next_buffer;
 
+		staterr = le32_to_cpu(rx_desc->wb.upper.status_error);
 	}
 	rx_ring->next_to_clean = i;
 	
@@ -2842,29 +2935,28 @@ bool AppleIntelE1000e::e1000_clean_jumbo_rx_irq()
 {
 	struct e1000_adapter *adapter = &priv_adapter;
 	//struct e1000_hw *hw = &adapter->hw;
-	struct e1000_rx_desc *rx_desc, *next_rxd;
 	struct e1000_ring *rx_ring = adapter->rx_ring;
+	union e1000_rx_desc_extended *rx_desc, *next_rxd;
 	struct e1000_buffer *buffer_info, *next_buffer;
 	struct e1000_ps_page *ps_page;
 	mbuf_t skb;
+	u32 length, staterr;
 	unsigned int i;
 	int cleaned_count = 0;
 	bool cleaned = 0;
 	unsigned int total_rx_bytes = 0, total_rx_packets = 0;
 	
 	i = rx_ring->next_to_clean;
-	rx_desc = E1000_RX_DESC(*rx_ring, i);
+	rx_desc = E1000_RX_DESC_EXT(*rx_ring, i);
+	staterr = le32_to_cpu(rx_desc->wb.upper.status_error);
 	buffer_info = &rx_ring->buffer_info[i];
 	
-	while (rx_desc->status & E1000_RXD_STAT_DD) {
-		u32 length;
-		u8 status;
-		status = rx_desc->status;
+	while (staterr & E1000_RXD_STAT_DD) {
 
 		i++;
 		if (i == rx_ring->count)
 			i = 0;
-		next_rxd = E1000_RX_DESC(*rx_ring, i);
+		next_rxd = E1000_RX_DESC_EXT(*rx_ring, i);
 		
 		next_buffer = &rx_ring->buffer_info[i];
 		
@@ -2872,22 +2964,22 @@ bool AppleIntelE1000e::e1000_clean_jumbo_rx_irq()
 		cleaned_count++;
 		
 		/* see !EOP comment in other rx routine */
-		if (!(status & E1000_RXD_STAT_EOP))
+		if (!(staterr & E1000_RXD_STAT_EOP))
 			adapter->flags2 |= FLAG2_IS_DISCARDING;
 		
 		if (adapter->flags2 & FLAG2_IS_DISCARDING) {
 			e_dbg("Receive packet consumed multiple buffers\n");
-			if (status & E1000_RXD_STAT_EOP)
+			if (staterr & E1000_RXD_STAT_EOP)
 				adapter->flags2 &= ~FLAG2_IS_DISCARDING;
 			goto next_desc;
 		}
 		
-		if (status & E1000_RXDEXT_ERR_FRAME_ERR_MASK) {
+		if (staterr & E1000_RXDEXT_ERR_FRAME_ERR_MASK) {
 			goto next_desc;
 		}
 		
-		length = le16_to_cpu(rx_desc->length);
-		
+		length = le16_to_cpu(rx_desc->wb.upper.length);
+
 		if (!length) {
 			e_dbg("Last part of the packet spanning multiple "
 			      "descriptors\n");
@@ -2912,12 +3004,12 @@ bool AppleIntelE1000e::e1000_clean_jumbo_rx_irq()
 		total_rx_bytes += length;
 		total_rx_packets++;
 		
-		e1000_rx_checksum(skb, status);
+		e1000_rx_checksum(skb, staterr);
 		
-		e1000_receive_skb(skb, length, status, rx_desc->special);
+		e1000_receive_skb(skb, length, staterr, rx_desc->wb.upper.vlan);
 		
 	next_desc:
-		rx_desc->status = 0;
+		rx_desc->wb.upper.status_error &= cpu_to_le32(~0xFF);
 		
 		/* return some buffers to hardware, one at a time is too slow */
 		if (cleaned_count >= E1000_RX_BUFFER_WRITE) {
@@ -2928,6 +3020,8 @@ bool AppleIntelE1000e::e1000_clean_jumbo_rx_irq()
 		/* use prefetched values */
 		rx_desc = next_rxd;
 		buffer_info = next_buffer;
+		
+		staterr = le32_to_cpu(rx_desc->wb.upper.status_error);
 	}
 	rx_ring->next_to_clean = i;
 	
@@ -3433,6 +3527,10 @@ void AppleIntelE1000e::e1000_set_multi()
 	if (promiscusMode) {
 		rctl |= (E1000_RCTL_UPE | E1000_RCTL_MPE);
 		rctl &= ~E1000_RCTL_VFE;
+#ifndef HAVE_VLAN_RX_REGISTER
+		/* Do not hardware filter VLANs in promisc mode */
+		//e1000e_vlan_filter_disable(adapter);
+#endif
 	} else {
 		if (multicastMode) {
 			rctl |= E1000_RCTL_MPE;
@@ -3440,8 +3538,12 @@ void AppleIntelE1000e::e1000_set_multi()
 		} else {
 			rctl &= ~(E1000_RCTL_UPE | E1000_RCTL_MPE);
 		}
+#ifdef HAVE_VLAN_RX_REGISTER
 		if (adapter->flags & FLAG_HAS_HW_VLAN_FILTER)
 			rctl |= E1000_RCTL_VFE;
+#else
+		//e1000e_vlan_filter_enable(adapter);
+#endif
 	}
 	
 	ew32(RCTL, rctl);
@@ -3478,6 +3580,9 @@ void AppleIntelE1000e::e1000_configure()
  **/
 void AppleIntelE1000e::e1000_receive_skb(mbuf_t skb, u32 length, u8 status, __le16 vlan)
 {
+#ifndef HAVE_VLAN_RX_REGISTER
+	//u16 tag = le16_to_cpu(vlan);
+#endif
 	//skb->protocol = eth_type_trans(skb, netdev);
 	
 #ifdef NETIF_F_HW_VLAN_TX
@@ -3485,7 +3590,7 @@ void AppleIntelE1000e::e1000_receive_skb(mbuf_t skb, u32 length, u8 status, __le
 		ret = vlan_hwaccel_rx(skb, adapter->vlgrp, le16_to_cpu(vlan));
 	else
 #endif
-	netStats->inputPackets += netif->inputPacket(skb, length, IONetworkInterface::kInputOptionQueuePacket);
+		netStats->inputPackets += netif->inputPacket(skb, length, IONetworkInterface::kInputOptionQueuePacket);
 }
 
 void AppleIntelE1000e::e1000_rx_checksum(mbuf_t skb, u32 status)
@@ -3704,6 +3809,36 @@ IOReturn AppleIntelE1000e::setMaxPacketSize (UInt32 maxSize){
 	}
 	return kIOReturnSuccess;
 }
+
+IOReturn AppleIntelE1000e::setWakeOnMagicPacket(bool active)
+{
+	e1000_adapter *adapter = &priv_adapter;
+	e_dbg("AppleIntelE1000e::setWakeOnMagicPacket(%s), WOL support = %s\n",
+		  active?"TRUE":"FALSE",
+		  adapter->eeprom_wol?"YES":"NO");
+	if(active){
+       if (adapter->eeprom_wol == 0)
+           return kIOReturnUnsupported;   
+		adapter->wol = FLAG_HAS_WOL;
+	} else {
+		adapter->wol = 0;
+	}
+	return kIOReturnSuccess;   
+}
+
+IOReturn AppleIntelE1000e::getPacketFilters(const OSSymbol * group, UInt32 * filters) const {
+	if(group == gIOEthernetWakeOnLANFilterGroup){
+		*filters = kIOEthernetWakeOnMagicPacket;
+		return kIOReturnSuccess;   
+	}
+	if(group == gIOEthernetDisabledWakeOnLANFilterGroup){
+		*filters = 0;
+		return kIOReturnSuccess;   
+	}
+	return super::getPacketFilters(group, filters);
+}
+
+
 
 bool AppleIntelE1000e::clean_rx_irq()
 {
