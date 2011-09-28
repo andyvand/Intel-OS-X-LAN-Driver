@@ -99,6 +99,47 @@ static void e1000e_disable_aspm(IOPCIDevice *pci_dev, u16 state)
 #endif
 }
 
+// Not Used
+static void e1000_power_off(IOPCIDevice *pdev, bool sleep, bool wake)
+{
+#if	0
+	if (sleep && wake) {
+		pci_prepare_to_sleep(pdev);
+		return;
+	}
+	
+	pci_wake_from_d3(pdev, wake);
+	pci_set_power_state(pdev, PCI_D3hot);
+#endif
+}
+
+// Not Used
+static void e1000_complete_shutdown(e1000_adapter *adapter, IOPCIDevice *pdev, bool sleep, bool wake)
+{
+	
+	/*
+	 * The pci-e switch on some quad port adapters will report a
+	 * correctable error when the MAC transitions from D0 to D3.  To
+	 * prevent this we need to mask off the correctable errors on the
+	 * downstream port of the pci-e switch.
+	 */
+	if (adapter->flags & FLAG_IS_QUAD_PORT) {
+		int pos = pdev->findPCICapability(kIOPCIPCIExpressCapability);
+		u16 devctl;
+		
+		devctl = pdev->configRead16(pos + PCI_EXP_LNKCTL);
+		pdev->configWrite16(pos + PCI_EXP_DEVCTL, (devctl & ~PCI_EXP_DEVCTL_CERE));
+
+		
+		e1000_power_off(pdev, sleep, wake);
+		
+		pdev->configWrite16(pos + PCI_EXP_DEVCTL, devctl);
+	} else {
+		e1000_power_off(pdev, sleep, wake);
+	}
+}
+
+
 /**
  * e1000_alloc_queues - Allocate memory for all rings
  * @adapter: board private structure to initialize
@@ -982,6 +1023,76 @@ static void e1000e_flush_descriptors(struct e1000_adapter *adapter)
 	e1e_flush();
 }
 
+static int e1000_init_phy_wakeup(struct e1000_adapter *adapter, u32 wufc)
+{
+	struct e1000_hw *hw = &adapter->hw;
+	u32 i, mac_reg;
+	u16 phy_reg, wuc_enable;
+	int retval = 0;
+	
+	/* copy MAC RARs to PHY RARs */
+	e1000_copy_rx_addrs_to_phy_ich8lan(hw);
+	
+	retval = hw->phy.ops.acquire(hw);
+	if (retval) {
+		e_err("Could not acquire PHY\n");
+		return retval;
+	}
+	
+	/* Enable access to wakeup registers on and set page to BM_WUC_PAGE */
+	retval = e1000_enable_phy_wakeup_reg_access_bm(hw, &wuc_enable);
+	if (retval)
+		goto out;
+	
+	/* copy MAC MTA to PHY MTA - only needed for pchlan */
+	for (i = 0; i < adapter->hw.mac.mta_reg_count; i++) {
+		mac_reg = E1000_READ_REG_ARRAY(hw, E1000_MTA, i);
+		hw->phy.ops.write_reg_page(hw, BM_MTA(i),
+								   (u16)(mac_reg & 0xFFFF));
+		hw->phy.ops.write_reg_page(hw, BM_MTA(i) + 1,
+								   (u16)((mac_reg >> 16) & 0xFFFF));
+	}
+	
+	/* configure PHY Rx Control register */
+	hw->phy.ops.read_reg_page(&adapter->hw, BM_RCTL, &phy_reg);
+	mac_reg = er32(RCTL);
+	if (mac_reg & E1000_RCTL_UPE)
+		phy_reg |= BM_RCTL_UPE;
+	if (mac_reg & E1000_RCTL_MPE)
+		phy_reg |= BM_RCTL_MPE;
+	phy_reg &= ~(BM_RCTL_MO_MASK);
+	if (mac_reg & E1000_RCTL_MO_3)
+		phy_reg |= (((mac_reg & E1000_RCTL_MO_3) >> E1000_RCTL_MO_SHIFT)
+					<< BM_RCTL_MO_SHIFT);
+	if (mac_reg & E1000_RCTL_BAM)
+		phy_reg |= BM_RCTL_BAM;
+	if (mac_reg & E1000_RCTL_PMCF)
+		phy_reg |= BM_RCTL_PMCF;
+	mac_reg = er32(CTRL);
+	if (mac_reg & E1000_CTRL_RFCE)
+		phy_reg |= BM_RCTL_RFCE;
+	hw->phy.ops.write_reg_page(&adapter->hw, BM_RCTL, phy_reg);
+	
+	/* enable PHY wakeup in MAC register */
+	ew32(WUFC, wufc);
+	ew32(WUC, E1000_WUC_PHY_WAKE | E1000_WUC_PME_EN);
+	
+	/* configure and enable PHY wakeup in PHY registers */
+	hw->phy.ops.write_reg_page(&adapter->hw, BM_WUFC, wufc);
+	hw->phy.ops.write_reg_page(&adapter->hw, BM_WUC, E1000_WUC_PME_EN);
+	
+	/* activate PHY wakeup */
+	wuc_enable |= BM_WUC_ENABLE_BIT | BM_WUC_HOST_WU_BIT;
+	retval = e1000_disable_phy_wakeup_reg_access_bm(hw, &wuc_enable);
+	if (retval)
+		e_err("Could not set PHY Host Wakeup bit\n");
+out:
+	hw->phy.ops.release(hw);
+	
+	return retval;
+}
+
+
 /////////////////
 
 
@@ -1066,6 +1177,10 @@ void AppleIntelE1000e::stop(IOService* provider)
 	}
 
 	e1000_power_down_phy(adapter);
+#if 1		// WOL
+	bool wake;
+	__e1000_shutdown( &wake, false);
+#endif
 	
 	/*
 	 * Release control of h/w to f/w.  If f/w is AMT enabled, this
@@ -3819,7 +3934,7 @@ IOReturn AppleIntelE1000e::setWakeOnMagicPacket(bool active)
 	if(active){
        if (adapter->eeprom_wol == 0)
            return kIOReturnUnsupported;   
-		adapter->wol = FLAG_HAS_WOL;
+		adapter->wol = adapter->eeprom_wol;
 	} else {
 		adapter->wol = 0;
 	}
@@ -3838,6 +3953,108 @@ IOReturn AppleIntelE1000e::getPacketFilters(const OSSymbol * group, UInt32 * fil
 	}
 #endif
 	return super::getPacketFilters(group, filters);
+}
+
+
+int AppleIntelE1000e::__e1000_shutdown(bool *enable_wake, bool runtime)
+{
+	e1000_adapter *adapter = &priv_adapter;
+	struct e1000_hw *hw = &adapter->hw;
+	u32 ctrl, ctrl_ext, rctl, status;
+	/* Runtime suspend should only enable wakeup for link changes */
+	u32 wufc = runtime ? E1000_WUFC_LNKC : adapter->wol;
+	int retval = 0;
+#if 0	
+	netif_device_detach(netdev);
+	
+	if (netif_running(netdev)) {
+		WARN_ON(test_bit(__E1000_RESETTING, &adapter->state));
+		e1000e_down(adapter);
+		e1000_free_irq(adapter);
+	}
+#endif
+#ifdef CONFIG_E1000E_MSIX
+	e1000e_reset_interrupt_capability(adapter);
+#endif
+#if	0
+	retval = pci_save_state(pdev);
+	if (retval)
+		return retval;
+#endif
+	status = er32(STATUS);
+	if (status & E1000_STATUS_LU)
+		wufc &= ~E1000_WUFC_LNKC;
+	
+	if (wufc) {
+		e1000_setup_rctl();
+		e1000_set_multi();
+		
+		/* turn on all-multi mode if wake on multicast is enabled */
+		if (wufc & E1000_WUFC_MC) {
+			rctl = er32(RCTL);
+			rctl |= E1000_RCTL_MPE;
+			ew32(RCTL, rctl);
+		}
+		
+		ctrl = er32(CTRL);
+		/* advertise wake from D3Cold */
+#define E1000_CTRL_ADVD3WUC 0x00100000
+		/* phy power management enable */
+#define E1000_CTRL_EN_PHY_PWR_MGMT 0x00200000
+		ctrl |= E1000_CTRL_ADVD3WUC;
+		if (!(adapter->flags2 & FLAG2_HAS_PHY_WAKEUP))
+			ctrl |= E1000_CTRL_EN_PHY_PWR_MGMT;
+		ew32(CTRL, ctrl);
+		
+		if (adapter->hw.phy.media_type == e1000_media_type_fiber ||
+		    adapter->hw.phy.media_type ==
+		    e1000_media_type_internal_serdes) {
+			/* keep the laser running in D3 */
+			ctrl_ext = er32(CTRL_EXT);
+			ctrl_ext |= E1000_CTRL_EXT_SDP3_DATA;
+			ew32(CTRL_EXT, ctrl_ext);
+		}
+		
+		if (adapter->flags & FLAG_IS_ICH)
+			e1000_suspend_workarounds_ich8lan(&adapter->hw);
+		
+		/* Allow time for pending master requests to run */
+		e1000e_disable_pcie_master(&adapter->hw);
+		
+		if (adapter->flags2 & FLAG2_HAS_PHY_WAKEUP) {
+			/* enable wakeup by the PHY */
+			retval = e1000_init_phy_wakeup(adapter, wufc);
+			if (retval)
+				return retval;
+		} else {
+			/* enable wakeup by the MAC */
+			ew32(WUFC, wufc);
+			ew32(WUC, E1000_WUC_PME_EN);
+		}
+	} else {
+		ew32(WUC, 0);
+		ew32(WUFC, 0);
+	}
+	
+	*enable_wake = !!wufc;
+	
+	/* make sure adapter isn't asleep if manageability is enabled */
+	if ((adapter->flags & FLAG_MNG_PT_ENABLED) ||
+	    (hw->mac.ops.check_mng_mode(hw)))
+		*enable_wake = true;
+	
+	if (adapter->hw.phy.type == e1000_phy_igp_3)
+		e1000e_igp3_phy_powerdown_workaround_ich8lan(&adapter->hw);
+	
+	/*
+	 * Release control of h/w to f/w.  If f/w is AMT enabled, this
+	 * would have already happened in close and is redundant.
+	 */
+	e1000e_release_hw_control(adapter);
+	
+	//pci_disable_device(pdev);
+	
+	return 0;
 }
 
 

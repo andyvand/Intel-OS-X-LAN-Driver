@@ -168,6 +168,8 @@ private:
 	void e1000e_up();
 	void e1000e_down();
 	void e1000_change_mtu(UInt32 maxSize);
+	
+	int __e1000_shutdown(bool *enable_wake, bool runtime);
 
 private:
 	bool clean_rx_irq();

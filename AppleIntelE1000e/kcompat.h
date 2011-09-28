@@ -150,6 +150,8 @@ struct work_struct {
 
 #define NET_IP_ALIGN	2
 
+#define	PCI_EXP_DEVCTL	8
+#define	PCI_EXP_DEVCTL_CERE	0x0001	/* Correctable Error Reporting En. */
 #define	PCI_EXP_LNKCTL	16
 #define PCIE_LINK_STATE_L0S     1
 #define PCIE_LINK_STATE_L1 2
