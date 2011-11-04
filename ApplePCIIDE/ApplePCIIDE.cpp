@@ -935,11 +935,16 @@ bool ApplePCIIDEDriver::start( IOService * provider )
 	
 
     // Must setup these variables inherited from IOPCIATA before it is started.
+#if defined(__i386__) || defined(__x86_64__)
 	_bmCommandReg   = IOATAIOReg8::withAddress( fBMBaseAddr + BM_COMMAND );
 	_bmStatusReg    = IOATAIOReg8::withAddress( fBMBaseAddr + BM_STATUS );
 	_bmPRDAddresReg = IOATAIOReg32::withAddress( fBMBaseAddr + BM_PRD_TABLE );
 	
-	
+#else
+	_bmCommandReg = (UInt8*)fBMBaseAddr + BM_COMMAND;
+	_bmStatusReg = (UInt8*)fBMBaseAddr + BM_STATUS;
+	_bmPRDAddresReg = (volatile UInt32 *)((UInt8*)fBMBaseAddr + BM_PRD_TABLE);
+#endif
     // Reset bus timings for both drives.
 	
     initializeHardware();

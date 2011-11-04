@@ -67,6 +67,7 @@
 #define E1000_ICH_MNG_IAMT_MODE          0x2
 
 #define E1000_FWSM_PROXY_MODE            0x00000008 /* FW is in proxy mode */
+#define E1000_FWSM_MEMC                  0x00000010 /* ME Messaging capable */
 
 /* Shared Receive Address Registers */
 #define E1000_SHRAL(_i)  (0x05438 + ((_i) * 8))

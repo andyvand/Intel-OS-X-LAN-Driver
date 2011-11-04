@@ -61,7 +61,7 @@
 #define DRV_EXTRAVERSION 
 #endif
 
-#define DRV_VERSION "1.6.2" DRV_EXTRAVERSION
+#define DRV_VERSION "1.6.3" DRV_EXTRAVERSION
 char e1000e_driver_name[] = "e1000e";
 const char e1000e_driver_version[] = DRV_VERSION;
 
@@ -3971,9 +3971,7 @@ static void e1000e_setup_rss_hash(struct e1000_adapter *adapter)
 
 	ew32(RXCSUM, rxcsum);
 
-	mrqc = E1000_MRQC_ENABLE_RSS_2Q;
-
-	mrqc |= (E1000_MRQC_RSS_FIELD_IPV4 |
+	mrqc = (E1000_MRQC_RSS_FIELD_IPV4 |
 		 E1000_MRQC_RSS_FIELD_IPV4_TCP |
 		 E1000_MRQC_RSS_FIELD_IPV6 |
 		 E1000_MRQC_RSS_FIELD_IPV6_TCP |

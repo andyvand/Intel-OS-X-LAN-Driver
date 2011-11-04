@@ -3631,7 +3631,7 @@ out:
  *  LPLU, Gig disable, MDIC PHY reset):
  *    1) Set Kumeran Near-end loopback
  *    2) Clear Kumeran Near-end loopback
- *  Should only be called for ICH8[m] devices with IGP_3 Phy.
+ *  Should only be called for ICH8[m] devices with any 1G Phy.
  **/
 void e1000e_gig_downshift_workaround_ich8lan(struct e1000_hw *hw)
 {
@@ -3639,7 +3639,7 @@ void e1000e_gig_downshift_workaround_ich8lan(struct e1000_hw *hw)
 	u16 reg_data;
 
 	if ((hw->mac.type != e1000_ich8lan) ||
-	    (hw->phy.type != e1000_phy_igp_3))
+	    (hw->phy.type == e1000_phy_ife))
 		goto out;
 
 	ret_val = e1000e_read_kmrn_reg(hw, E1000_KMRNCTRLSTA_DIAG_OFFSET,
@@ -3678,6 +3678,8 @@ void e1000_suspend_workarounds_ich8lan(struct e1000_hw *hw)
 	phy_ctrl = er32(PHY_CTRL);
 	phy_ctrl |= E1000_PHY_CTRL_D0A_LPLU | E1000_PHY_CTRL_GBE_DISABLE;
 	ew32(PHY_CTRL, phy_ctrl);
+	if (hw->mac.type == e1000_ich8lan)
+		e1000e_gig_downshift_workaround_ich8lan(hw);
 
 	if (hw->mac.type >= e1000_pchlan) {
 		e1000_oem_bits_config_ich8lan(hw, false);
