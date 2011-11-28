@@ -77,14 +77,14 @@ static int e1000_desc_unused(struct e1000_ring *ring)
 
 static void e1000e_disable_aspm(IOPCIDevice *pci_dev, u16 state)
 {
-	int pos;
+	u8 pos;
 	u16 reg16;
 	
 	/*
 	 * Both device and parent should have the same ASPM setting.
 	 * Disable ASPM in downstream component first and then upstream.
 	 */
-	pos = pci_dev->findPCICapability(kIOPCIPCIExpressCapability);
+	pci_dev->findPCICapability(kIOPCIPCIExpressCapability, &pos);
 	reg16 = pci_dev->configRead16(pos + PCI_EXP_LNKCTL);
 	reg16 &= ~state;
 	pci_dev->configWrite16(pos + PCI_EXP_LNKCTL, reg16);
@@ -124,7 +124,8 @@ static void e1000_complete_shutdown(e1000_adapter *adapter, IOPCIDevice *pdev, b
 	 * downstream port of the pci-e switch.
 	 */
 	if (adapter->flags & FLAG_IS_QUAD_PORT) {
-		int pos = pdev->findPCICapability(kIOPCIPCIExpressCapability);
+		u8 pos;
+		pdev->findPCICapability(kIOPCIPCIExpressCapability, &pos);
 		u16 devctl;
 		
 		devctl = pdev->configRead16(pos + PCI_EXP_LNKCTL);

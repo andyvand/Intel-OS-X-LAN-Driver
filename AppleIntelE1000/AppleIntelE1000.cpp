@@ -3535,10 +3535,9 @@ s32 e1000_read_pcie_cap_reg(struct e1000_hw *hw, u32 reg, u16 *value)
 {
 	struct e1000_adapter *adapter = (struct e1000_adapter*)hw->back;
 	IOPCIDevice* pdev = (IOPCIDevice*)adapter->pdev;
-	u16 cap_offset;
+	u8 cap_offset;
 	
-	cap_offset = pdev->findPCICapability(kIOPCIPCIExpressCapability);
-	if (!cap_offset)
+	if (pdev->findPCICapability(kIOPCIPCIExpressCapability, &cap_offset) == 0)
 		return -E1000_ERR_CONFIG;
 
 	*value = pdev->configRead16(cap_offset + reg);
