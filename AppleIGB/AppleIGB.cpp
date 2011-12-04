@@ -7243,15 +7243,15 @@ bool AppleIGB::start(IOService* provider)
 			  ((hw->bus.speed == e1000_bus_speed_2500) ? "2.5GT/s" :
 			   (hw->bus.speed == e1000_bus_speed_5000) ? "5.0GT/s" :
 			   "unknown"),
-			  ((hw->bus.width == e1000_bus_width_pcie_x4) ? "Width x4\n" :
-			   (hw->bus.width == e1000_bus_width_pcie_x2) ? "Width x2\n" :
-			   (hw->bus.width == e1000_bus_width_pcie_x1) ? "Width x1\n" :
+			  ((hw->bus.width == e1000_bus_width_pcie_x4) ? "Width x4" :
+			   (hw->bus.width == e1000_bus_width_pcie_x2) ? "Width x2" :
+			   (hw->bus.width == e1000_bus_width_pcie_x1) ? "Width x1" :
 			   "unknown"));
-		IOLog("MAC: %2x:%2x:%2x:%2x:%2x:%2x\n",
+		IOLog("MAC: %2x:%2x:%2x:%2x:%2x:%2x ",
 			  hw->mac.addr[0],hw->mac.addr[1],hw->mac.addr[2],
 			  hw->mac.addr[3],hw->mac.addr[4],hw->mac.addr[5]);
 		ret_val = e1000_read_pba_string(hw, pba_str, E1000_PBANUM_LENGTH);
-		IOLog("igb: PBA No: %s\n", ret_val ? "Unknown": (char*)pba_str);
+		IOLog("PBA No: %s\n", ret_val ? "Unknown": (char*)pba_str);
 		
 		switch (hw->mac.type) {
 			case e1000_i350:
