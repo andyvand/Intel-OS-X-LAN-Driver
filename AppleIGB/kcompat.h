@@ -392,4 +392,5 @@ static inline void vlan_group_set_device(struct vlan_group *vg, u16 vlan_id,
 	array[vlan_id % VLAN_GROUP_ARRAY_PART_LEN] = dev;
 }
 #endif
+
 #endif /* _KCOMPAT_H_ */

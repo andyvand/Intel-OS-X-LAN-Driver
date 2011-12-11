@@ -2806,6 +2806,10 @@ void igb_clean_rx_ring(struct igb_adapter *adapter, struct igb_ring *rx_ring)
 			buffer_info->pool->release();
 			buffer_info->pool = NULL;
 		}
+		if (buffer_info->skb) {
+			adapter->netdev->freePacket(buffer_info->skb);
+			buffer_info->skb = NULL;
+		}
 #else
 		if (buffer_info->dma) {
 			dma_unmap_single(rx_ring->dev,
@@ -3420,12 +3424,7 @@ static int igb_tso(struct igb_ring *tx_ring,
 }
 
 // copy for accessing c++ constants
-enum {
-        kChecksumFamilyTCPIP         = 0x00000001,
-        kChecksumIP                  = 0x0001,
-        kChecksumTCP                 = 0x0002,
-        kChecksumUDP                 = 0x0004,
-};
+
 static void igb_tx_csum(struct igb_ring *tx_ring, struct igb_tx_buffer *first)
 {
 	struct sk_buff *skb = first->skb;
@@ -3434,37 +3433,66 @@ static void igb_tx_csum(struct igb_ring *tx_ring, struct igb_tx_buffer *first)
 	u32 type_tucmd = 0;
 
 #ifdef __APPLE__
+
 	UInt32 checksumDemanded;
-	tx_ring->netdev->getChecksumDemand(skb, kChecksumFamilyTCPIP, &checksumDemanded);
-	if((checksumDemanded & (kChecksumIP|kChecksumTCP|kChecksumUDP)) == 0)
+	tx_ring->netdev->getChecksumDemand(skb, IONetworkController::kChecksumFamilyTCPIP, &checksumDemanded);
+	checksumDemanded &= (IONetworkController::kChecksumIP|IONetworkController::kChecksumTCP|IONetworkController::kChecksumUDP);
+#if     0
+    IOLog("igb_tx_csum: %s%s%s\n",
+          (checksumDemanded&IONetworkController::kChecksumIP)?"IP ":"",
+          (checksumDemanded&IONetworkController::kChecksumTCP)?"TCP ":"",
+          (checksumDemanded&IONetworkController::kChecksumUDP)?"UDP ":""
+          );
+#endif    
+	if(checksumDemanded == 0)
 		return;
 
-	// I have not succeeded in tx-csum yet.
-	// following code does not work.
-	struct ip *ip = NULL;
-	u32 ip_hlen, hdr_len;
-	int ehdrlen = ETHER_HDR_LEN;
-	ip = (struct ip *)((u8*)mbuf_data(skb) + ehdrlen);
-	ip_hlen = ip->ip_hl << 2;
-	hdr_len = ehdrlen + ip_hlen;
+	int  ehdrlen, ip_hlen;
+	u16	vtag;
+    u8* packet;
+
+	vlan_macip_lens = type_tucmd = mss_l4len_idx = 0;
 	
-	if(checksumDemanded & kChecksumIP){
-		vlan_macip_lens |= hdr_len;
+	/*
+	 ** In advanced descriptors the vlan tag must 
+	 ** be placed into the context descriptor, thus
+	 ** we need to be here just for that setup.
+	 */
+	if (mbuf_get_vlan_tag(skb, &vtag)==0) {
+		vlan_macip_lens |= (vtag << E1000_ADVTXD_VLAN_SHIFT);
+		ehdrlen = ETHER_HDR_LEN + VLAN_HLEN;
+	} else{
+		ehdrlen = ETHER_HDR_LEN;
+	}
+	
+	/* Set the ether header length */
+	vlan_macip_lens |= ehdrlen << E1000_ADVTXD_MACLEN_SHIFT;
+    packet = (u8*)mbuf_data(skb) + ehdrlen;
+	
+	if(0){		// IPv6
+		//struct ip6_hdr *ip6 = (struct ip6_hdr *)((u8*)mbuf_data(skb) + ehdrlen);
+		ip_hlen = sizeof(struct ip6_hdr);
+		type_tucmd |= E1000_ADVTXD_TUCMD_IPV6;
+	} else {
+		struct ip *ip = (struct ip *)((u8*)mbuf_data(skb) + ehdrlen);
+		ip_hlen = ip->ip_hl << 2;
 		type_tucmd |= E1000_ADVTXD_TUCMD_IPV4;
 	}
-	if(checksumDemanded & kChecksumTCP){
-		type_tucmd |= E1000_ADVTXD_TUCMD_L4T_TCP;
-		mss_l4len_idx = (hdr_len + offsetof(struct tcphdr, th_sum)) <<
-		E1000_ADVTXD_L4LEN_SHIFT;
-	} else if(checksumDemanded & kChecksumUDP){
-		mss_l4len_idx = (hdr_len + offsetof(struct udphdr, uh_sum)) <<
-		E1000_ADVTXD_L4LEN_SHIFT;
-	}
-	/* update TX checksum flag */
+
+    if(checksumDemanded & IONetworkController::kChecksumTCP){
+        type_tucmd |= E1000_ADVTXD_TUCMD_L4T_TCP;
+        struct tcphdr* tcph = (struct tcphdr*)(packet + ip_hlen);
+        mss_l4len_idx = (tcph->th_off << 2) << E1000_ADVTXD_L4LEN_SHIFT;
+    } else if(checksumDemanded & IONetworkController::kChecksumUDP){
+        type_tucmd |= E1000_ADVTXD_TUCMD_L4T_UDP;
+        mss_l4len_idx = sizeof(struct udphdr) << E1000_ADVTXD_L4LEN_SHIFT;
+    }
+	
+	vlan_macip_lens |= ip_hlen;
 	first->tx_flags |= IGB_TX_FLAGS_CSUM;
 
-	vlan_macip_lens |= ehdrlen << E1000_ADVTXD_MACLEN_SHIFT;
-#else
+#else	// __APPLE__
+	
 	if (skb->ip_summed != CHECKSUM_PARTIAL) {
 		if (!(first->tx_flags & IGB_TX_FLAGS_VLAN))
 			return;
@@ -5546,18 +5574,26 @@ static bool igb_clean_rx_irq(struct igb_q_vector *q_vector, int budget)
 	#endif
 		buffer_info->dma = 0;
 #else	// CONFIG_IGB_DISABLE_PACKET_SPLIT
-		if (!mbuf_len(skb)) {
-			mbuf_adjustlen(skb, igb_get_hlen(rx_desc));
+	#ifdef	__APPLE__
+		// there is nothing to do about skb
+		// clear the other rx_descs ?
+	#else
+		if (!skb_is_nonlinear(skb)) {
+			__skb_put(skb, igb_get_hlen(rx_desc));
+			dma_unmap_single(rx_ring->dev, buffer_info->dma,
+			                 IGB_RX_HDR_LEN,
+							 DMA_FROM_DEVICE);
 			buffer_info->dma = 0;
 		}
-
+		
 		if (rx_desc->wb.upper.length) {
 			u16 length = le16_to_cpu(rx_desc->wb.upper.length);
 
-			mbuf_copyback(skb, mbuf_len(skb), length,
-						  buffer_info->pool->getBytesNoCopy(),
-						  MBUF_DONTWAIT);
-
+			skb_fill_page_desc(skb, skb_shinfo(skb)->nr_frags,
+							   buffer_info->page,
+							   buffer_info->page_offset,
+							   length);
+			
 			if ((page_count(buffer_info->page) != 1) ||
 			    (page_to_nid(buffer_info->page) != current_node))
 				buffer_info->page = NULL;
@@ -5567,7 +5603,7 @@ static bool igb_clean_rx_irq(struct igb_q_vector *q_vector, int budget)
 				       PAGE_SIZE / 2, DMA_FROM_DEVICE);
 			buffer_info->page_dma = 0;
 		}
-
+	#endif
 		if (!igb_test_staterr(rx_desc, E1000_RXD_STAT_EOP)) {
 			struct igb_rx_buffer *next_buffer;
 			next_buffer = &rx_ring->rx_buffer_info[i];
@@ -5577,7 +5613,7 @@ static bool igb_clean_rx_irq(struct igb_q_vector *q_vector, int budget)
 			next_buffer->dma = 0;
 			goto next_desc;
 		}
-
+		
 #endif /* CONFIG_IGB_DISABLE_PACKET_SPLIT */
 		if (igb_test_staterr(rx_desc,
 				     E1000_RXDEXT_ERR_FRAME_ERR_MASK)) {
@@ -5642,6 +5678,7 @@ static bool igb_alloc_mapped_skb(struct igb_ring *rx_ring,
 				 struct igb_rx_buffer *bi)
 {
 #ifdef	__APPLE__
+#ifdef CONFIG_IGB_DISABLE_PACKET_SPLIT
 	// actually, skb is not allocated.
 	IOBufferMemoryDescriptor *pool = bi->pool;
 	dma_addr_t dma = bi->dma;
@@ -5666,8 +5703,31 @@ static bool igb_alloc_mapped_skb(struct igb_ring *rx_ring,
 	}
 	pool->prepare();
 	dma = pool->getPhysicalAddress();
-	
-#else
+#else	// CONFIG_IGB_DISABLE_PACKET_SPLIT
+	struct sk_buff *skb = bi->skb;
+	dma_addr_t dma = bi->dma;
+
+	if (likely(!skb)) {
+		skb = netdev_alloc_skb_ip_align(netdev_ring(rx_ring),
+										IGB_RX_HDR_LEN);
+		bi->skb = skb;
+		if (!skb) {
+			rx_ring->rx_stats.alloc_failed++;
+			return false;
+		}
+		
+		/* initialize skb for ring */
+		skb_record_rx_queue(skb, ring_queue_index(rx_ring));
+	}
+	struct IOPhysicalSegment vec[2];
+	UInt32 count = rx_ring(rx_ring)->rxCursor()->getPhysicalSegmentsWithCoalesce(skb, vec, 1);
+	if(count == 0){
+		rx_ring->rx_stats.alloc_failed++;
+		return false;
+	}
+	dma = vec[0].location;
+#endif	// CONFIG_IGB_DISABLE_PACKET_SPLIT
+#else	// __APPLE__
 	struct sk_buff *skb = bi->skb;
 	dma_addr_t dma = bi->dma;
 
@@ -7658,8 +7718,7 @@ IOReturn AppleIGB::getChecksumSupport(UInt32 *checksumMask, UInt32 checksumFamil
 		if( !isOutput ) {
 			*checksumMask = kChecksumIP | kChecksumTCP | kChecksumUDP;
 		} else {
-			// I cannot make it work...
-			//*checksumMask = kChecksumTCP | kChecksumUDP;
+			*checksumMask = kChecksumTCP | kChecksumUDP;
 		}
 		return kIOReturnSuccess;
 	}
