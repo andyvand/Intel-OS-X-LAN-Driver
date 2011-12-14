@@ -3826,14 +3826,17 @@ netdev_tx_t igb_xmit_frame_ring(struct igb_adapter *adapter,struct sk_buff *skb,
 	__be16 protocol = vlan_get_protocol(skb);
 #endif
 	u8 hdr_len = 0;
-#ifdef	__APPLE__
-	// check fragments
-#else
 	/* need: 1 descriptor per page,
 	 *       + 2 desc gap to keep tail from touching head,
 	 *       + 1 desc for skb->data,
 	 *       + 1 desc for context descriptor,
 	 * otherwise try next time */
+#ifdef	__APPLE__
+	if (igb_maybe_stop_tx(tx_ring, MAX_SKB_FRAGS + 4)) {
+		/* this is a hard error */
+		return NETDEV_TX_BUSY;
+	}
+#else
 	if (igb_maybe_stop_tx(tx_ring, skb_shinfo(skb)->nr_frags + 4)) {
 		/* this is a hard error */
 		return NETDEV_TX_BUSY;
