@@ -100,6 +100,7 @@ private:
 	IOInterruptEventSource * interruptSource;
 	IOTimerEventSource * watchdogSource;
 	IOTimerEventSource * resetSource;
+	IOTimerEventSource * dmaErrSource;
 
 	IOEthernetInterface * netif;
 	IONetworkStats * netStats;

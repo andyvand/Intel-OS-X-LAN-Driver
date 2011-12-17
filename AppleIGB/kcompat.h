@@ -179,11 +179,17 @@ struct work_struct {
 #define MAX_SKB_FRAGS (65536/PAGE_SIZE + 2)
 #endif
 
+#define PCI_COMMAND             0x04    /* 16 bits */
 #define	PCI_EXP_DEVCTL	8
 #define	PCI_EXP_DEVCTL_CERE	0x0001	/* Correctable Error Reporting En. */
 #define	PCI_EXP_LNKCTL	16
 #define PCIE_LINK_STATE_L0S     1
 #define PCIE_LINK_STATE_L1 2
+
+#define  PCI_STATUS_REC_TARGET_ABORT    0x1000 /* Master ack of " */
+#define  PCI_STATUS_REC_MASTER_ABORT    0x2000 /* Set on master abort */
+#define  PCI_STATUS_SIG_SYSTEM_ERROR    0x4000 /* Set when we drive SERR */
+
 
 #define MAX_NUMNODES 1
 #define first_online_node 0
@@ -274,6 +280,7 @@ typedef void AppleIGB;
 	({ type __x = (x); type __y = (y); __x < __y ? __x: __y; })
 
 #define		iphdr	ip
+struct net_device { void* dummy; };
 
 enum irqreturn {
 	IRQ_NONE,

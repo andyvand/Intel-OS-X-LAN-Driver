@@ -223,6 +223,16 @@ IGB_PARAM(QueuePairs, "Enable TX/RX queue pairs for interrupt handling (0,1), de
  IGB_PARAM(DMAC, "Disable or set latency for DMA Coalescing ((0=off, 1000-10000(msec), 250, 500 (usec))");
 
 
+#ifndef IGB_NO_LRO
+/* Enable/disable Large Receive Offload
+ *
+ * Valid Values: 0(off), 1(on)
+ *
+ * Default Value: 0
+ */
+IGB_PARAM(LRO, "Large Receive Offload (0,1), default 0=off");
+
+#endif
 struct igb_opt_list {
 	int i;
 	char *str;
