@@ -46,7 +46,7 @@ static u8 e1000_calculate_checksum(u8 *buffer, u32 length)
 	for (i = 0; i < length; i++)
 		sum += buffer[i];
 
-	return (u8) (0 - sum);
+	return (u8)(0 - sum);
 }
 
 /**
@@ -108,8 +108,9 @@ bool e1000e_check_mng_mode_generic(struct e1000_hw *hw)
 	u32 fwsm = er32(FWSM);
 
 	return (fwsm & E1000_FWSM_MODE_MASK) ==
-	        (E1000_MNG_IAMT_MODE << E1000_FWSM_MODE_SHIFT);
+	    (E1000_MNG_IAMT_MODE << E1000_FWSM_MODE_SHIFT);
 }
+
 /**
  *  e1000e_enable_tx_pkt_filtering - Enable packet filtering on Tx
  *  @hw: pointer to the HW structure
@@ -144,15 +145,15 @@ bool e1000e_enable_tx_pkt_filtering(struct e1000_hw *hw)
 	}
 
 	/* Read in the header.  Length and offset are in dwords. */
-	len    = E1000_MNG_DHCP_COOKIE_LENGTH >> 2;
+	len = E1000_MNG_DHCP_COOKIE_LENGTH >> 2;
 	offset = E1000_MNG_DHCP_COOKIE_OFFSET >> 2;
 	for (i = 0; i < len; i++)
 		*(buffer + i) = E1000_READ_REG_ARRAY(hw, E1000_HOST_IF,
-		                                           offset + i);
+						     offset + i);
 	hdr_csum = hdr->checksum;
 	hdr->checksum = 0;
 	csum = e1000_calculate_checksum((u8 *)hdr,
-	                                E1000_MNG_DHCP_COOKIE_LENGTH);
+					E1000_MNG_DHCP_COOKIE_LENGTH);
 	/*
 	 * If either the checksums or signature don't match, then
 	 * the cookie area isn't considered valid, in which case we
@@ -181,8 +182,7 @@ out:
  *
  *  Writes the DHCP information to the host interface.
  **/
-s32 e1000e_mng_write_dhcp_info(struct e1000_hw *hw, u8 *buffer,
-                                      u16 length)
+s32 e1000e_mng_write_dhcp_info(struct e1000_hw *hw, u8 *buffer, u16 length)
 {
 	struct e1000_host_mng_command_header hdr;
 	s32 ret_val;
@@ -201,7 +201,7 @@ s32 e1000e_mng_write_dhcp_info(struct e1000_hw *hw, u8 *buffer,
 
 	/* Populate the host interface with the contents of "buffer". */
 	ret_val = hw->mac.ops.mng_host_if_write(hw, buffer, length,
-	                                  sizeof(hdr), &(hdr.checksum));
+						sizeof(hdr), &(hdr.checksum));
 	if (ret_val)
 		goto out;
 
@@ -226,7 +226,7 @@ out:
  *  Writes the command header after does the checksum calculation.
  **/
 s32 e1000_mng_write_cmd_header(struct e1000_hw *hw,
-                                    struct e1000_host_mng_command_header *hdr)
+			       struct e1000_host_mng_command_header *hdr)
 {
 	u16 i, length = sizeof(struct e1000_host_mng_command_header);
 
@@ -237,8 +237,7 @@ s32 e1000_mng_write_cmd_header(struct e1000_hw *hw,
 	length >>= 2;
 	/* Write the relevant command block into the ram area. */
 	for (i = 0; i < length; i++) {
-		E1000_WRITE_REG_ARRAY(hw, E1000_HOST_IF, i,
-		                            *((u32 *) hdr + i));
+		E1000_WRITE_REG_ARRAY(hw, E1000_HOST_IF, i, *((u32 *)hdr + i));
 		e1e_flush();
 	}
 
@@ -258,7 +257,7 @@ s32 e1000_mng_write_cmd_header(struct e1000_hw *hw,
  *  way.  Also fills up the sum of the buffer in *buffer parameter.
  **/
 s32 e1000_mng_host_if_write(struct e1000_hw *hw, u8 *buffer,
-                                    u16 length, u16 offset, u8 *sum)
+			    u16 length, u16 offset, u8 *sum)
 {
 	u8 *tmp;
 	u8 *bufptr = buffer;
@@ -304,8 +303,7 @@ s32 e1000_mng_host_if_write(struct e1000_hw *hw, u8 *buffer,
 			*sum += *(tmp + j);
 		}
 
-		E1000_WRITE_REG_ARRAY(hw, E1000_HOST_IF, offset + i,
-		                            data);
+		E1000_WRITE_REG_ARRAY(hw, E1000_HOST_IF, offset + i, data);
 	}
 	if (remaining) {
 		for (j = 0; j < sizeof(u32); j++) {
@@ -364,13 +362,11 @@ bool e1000e_enable_mng_pass_thru(struct e1000_hw *hw)
 			ret_val = true;
 			goto out;
 		}
-	} else if ((manc & E1000_MANC_SMBUS_EN) &&
-		    !(manc & E1000_MANC_ASF_EN)) {
-			ret_val = true;
-			goto out;
+	} else if ((manc & E1000_MANC_SMBUS_EN) && !(manc & E1000_MANC_ASF_EN)) {
+		ret_val = true;
+		goto out;
 	}
 
 out:
 	return ret_val;
 }
-

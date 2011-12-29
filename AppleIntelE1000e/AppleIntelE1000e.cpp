@@ -149,16 +149,49 @@ static int e1000_alloc_queues(struct e1000_adapter *adapter)
 {
 	adapter->tx_ring = (e1000_ring*)IOMalloc(sizeof(struct e1000_ring));
 	if (adapter->tx_ring){
+        bzero(adapter->tx_ring, sizeof(e1000_ring));
+        adapter->tx_ring->count = adapter->tx_ring_count;
+        adapter->tx_ring->adapter = adapter;
 		adapter->rx_ring = (e1000_ring*)IOMalloc(sizeof(struct e1000_ring));
 		if (adapter->rx_ring){
-			bzero(adapter->tx_ring, sizeof(e1000_ring));
 			bzero(adapter->rx_ring, sizeof(e1000_ring));
+            adapter->rx_ring->count = adapter->rx_ring_count;
+            adapter->rx_ring->adapter = adapter;
 			return 0;
 		}
 		IOFree(adapter->tx_ring, sizeof(e1000_ring));
 	}
 	return -ENOMEM;
 }
+
+/**
+* e1000_configure_msix - Configure MSI-X hardware
+*
+* e1000_configure_msix sets up the hardware to properly
+* generate MSI-X interrupts.
+**/
+static void e1000_configure_msix(struct e1000_adapter *adapter)
+{
+}
+
+void e1000e_reset_interrupt_capability(struct e1000_adapter *adapter)
+{
+}
+
+/**
+ * e1000e_set_interrupt_capability - set MSI or MSI-X if supported
+ *
+ * Attempt to configure interrupts using the best available
+ * capabilities of the hardware and kernel.
+ **/
+void e1000e_set_interrupt_capability(struct e1000_adapter *adapter)
+{
+	adapter->int_mode = E1000E_INT_MODE_LEGACY;
+	adapter->msix_entries = NULL;
+	/* store the number of vectors being used */
+	adapter->num_vectors = 1;
+}
+
 
 /**
  * e1000_irq_disable - Mask off interrupt generation on the NIC
@@ -168,10 +201,8 @@ static void e1000_irq_disable(struct e1000_adapter *adapter)
 	struct e1000_hw *hw = &adapter->hw;
 	
 	ew32(IMC, ~0);
-#ifdef CONFIG_E1000E_MSIX
 	if (adapter->msix_entries)
 		ew32(EIAC_82574, 0);
-#endif /* CONFIG_E1000E_MSIX */
 	e1e_flush();
 	//synchronize_irq(adapter->pdev->irq);
 }
@@ -183,17 +214,18 @@ static void e1000_irq_enable(struct e1000_adapter *adapter)
 {
 	struct e1000_hw *hw = &adapter->hw;
 	
-#ifdef CONFIG_E1000E_MSIX
-	if (adapter->msix_entries) {
-		ew32(EIAC_82574, adapter->eiac_mask & E1000_EIAC_MASK_82574);
-		ew32(IMS, adapter->eiac_mask | E1000_IMS_OTHER | E1000_IMS_LSC);
-	} else {
-		ew32(IMS, IMS_ENABLE_MASK);
-	}
-#else
-	ew32(IMS, IMS_ENABLE_MASK);
-#endif /* CONFIG_E1000E_MSIX */
+	ew32(IMC, ~0);
+	if (adapter->msix_entries)
+		ew32(EIAC_82574, 0);
 	e1e_flush();
+
+	if (adapter->msix_entries) {
+		int i;
+		for (i = 0; i < adapter->num_vectors; i++)
+			synchronize_irq(adapter->msix_entries[i].vector);
+	} else {
+		synchronize_irq(adapter->pdev->irq);
+	}
 }
 
 
@@ -230,10 +262,8 @@ static int e1000_sw_init(struct e1000_adapter *adapter)
 	if (rc)
 		return rc;
 	
-#ifdef CONFIG_E1000E_MSIX
 	e1000e_set_interrupt_capability(adapter);
 	
-#endif /* CONFIG_E1000E_MSIX */
 	if (e1000_alloc_queues(adapter))
 		return -ENOMEM;
 	
@@ -287,9 +317,9 @@ static int e1000_alloc_ring_dma(struct e1000_adapter *adapter,
  *
  * Return 0 on success, negative on failure
  **/
-int e1000e_setup_tx_resources(struct e1000_adapter *adapter)
+int e1000e_setup_tx_resources(struct e1000_ring *tx_ring)
 {
-	struct e1000_ring *tx_ring = adapter->tx_ring;
+	struct e1000_adapter *adapter = tx_ring->adapter;
 	int err = -ENOMEM, size;
 	
 	size = sizeof(struct e1000_buffer) * tx_ring->count;
@@ -322,9 +352,9 @@ err:
  *
  * Returns 0 on success, negative on failure
  **/
-int e1000e_setup_rx_resources(struct e1000_adapter *adapter)
+int e1000e_setup_rx_resources(struct e1000_ring *rx_ring)
 {
-	struct e1000_ring *rx_ring = adapter->rx_ring;
+	struct e1000_adapter *adapter = rx_ring->adapter;
 	struct e1000_buffer *buffer_info;
 	int i, size, desc_len, err = -ENOMEM;
 	
@@ -495,8 +525,7 @@ void e1000e_reset(struct e1000_adapter *adapter)
 		 * but don't include ethernet FCS because hardware appends it
 		 */
 		min_tx_space = (adapter->max_frame_size +
-						sizeof(struct e1000_tx_desc) -
-						ETH_FCS_LEN) * 2;
+						sizeof(struct e1000_tx_desc) - ETH_FCS_LEN) * 2;
 		min_tx_space = ALIGN(min_tx_space, 1024);
 		min_tx_space >>= 10;
 		/* software strips receive CRC, so leave room for it */
@@ -517,9 +546,7 @@ void e1000e_reset(struct e1000_adapter *adapter)
 			 * if short on Rx space, Rx wins and must trump Tx
 			 * adjustment or use Early Receive if available
 			 */
-			if ((pba < min_rx_space) &&
-			    (!(adapter->flags & FLAG_HAS_ERT)))
-			/* ERT enabled in e1000_configure_rx */
+			if (pba < min_rx_space)
 				pba = min_rx_space;
 		}
 		
@@ -534,8 +561,6 @@ void e1000e_reset(struct e1000_adapter *adapter)
 	 * (or the size used for early receive) above it in the Rx FIFO.
 	 * Set it to the lower of:
 	 * - 90% of the Rx FIFO size, and
-	 * - the full Rx FIFO size minus the early receive size (for parts
-	 *   with ERT support assuming ERT set to E1000_ERT_2048), or
 	 * - the full Rx FIFO size minus one full frame
 	 */
 	if (adapter->flags & FLAG_DISABLE_FC_PAUSE_TIME)
@@ -546,14 +571,19 @@ void e1000e_reset(struct e1000_adapter *adapter)
 	fc->current_mode = fc->requested_mode;
 
 	switch (hw->mac.type) {
+		case e1000_ich9lan:
+		case e1000_ich10lan:
+			if (adapter->netdev->mtu > ETH_DATA_LEN) {
+				pba = 14;
+				ew32(PBA, pba);
+				fc->high_water = 0x2800;
+				fc->low_water = fc->high_water - 8;
+				break;
+			}
+			/* fall-through */
 		default:
-			if ((adapter->flags & FLAG_HAS_ERT) &&
-				(adapter->netdev->mtu > ETH_DATA_LEN))
-				hwm = min(((pba << 10) * 9 / 10),
-						  ((pba << 10) - (E1000_ERT_2048 << 3)));
-			else
-				hwm = min(((pba << 10) * 9 / 10),
-						  ((pba << 10) - adapter->max_frame_size));
+			hwm = min(((pba << 10) * 9 / 10),
+					  ((pba << 10) - adapter->max_frame_size));
 			
 			fc->high_water = hwm & E1000_FCRTH_RTH; /* 8-byte granularity */
 			fc->low_water = fc->high_water - 8;
@@ -586,11 +616,10 @@ void e1000e_reset(struct e1000_adapter *adapter)
 
 	/*
 	 * Disable Adaptive Interrupt Moderation if 2 full packets cannot
-	 * fit in receive buffer and early-receive not supported.
+	 * fit in receive buffer.
 	 */
 	if (adapter->itr_setting & 0x3) {
-		if (((adapter->max_frame_size * 2) > (pba << 10)) &&
-		    !(adapter->flags & FLAG_HAS_ERT)) {
+		if ((adapter->max_frame_size * 2) > (pba << 10)) {
 			if (!(adapter->flags2 & FLAG2_DISABLE_AIM)) {
 				IOLog("Interrupt Throttle Rate turned off\n");
 				adapter->flags2 |= FLAG2_DISABLE_AIM;
@@ -656,19 +685,83 @@ void e1000e_reset(struct e1000_adapter *adapter)
 
 
 /**
- *  e1000_update_mc_addr_list - Update Multicast addresses
- *  @hw: pointer to the HW structure
- *  @mc_addr_list: array of multicast addresses to program
- *  @mc_addr_count: number of multicast addresses to program
+ * e1000e_write_mc_addr_list - write multicast addresses to MTA
+ * @netdev: network interface device structure
  *
- *  Updates the Multicast Table Array.
- *  The caller must have a packed mc_addr_list of multicast addresses.
- **/
-static void e1000_update_mc_addr_list(struct e1000_hw *hw, u8 *mc_addr_list,
+ * Writes multicast address list to the MTA hash table.
+ * Returns: -ENOMEM on failure
+ *                0 on no addresses written
+ *                X on writing X addresses to MTA
+ */
+static int e1000e_write_mc_addr_list(struct e1000_hw *hw, u8 *mc_addr_list,
 									  u32 mc_addr_count)
 {
 	hw->mac.ops.update_mc_addr_list(hw, mc_addr_list, mc_addr_count);
+	return 0;
 }
+
+#ifdef HAVE_SET_RX_MODE
+/**
+ * e1000e_write_uc_addr_list - write unicast addresses to RAR table
+ * @netdev: network interface device structure
+ *
+ * Writes unicast address list to the RAR table.
+ * Returns: -ENOMEM on failure/insufficient address space
+ *                0 on no addresses written
+ *                X on writing X addresses to the RAR table
+ **/
+static int e1000e_write_uc_addr_list(struct net_device *netdev)
+{
+	struct e1000_adapter *adapter = netdev_priv(netdev);
+	struct e1000_hw *hw = &adapter->hw;
+	unsigned int rar_entries = hw->mac.rar_entry_count;
+	int count = 0;
+	
+	/* save a rar entry for our hardware address */
+	rar_entries--;
+	
+	/* save a rar entry for the LAA workaround */
+	if (adapter->flags & FLAG_RESET_OVERWRITES_LAA)
+		rar_entries--;
+	
+	/* return ENOMEM indicating insufficient memory for addresses */
+	if (netdev_uc_count(netdev) > rar_entries)
+		return -ENOMEM;
+	
+	if (!netdev_uc_empty(netdev) && rar_entries) {
+#ifdef NETDEV_HW_ADDR_T_UNICAST
+		struct netdev_hw_addr *ha;
+#else
+		struct dev_mc_list *ha;
+#endif
+		
+		/*
+		 * write the addresses in reverse order to avoid write
+		 * combining
+		 */
+		netdev_for_each_uc_addr(ha, netdev) {
+			if (!rar_entries)
+				break;
+#ifdef NETDEV_HW_ADDR_T_UNICAST
+			e1000e_rar_set(hw, ha->addr, rar_entries--);
+#else
+			e1000e_rar_set(hw, ha->da_addr, rar_entries--);
+#endif
+			count++;
+		}
+	}
+	
+	/* zero out the remaining RAR entries not used above */
+	for (; rar_entries > 0; rar_entries--) {
+		ew32(RAH(rar_entries), 0);
+		ew32(RAL(rar_entries), 0);
+	}
+	e1e_flush();
+	
+	return count;
+}
+
+#endif /* HAVE_SET_RX_MODE */
 
 /**
  * e1000e_update_tail_wa - helper function for e1000e_update_[rt]dt_wa()
@@ -684,29 +777,29 @@ static void e1000_update_mc_addr_list(struct e1000_hw *hw, u8 *mc_addr_list,
  * which has bit 24 set while ME is accessing Host CSR registers, wait
  * if it is set and try again a number of times.
  **/
-static inline s32 e1000e_update_tail_wa(struct e1000_hw *hw, u8 __iomem *tail,
-										unsigned int i)
+static inline s32 e1000e_update_tail_wa(struct e1000_hw *hw, void __iomem *tail,
+                                        unsigned int i)
 {
 	unsigned int j = 0;
-	
+    
 	while ((j++ < E1000_ICH_FWSM_PCIM2PCI_COUNT) &&
 	       (er32(FWSM) & E1000_ICH_FWSM_PCIM2PCI))
 		udelay(50);
-	
+    
 	writel(i, tail);
-	
+    
 	if ((j == E1000_ICH_FWSM_PCIM2PCI_COUNT) && (i != readl(tail)))
 		return E1000_ERR_SWFW_SYNC;
-	
+    
 	return 0;
 }
 
-static void e1000e_update_rdt_wa(struct e1000_adapter *adapter, unsigned int i)
+static void e1000e_update_rdt_wa(struct e1000_ring *rx_ring, unsigned int i)
 {
-	u8 __iomem *tail = (adapter->hw.hw_addr + adapter->rx_ring->tail);
-	struct e1000_hw *hw =  &adapter->hw;
-	
-	if (e1000e_update_tail_wa(hw, tail, i)) {
+	struct e1000_adapter *adapter = rx_ring->adapter;
+	struct e1000_hw *hw = &adapter->hw;
+    
+	if (e1000e_update_tail_wa(hw, rx_ring->tail, i)) {
 		u32 rctl = er32(RCTL);
 		ew32(RCTL, rctl & ~E1000_RCTL_EN);
 		e_err("ME firmware caused invalid RDT - resetting\n");
@@ -714,12 +807,12 @@ static void e1000e_update_rdt_wa(struct e1000_adapter *adapter, unsigned int i)
 	}
 }
 
-static void e1000e_update_tdt_wa(struct e1000_adapter *adapter, unsigned int i)
+static void e1000e_update_tdt_wa(struct e1000_ring *tx_ring, unsigned int i)
 {
-	u8 __iomem *tail = (adapter->hw.hw_addr + adapter->tx_ring->tail);
-	struct e1000_hw *hw =  &adapter->hw;
-	
-	if (e1000e_update_tail_wa(hw, tail, i)) {
+	struct e1000_adapter *adapter = tx_ring->adapter;
+	struct e1000_hw *hw = &adapter->hw;
+    
+	if (e1000e_update_tail_wa(hw, tx_ring->tail, i)) {
 		u32 tctl = er32(TCTL);
 		ew32(TCTL, tctl & ~E1000_TCTL_EN);
 		e_err("ME firmware caused invalid TDT - resetting\n");
@@ -851,7 +944,6 @@ set_itr_now:
 		min(adapter->itr + (new_itr >> 2), new_itr) :
 		new_itr;
 		adapter->itr = new_itr;
-#ifdef CONFIG_E1000E_MSIX
 		adapter->rx_ring->itr_val = new_itr;
 		if (adapter->msix_entries)
 			adapter->rx_ring->set_itr = 1;
@@ -860,12 +952,6 @@ set_itr_now:
 				ew32(ITR, 1000000000 / (new_itr * 256));
 			else
 				ew32(ITR, 0);
-#else
-		if (new_itr)
-			ew32(ITR, 1000000000 / (new_itr * 256));
-		else
-			ew32(ITR, 0);
-#endif
 	}
 }
 
@@ -925,10 +1011,9 @@ static int e1000_tx_map(struct e1000_adapter *adapter, mbuf_t skb, unsigned int 
 }
 
 
-static void e1000_tx_queue(struct e1000_adapter *adapter,
-						   int tx_flags, int count)
+static void e1000_tx_queue(struct e1000_ring *tx_ring, int tx_flags, int count)
 {
-	struct e1000_ring *tx_ring = adapter->tx_ring;
+	struct e1000_adapter *adapter = tx_ring->adapter;
 	struct e1000_tx_desc *tx_desc = NULL;
 	struct e1000_buffer *buffer_info;
 	u32 txd_upper = 0, txd_lower = E1000_TXD_CMD_IFCS;
@@ -979,10 +1064,12 @@ static void e1000_tx_queue(struct e1000_adapter *adapter,
 	wmb();
 	
 	tx_ring->next_to_use = i;
+	
 	if (adapter->flags2 & FLAG2_PCIM2PCI_ARBITER_WA)
-		e1000e_update_tdt_wa(adapter, i);
+		e1000e_update_tdt_wa(tx_ring, i);
 	else
-		writel(i, adapter->hw.hw_addr + tx_ring->tail);
+		writel(i, tx_ring->tail);
+	
 	/*
 	 * we need this if more than one processor can write to our tail
 	 * at a time, it synchronizes IO on IA64/Altix systems
@@ -1189,9 +1276,7 @@ void AppleIntelE1000e::stop(IOService* provider)
 	 */
 	e1000e_release_hw_control(adapter);
 	
-#ifdef CONFIG_E1000E_MSIX
 	e1000e_reset_interrupt_capability(adapter);
-#endif /* CONFIG_E1000E_MSIX */
 	IOFree(adapter->tx_ring, sizeof(e1000_ring));
 	IOFree(adapter->rx_ring, sizeof(e1000_ring));
 	
@@ -1542,12 +1627,12 @@ IOReturn AppleIntelE1000e::enable(IONetworkInterface * netif)
 		return kIOReturnIOError;
 
 	/* allocate transmit descriptors */
-	err = e1000e_setup_tx_resources(adapter);
+	err = e1000e_setup_tx_resources(adapter->tx_ring);
 	if (err)
 		goto err_setup_tx;
 	
 	/* allocate receive descriptors */
-	err = e1000e_setup_rx_resources(adapter);
+	err = e1000e_setup_rx_resources(adapter->rx_ring);
 	if (err)
 		goto err_setup_rx;
 	
@@ -1570,10 +1655,9 @@ IOReturn AppleIntelE1000e::enable(IONetworkInterface * netif)
 		e1000_update_mng_vlan(adapter);
 	
 #endif
-	/* DMA latency requirement to workaround early-receive/jumbo issue */
+	/* DMA latency requirement to workaround jumbo issue */
 #if 0
-	if ((adapter->flags & FLAG_HAS_ERT) ||
-	    (adapter->hw.mac.type == e1000_pch2lan))
+	if (adapter->hw.mac.type == e1000_pch2lan)
         ;
 #endif
     /* From here on the code is the same as e1000e_up() */
@@ -1627,8 +1711,7 @@ IOReturn AppleIntelE1000e::disable(IONetworkInterface * netif)
 	if (adapter->flags & FLAG_HAS_AMT)
 		e1000e_release_hw_control(adapter);
 #if 0
-	if ((adapter->flags & FLAG_HAS_ERT) ||
-	    (adapter->hw.mac.type == e1000_pch2lan))
+	if (adapter->hw.mac.type == e1000_pch2lan)
         ;
 #endif
 
@@ -1653,10 +1736,8 @@ void AppleIntelE1000e::e1000e_up()
 #ifdef CONFIG_E1000E_NAPI
 	napi_enable(&adapter->napi);
 #endif
-#ifdef CONFIG_E1000E_MSIX
 	if (adapter->msix_entries)
 		e1000_configure_msix(adapter);
-#endif /* CONFIG_E1000E_MSIX */
 	e1000_irq_enable(adapter);
 
 	watchdogSource->setTimeoutMS(200);
@@ -1665,11 +1746,9 @@ void AppleIntelE1000e::e1000e_up()
 	workLoop->enableAllInterrupts();
 	
 	/* fire a link change interrupt to start the watchdog */
-#ifdef CONFIG_E1000E_MSIX
 	if (adapter->msix_entries)
 		ew32(ICS, E1000_ICS_LSC | E1000_ICR_OTHER);
 	else
-#endif /* CONFIG_E1000_MSIX */
 		ew32(ICS, E1000_ICS_LSC);
 	
 }
@@ -1771,7 +1850,7 @@ UInt32 AppleIntelE1000e::outputPacket(mbuf_t skb, void * param)
 		return kIOReturnOutputDropped;
 	}
 
-	e1000_tx_queue(adapter, tx_flags, count);
+	e1000_tx_queue(tx_ring, tx_flags, count);
 	
 	return kIOReturnOutputSuccess;
 }
@@ -1936,20 +2015,21 @@ IOReturn AppleIntelE1000e::setPromiscuousMode(bool active)
 {
 	e_dbg("AppleIntelE1000e::setPromiscuousMode(%d).\n", active);
 	promiscusMode = active;
-	e1000_set_multi();
+	e1000_set_rx_mode();
 	return kIOReturnSuccess;
 }
 IOReturn AppleIntelE1000e::setMulticastMode(bool active)
 {
 	e_dbg("AppleIntelE1000e::setMulticastMode(%d).\n", active);
 	multicastMode = active;
-	e1000_set_multi();
+	e1000_set_rx_mode();
 	return kIOReturnSuccess;
 }
 IOReturn AppleIntelE1000e::setMulticastList(IOEthernetAddress * addrs, UInt32 count)
 {
 	e1000_adapter *adapter = &priv_adapter;
-	e1000_update_mc_addr_list(&adapter->hw,(u8*)addrs,count);
+	mcCount = count;
+	e1000e_write_mc_addr_list(&adapter->hw,(u8*)addrs,count);
 	return kIOReturnSuccess;
 }
 
@@ -2134,8 +2214,7 @@ void AppleIntelE1000e::e1000_configure_tx()
 	struct e1000_hw *hw = &adapter->hw;
 	struct e1000_ring *tx_ring = adapter->tx_ring;
 	u64 tdba;
-	u32 tdlen, tctl, tipg, tarc;
-	u32 ipgr1, ipgr2;
+	u32 tdlen, tarc;
 	
 	/* Setup the HW Tx Head and Tail descriptor pointers */
 	tdba = tx_ring->dma;
@@ -2145,21 +2224,9 @@ void AppleIntelE1000e::e1000_configure_tx()
 	ew32(TDLEN(0), tdlen);
 	ew32(TDH(0), 0);
 	ew32(TDT(0), 0);
-	tx_ring->head = E1000_TDH(0);
-	tx_ring->tail = E1000_TDT(0);
-	
-	/* Set the default values for the Tx Inter Packet Gap timer */
-	tipg = DEFAULT_82543_TIPG_IPGT_COPPER;          /*  8  */
-	ipgr1 = DEFAULT_82543_TIPG_IPGR1;               /*  8  */
-	ipgr2 = DEFAULT_82543_TIPG_IPGR2;               /*  6  */
-	
-	if (adapter->flags & FLAG_TIPG_MEDIUM_FOR_80003ESLAN)
-		ipgr2 = DEFAULT_80003ES2LAN_TIPG_IPGR2; /*  7  */
-	
-	tipg |= ipgr1 << E1000_TIPG_IPGR1_SHIFT;
-	tipg |= ipgr2 << E1000_TIPG_IPGR2_SHIFT;
-	ew32(TIPG, tipg);
-	
+	tx_ring->head = (u8*)adapter->hw.hw_addr + E1000_TDH(0);
+	tx_ring->tail = (u8*)adapter->hw.hw_addr + E1000_TDT(0);
+		
 	/* Set the Tx Interrupt Delay register */
 	ew32(TIDV, adapter->tx_int_delay);
 	/* Tx irq moderation */
@@ -2181,16 +2248,10 @@ void AppleIntelE1000e::e1000_configure_tx()
 		 */
 		txdctl |= E1000_TXDCTL_DMA_BURST_ENABLE;
 		ew32(TXDCTL(0), txdctl);
-		/* erratum work around: set txdctl the same for both queues */
-		ew32(TXDCTL(1), txdctl);
 	}
+	/* erratum work around: set txdctl the same for both queues */
+	ew32(TXDCTL(1), er32(TXDCTL(0)));
 
-	/* Program the Transmit Control Register */
-	tctl = er32(TCTL);
-	tctl &= ~E1000_TCTL_CT;
-	tctl |= E1000_TCTL_PSP | E1000_TCTL_RTLC |
-	(E1000_COLLISION_THRESHOLD << E1000_CT_SHIFT);
-	
 	if (adapter->flags & FLAG_TARC_SPEED_MODE_BIT) {
 		tarc = er32(TARC(0));
 		/*
@@ -2222,8 +2283,6 @@ void AppleIntelE1000e::e1000_configure_tx()
 	/* enable Report Status bit */
 	adapter->txd_cmd |= E1000_TXD_CMD_RS;
 	
-	ew32(TCTL, tctl);
-	
 	e1000e_config_collision_dist(hw);
 }
 
@@ -2238,7 +2297,6 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	e1000_adapter *adapter = &priv_adapter;
 	struct e1000_hw *hw = &adapter->hw;
 	u32 rctl, rfctl;
-	u32 pages = 0;
 
 	/* Workaround Si errata on 82579 - configure jumbo frame flow */
 	if (hw->mac.type == e1000_pch2lan) {
@@ -2275,26 +2333,28 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	if (adapter->flags2 & FLAG2_CRC_STRIPPING)
 		rctl |= E1000_RCTL_SECRC;
 	
-	/* Workaround Si errata on 82577 PHY - configure IPG for jumbos */
-	if ((hw->phy.type == e1000_phy_82577) && (rctl & E1000_RCTL_LPE)) {
+	/* Workaround Si errata on 82577/82578 - configure IPG for jumbos */
+	if ((hw->mac.type == e1000_pchlan) && (rctl & E1000_RCTL_LPE)) {
 		u32 mac_data;
 		u16 phy_data;
-		
+        
 		e1e_rphy(hw, PHY_REG(770, 26), &phy_data);
 		phy_data &= 0xfff8;
 		phy_data |= (1 << 2);
 		e1e_wphy(hw, PHY_REG(770, 26), phy_data);
-		
+        
 		mac_data = er32(FFLT_DBG);
 		mac_data |= (1 << 17);
 		ew32(FFLT_DBG, mac_data);
-		
-		e1e_rphy(hw, 22, &phy_data);
-		phy_data &= 0x0fff;
-		phy_data |= (1 << 14);
-		e1e_wphy(hw, 0x10, 0x2823);
-		e1e_wphy(hw, 0x11, 0x0003);
-		e1e_wphy(hw, 22, phy_data);
+        
+		if (hw->phy.type == e1000_phy_82577) {
+			e1e_rphy(hw, 22, &phy_data);
+			phy_data &= 0x0fff;
+			phy_data |= (1 << 14);
+			e1e_wphy(hw, 0x10, 0x2823);
+			e1e_wphy(hw, 0x11, 0x0003);
+			e1e_wphy(hw, 22, phy_data);
+		}
 	}
 	
 	
@@ -2321,32 +2381,6 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	/* Enable Extended Status in all Receive Descriptors */
 	rfctl = er32(RFCTL);
 	rfctl |= E1000_RFCTL_EXTEN;
-	
-	/*
-	 * 82571 and greater support packet-split where the protocol
-	 * header is placed in skb->data and the packet data is
-	 * placed in pages hanging off of skb_shinfo(skb)->nr_frags.
-	 * In the case of a non-split, skb->data is linearly filled,
-	 * followed by the page buffers.  Therefore, skb->data is
-	 * sized to hold the largest protocol header.
-	 *
-	 * allocations using alloc_page take too long for regular MTU
-	 * so only enable packet split for jumbo frames
-	 *
-	 * Using pages when the page size is greater than 16k wastes
-	 * a lot of memory, since we allocate 3 pages at all times
-	 * per packet.
-	 */
-	pages = PAGE_USE_COUNT(adapter->netdev->mtu);
-#if	0
-	adapter->rx_ps_pages = 0;
-#else
-	if (!(adapter->flags & FLAG_HAS_ERT) && (pages <= 3) &&
-	    (PAGE_SIZE <= 16384) && (rctl & E1000_RCTL_LPE))
-		adapter->rx_ps_pages = pages;
-	else
-		adapter->rx_ps_pages = 0;
-#endif
 	
 	if (adapter->rx_ps_pages) {
 		u32 psrctl = 0;
@@ -2458,12 +2492,16 @@ void AppleIntelE1000e::e1000_configure_rx()
 	ew32(RDLEN(0), rdlen);
 	ew32(RDH(0), 0);
 	ew32(RDT(0), 0);
-	rx_ring->head = E1000_RDH(0);
-	rx_ring->tail = E1000_RDT(0);
+	rx_ring->head = (u8*)adapter->hw.hw_addr + E1000_RDH(0);
+	rx_ring->tail = (u8*)adapter->hw.hw_addr + E1000_RDT(0);
 	
 	/* Enable Receive Checksum Offload for TCP and UDP */
 	rxcsum = er32(RXCSUM);
-	if (adapter->flags & FLAG_RX_CSUM_ENABLED) {
+#ifdef HAVE_NDO_SET_FEATURES
+	if (adapter->netdev->features & NETIF_F_RXCSUM) {
+#else
+    if (adapter->flags & FLAG_RX_CSUM_ENABLED) {
+#endif
 		rxcsum |= E1000_RXCSUM_TUOFL;
 		
 		/*
@@ -2478,32 +2516,35 @@ void AppleIntelE1000e::e1000_configure_rx()
 	}
 	ew32(RXCSUM, rxcsum);
 	
-	/*
-	 * Enable early receives on supported devices, only takes effect when
-	 * packet size is equal or larger than the specified value (in 8 byte
-	 * units), e.g. using jumbo frames when setting to E1000_ERT_2048
-	 */
-	if ((adapter->flags & FLAG_HAS_ERT) ||
-	    (adapter->hw.mac.type == e1000_pch2lan)) {
-		if (priv_netdev.mtu > ETH_DATA_LEN) {
+	if (adapter->hw.mac.type == e1000_pch2lan) {
+		/*
+		 * With jumbo frames, excessive C-state transition
+		 * latencies result in dropped transactions.
+		 */
+		if (adapter->netdev->mtu > ETH_DATA_LEN) {
 			u32 rxdctl = er32(RXDCTL(0));
 			ew32(RXDCTL(0), rxdctl | 0x3);
-			if (adapter->flags & FLAG_HAS_ERT)
-				ew32(ERT, E1000_ERT_2048 | (1 << 13));
-			/*
-			 * With jumbo frames and early-receive enabled,
-			 * excessive C-state transition latencies result in
-			 * dropped transactions.
-			 */
-#if	0
+#if 0
+#ifdef HAVE_PM_QOS_REQUEST_ACTIVE
+			pm_qos_update_request(&adapter->netdev->pm_qos_req, 55);
+#elif defined(HAVE_PM_QOS_REQUEST_LIST)
+			pm_qos_update_request(adapter->netdev->pm_qos_req, 55);
+#else
 			pm_qos_update_requirement(PM_QOS_CPU_DMA_LATENCY,
-									  adapter.netdev->name, 55);
+									  adapter->netdev->name, 55);
 #endif
 		} else {
-#if	0
+#ifdef HAVE_PM_QOS_REQUEST_ACTIVE
+			pm_qos_update_request(&adapter->netdev->pm_qos_req,
+								  PM_QOS_DEFAULT_VALUE);
+#elif defined(HAVE_PM_QOS_REQUEST_LIST)
+			pm_qos_update_request(adapter->netdev->pm_qos_req,
+								  PM_QOS_DEFAULT_VALUE);
+#else
 			pm_qos_update_requirement(PM_QOS_CPU_DMA_LATENCY,
-									  adapter.netdev->name,
+									  adapter->netdev->name,
 									  PM_QOS_DEFAULT_VALUE);
+#endif
 #endif
 		}
 	}
@@ -2572,9 +2613,9 @@ void AppleIntelE1000e::e1000_alloc_rx_buffers(int cleaned_count)
 			 */
 			wmb();
 			if (adapter->flags2 & FLAG2_PCIM2PCI_ARBITER_WA)
-				e1000e_update_rdt_wa(adapter, i);
+				e1000e_update_rdt_wa(rx_ring, i);
 			else
-				writel(i, adapter->hw.hw_addr + rx_ring->tail);
+				writel(i, rx_ring->tail);
 		}
 		
 		i++;
@@ -2673,9 +2714,9 @@ void AppleIntelE1000e::e1000_alloc_rx_buffers_ps( int cleaned_count )
 			 */
 			wmb();
 			if (adapter->flags2 & FLAG2_PCIM2PCI_ARBITER_WA)
-				e1000e_update_rdt_wa(adapter, i << 1);
+				e1000e_update_rdt_wa(rx_ring, i << 1);
 			else
-				writel(i<<1, adapter->hw.hw_addr + rx_ring->tail);
+				writel(i<<1, rx_ring->tail);
 		}
 		
 		i++;
@@ -2737,9 +2778,9 @@ void AppleIntelE1000e::e1000_alloc_jumbo_rx_buffers( int cleaned_count )
 			 */
 			wmb();
 			if (adapter->flags2 & FLAG2_PCIM2PCI_ARBITER_WA)
-				e1000e_update_rdt_wa(adapter, i);
+				e1000e_update_rdt_wa(rx_ring, i);
 			else
-				writel(i, adapter->hw.hw_addr + rx_ring->tail);
+				writel(i, rx_ring->tail);
 		}
 		
 		i++;
@@ -3037,7 +3078,8 @@ bool AppleIntelE1000e::e1000_clean_rx_irq_ps()
 	
 	adapter->total_rx_bytes += total_rx_bytes;
 	adapter->total_rx_packets += total_rx_packets;
-#ifdef HAVE_NETDEV_STATS_IN_NETDEV
+#ifdef HAVE_NDO_GET_STATS64
+#elif HAVE_NETDEV_STATS_IN_NETDEV
 	netdev->stats.rx_bytes += total_rx_bytes;
 	netdev->stats.rx_packets += total_rx_packets;
 #else
@@ -3147,7 +3189,8 @@ bool AppleIntelE1000e::e1000_clean_jumbo_rx_irq()
 	
 	adapter->total_rx_bytes += total_rx_bytes;
 	adapter->total_rx_packets += total_rx_packets;
-#ifdef HAVE_NETDEV_STATS_IN_NETDEV
+#ifdef HAVE_NDO_GET_STATS64
+#elif HAVE_NETDEV_STATS_IN_NETDEV
 	netdev->stats.rx_bytes += total_rx_bytes;
 	netdev->stats.rx_packets += total_rx_packets;
 #else
@@ -3270,7 +3313,9 @@ bool AppleIntelE1000e::e1000e_has_link()
 		break;
 	case e1000_media_type_fiber:
 		ret_val = hw->mac.ops.check_for_link(hw);
+/* *INDENT-OFF* */
 		link_active = !!(er32(STATUS) & E1000_STATUS_LU);
+/* *INDENT-ON* */
 		break;
 	case e1000_media_type_internal_serdes:
 		ret_val = hw->mac.ops.check_for_link(hw);
@@ -3324,8 +3369,8 @@ void AppleIntelE1000e::e1000_clean_tx_ring()
 	tx_ring->next_to_use = 0;
 	tx_ring->next_to_clean = 0;
 	
-	writel(0, adapter->hw.hw_addr + tx_ring->head);
-	writel(0, adapter->hw.hw_addr + tx_ring->tail);
+	writel(0, tx_ring->head);
+	writel(0, tx_ring->tail);
 }
 
 
@@ -3443,8 +3488,8 @@ void AppleIntelE1000e::e1000_clean_rx_ring()
 	rx_ring->next_to_use = 0;
 	adapter->flags2 &= ~FLAG2_IS_DISCARDING;
 	
-	writel(0, adapter->hw.hw_addr + rx_ring->head);
-	writel(0, adapter->hw.hw_addr + rx_ring->tail);
+	writel(0, rx_ring->head);
+	writel(0, rx_ring->tail);
 }
 
 
@@ -3578,14 +3623,10 @@ link_up:
 	}
 	
 	/* Cause software interrupt to ensure Rx ring is cleaned */
-#ifdef CONFIG_E1000E_MSIX
 	if (adapter->msix_entries)
 		ew32(ICS, adapter->rx_ring->ims_val);
 	else
 		ew32(ICS, E1000_ICS_RXDMT0);
-#else
-	ew32(ICS, E1000_ICS_RXDMT0);
-#endif
 
 	/* flush pending descriptors to memory before detecting Tx hang */
 	e1000e_flush_descriptors(adapter);
@@ -3630,7 +3671,7 @@ void AppleIntelE1000e::e1000_print_link_info()
 			((ctrl & E1000_CTRL_TFCE) ? "Tx" : "None" )));
 }
 
-void AppleIntelE1000e::e1000_set_multi()
+void AppleIntelE1000e::e1000_set_rx_mode()
 {
 	e1000_adapter *adapter = &priv_adapter;
 	struct e1000_hw *hw = &adapter->hw;
@@ -3640,19 +3681,28 @@ void AppleIntelE1000e::e1000_set_multi()
 	
 	rctl = er32(RCTL);
 
+	/* clear the affected bits */
+	rctl &= ~(E1000_RCTL_UPE | E1000_RCTL_MPE);
+
 	if (promiscusMode) {
 		rctl |= (E1000_RCTL_UPE | E1000_RCTL_MPE);
 		rctl &= ~E1000_RCTL_VFE;
-#ifndef HAVE_VLAN_RX_REGISTER
+#ifdef HAVE_VLAN_RX_REGISTER
+		rctl &= ~E1000_RCTL_VFE;
+#else
 		/* Do not hardware filter VLANs in promisc mode */
 		//e1000e_vlan_filter_disable(adapter);
 #endif
 	} else {
+		
 		if (multicastMode) {
 			rctl |= E1000_RCTL_MPE;
-			rctl &= ~E1000_RCTL_UPE;
 		} else {
-			rctl &= ~(E1000_RCTL_UPE | E1000_RCTL_MPE);
+			/*
+			 * Write addresses to the MTA, if the attempt fails
+			 * then we should just turn on promiscuous mode so
+			 * that we can at least receive multicast traffic
+			 */
 		}
 #ifdef HAVE_VLAN_RX_REGISTER
 		if (adapter->flags & FLAG_HAS_HW_VLAN_FILTER)
@@ -3660,6 +3710,16 @@ void AppleIntelE1000e::e1000_set_multi()
 #else
 		//e1000e_vlan_filter_enable(adapter);
 #endif
+#ifdef HAVE_SET_RX_MODE
+		/*
+		 * Write addresses to available RAR registers, if there is not
+		 * sufficient space to store all the addresses then enable
+		 * unicast promiscuous mode
+		 */
+		count = e1000e_write_uc_addr_list(netdev);
+		if (count < 0)
+			rctl |= E1000_RCTL_UPE;
+#endif /* HAVE_SET_RX_MODE */
 	}
 	
 	ew32(RCTL, rctl);
@@ -3974,9 +4034,7 @@ int AppleIntelE1000e::__e1000_shutdown(bool *enable_wake, bool runtime)
 		e1000_free_irq(adapter);
 	}
 #endif
-#ifdef CONFIG_E1000E_MSIX
 	e1000e_reset_interrupt_capability(adapter);
-#endif
 #if	0
 	retval = pci_save_state(pdev);
 	if (retval)
@@ -3988,7 +4046,7 @@ int AppleIntelE1000e::__e1000_shutdown(bool *enable_wake, bool runtime)
 	
 	if (wufc) {
 		e1000_setup_rctl();
-		e1000_set_multi();
+		e1000_set_rx_mode();
 		
 		/* turn on all-multi mode if wake on multicast is enabled */
 		if (wufc & E1000_WUFC_MC) {
@@ -4037,7 +4095,9 @@ int AppleIntelE1000e::__e1000_shutdown(bool *enable_wake, bool runtime)
 		ew32(WUFC, 0);
 	}
 	
+/* *INDENT-OFF* */
 	*enable_wake = !!wufc;
+/* *INDENT-ON* */
 	
 	/* make sure adapter isn't asleep if manageability is enabled */
 	if ((adapter->flags & FLAG_MNG_PT_ENABLED) ||

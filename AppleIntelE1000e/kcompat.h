@@ -38,6 +38,7 @@
 #define	sk_buff	__mbuf
 
 #define	__iomem
+#define __devinit
 
 #define	dma_addr_t	IOPhysicalAddress
 
@@ -133,7 +134,7 @@ struct work_struct {
 	struct timer_list timer;
 };
 
-//typedef unsigned gfp_t;
+#define IFNAMSIZ        16
 
 #define ETH_ALEN		6			/* Octets in one ethernet addr   */
 #define ETH_HLEN		14			/* Total octets in header.       */
@@ -227,4 +228,25 @@ typedef void IOBufferMemoryDescriptor;
 #define	mmiowb()
 
 #define	__MODULE_STRING(s)	"x"
+#define synchronize_irq(x) 
+
+static inline int test_bit(int nr, const volatile unsigned long * addr) {
+	return (*addr & (1<<nr)) != 0;
+}
+
+static inline void set_bit(int nr, volatile unsigned long * addr) {
+	*addr |= (1 << nr);
+}
+
+static inline void clear_bit(int nr, volatile unsigned long * addr) {
+	*addr &= ~(1 << nr);
+}
+
+static inline int test_and_set_bit(int nr, volatile unsigned long * addr) {
+	int rc = test_bit(nr,addr);
+	set_bit(nr,addr);
+	return rc;
+}
+
+
 #endif /* _KCOMPAT_H_ */

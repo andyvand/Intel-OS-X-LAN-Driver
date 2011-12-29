@@ -306,7 +306,7 @@ static s32 e1000_ready_nvm_eeprom(struct e1000_hw *hw)
 		 */
 		while (timeout) {
 			e1000_shift_out_eec_bits(hw, NVM_RDSR_OPCODE_SPI,
-			                         hw->nvm.opcode_bits);
+						 hw->nvm.opcode_bits);
 			spi_stat_reg = (u8)e1000_shift_in_eec_bits(hw, 8);
 			if (!(spi_stat_reg & NVM_STATUS_RDY_SPI))
 				break;
@@ -354,16 +354,15 @@ s32 e1000e_read_nvm_eerd(struct e1000_hw *hw, u16 offset, u16 words, u16 *data)
 	}
 
 	for (i = 0; i < words; i++) {
-		eerd = ((offset+i) << E1000_NVM_RW_ADDR_SHIFT) +
-		       E1000_NVM_RW_REG_START;
+		eerd = ((offset + i) << E1000_NVM_RW_ADDR_SHIFT) +
+		    E1000_NVM_RW_REG_START;
 
 		ew32(EERD, eerd);
 		ret_val = e1000e_poll_eerd_eewr_done(hw, E1000_NVM_POLL_READ);
 		if (ret_val)
 			break;
 
-		data[i] = (er32(EERD) >>
-		           E1000_NVM_RW_REG_DATA);
+		data[i] = (er32(EERD) >> E1000_NVM_RW_REG_DATA);
 	}
 
 out:
@@ -414,7 +413,7 @@ s32 e1000e_write_nvm_spi(struct e1000_hw *hw, u16 offset, u16 words, u16 *data)
 
 		/* Send the WRITE ENABLE command (8 bit opcode) */
 		e1000_shift_out_eec_bits(hw, NVM_WREN_OPCODE_SPI,
-		                         nvm->opcode_bits);
+					 nvm->opcode_bits);
 
 		e1000_standby_nvm(hw);
 
@@ -428,7 +427,7 @@ s32 e1000e_write_nvm_spi(struct e1000_hw *hw, u16 offset, u16 words, u16 *data)
 		/* Send the Write command (8-bit opcode + addr) */
 		e1000_shift_out_eec_bits(hw, write_opcode, nvm->opcode_bits);
 		e1000_shift_out_eec_bits(hw, (u16)((offset + widx) * 2),
-		                         nvm->address_bits);
+					 nvm->address_bits);
 
 		/* Loop to allow for up to whole page write of eeprom */
 		while (widx < words) {
@@ -462,7 +461,7 @@ out:
  *  the value in pba_num.
  **/
 s32 e1000_read_pba_string_generic(struct e1000_hw *hw, u8 *pba_num,
-                                  u32 pba_num_size)
+				  u32 pba_num_size)
 {
 	s32 ret_val;
 	u16 nvm_data;
@@ -583,10 +582,10 @@ s32 e1000_read_mac_addr_generic(struct e1000_hw *hw)
 	rar_low = er32(RAL(0));
 
 	for (i = 0; i < E1000_RAL_MAC_ADDR_LEN; i++)
-		hw->mac.perm_addr[i] = (u8)(rar_low >> (i*8));
+		hw->mac.perm_addr[i] = (u8)(rar_low >> (i * 8));
 
 	for (i = 0; i < E1000_RAH_MAC_ADDR_LEN; i++)
-		hw->mac.perm_addr[i+4] = (u8)(rar_high >> (i*8));
+		hw->mac.perm_addr[i + 4] = (u8)(rar_high >> (i * 8));
 
 	for (i = 0; i < ETH_ALEN; i++)
 		hw->mac.addr[i] = hw->mac.perm_addr[i];
@@ -616,7 +615,7 @@ s32 e1000e_validate_nvm_checksum_generic(struct e1000_hw *hw)
 		checksum += nvm_data;
 	}
 
-	if (checksum != (u16) NVM_SUM) {
+	if (checksum != (u16)NVM_SUM) {
 		e_dbg("NVM Checksum Invalid\n");
 		ret_val = -E1000_ERR_NVM;
 		goto out;
@@ -648,7 +647,7 @@ s32 e1000e_update_nvm_checksum_generic(struct e1000_hw *hw)
 		}
 		checksum += nvm_data;
 	}
-	checksum = (u16) NVM_SUM - checksum;
+	checksum = (u16)NVM_SUM - checksum;
 	ret_val = e1000_write_nvm(hw, NVM_CHECKSUM_REG, 1, &checksum);
 	if (ret_val)
 		e_dbg("NVM Write Error while updating checksum.\n");
@@ -674,4 +673,3 @@ static void e1000e_reload_nvm(struct e1000_hw *hw)
 	ew32(CTRL_EXT, ctrl_ext);
 	e1e_flush();
 }
-

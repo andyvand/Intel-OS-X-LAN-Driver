@@ -124,6 +124,7 @@ private:
 	bool enabledForNetif;
 	bool promiscusMode;
 	bool multicastMode;
+	UInt32 mcCount;
 	UInt32 preLinkStatus;
 	UInt32 powerState;
 
@@ -160,7 +161,7 @@ private:
 	void e1000_setup_rctl();
 	void e1000_init_manageability_pt();
 	void e1000_configure_tx();
-	void e1000_set_multi();
+	void e1000_set_rx_mode();
 	bool e1000_tx_csum(mbuf_t skb);
 	void e1000_rx_checksum(mbuf_t skb, u32 status);
 	void e1000_receive_skb(mbuf_t skb, u32 length, u8 status, __le16 vlan);
