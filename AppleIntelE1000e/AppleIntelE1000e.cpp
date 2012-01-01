@@ -204,7 +204,14 @@ static void e1000_irq_disable(struct e1000_adapter *adapter)
 	if (adapter->msix_entries)
 		ew32(EIAC_82574, 0);
 	e1e_flush();
-	//synchronize_irq(adapter->pdev->irq);
+	
+	if (adapter->msix_entries) {
+		int i;
+		for (i = 0; i < adapter->num_vectors; i++)
+			synchronize_irq(adapter->msix_entries[i].vector);
+	} else {
+		synchronize_irq(adapter->pdev->irq);
+	}
 }
 
 /**
@@ -213,19 +220,14 @@ static void e1000_irq_disable(struct e1000_adapter *adapter)
 static void e1000_irq_enable(struct e1000_adapter *adapter)
 {
 	struct e1000_hw *hw = &adapter->hw;
-	
-	ew32(IMC, ~0);
-	if (adapter->msix_entries)
-		ew32(EIAC_82574, 0);
-	e1e_flush();
 
 	if (adapter->msix_entries) {
-		int i;
-		for (i = 0; i < adapter->num_vectors; i++)
-			synchronize_irq(adapter->msix_entries[i].vector);
+		ew32(EIAC_82574, adapter->eiac_mask & E1000_EIAC_MASK_82574);
+		ew32(IMS, adapter->eiac_mask | E1000_IMS_OTHER | E1000_IMS_LSC);
 	} else {
-		synchronize_irq(adapter->pdev->irq);
+		ew32(IMS, IMS_ENABLE_MASK);
 	}
+	e1e_flush();
 }
 
 
@@ -1742,7 +1744,7 @@ void AppleIntelE1000e::e1000e_up()
 
 	watchdogSource->setTimeoutMS(200);
 	
-	transmitQueue->start();
+	//transmitQueue->start();
 	workLoop->enableAllInterrupts();
 	
 	/* fire a link change interrupt to start the watchdog */
@@ -3510,7 +3512,7 @@ void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 	
 	//e_dbg("timeout link:%d, preLinkStatus:%d.\n", (int)link, (int)preLinkStatus);
 	if (link && link == preLinkStatus) {
-		//e1000e_enable_receives();
+		e1000e_enable_receives();
 		goto link_up;
 	}
 	
@@ -3570,11 +3572,7 @@ void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 		else if(adapter->link_speed == SPEED_10)
 			speed = 10 * MBit;
 		setLinkStatus(kIONetworkLinkValid | kIONetworkLinkActive, getCurrentMedium(), speed);
-#if 0	// 1.3.17, netif_wake_queue
-		if (transmitQueue) {
-			transmitQueue->start();
-		}
-#endif	
+		transmitQueue->start();
 	} else {
 		
 		if (link != preLinkStatus) {
