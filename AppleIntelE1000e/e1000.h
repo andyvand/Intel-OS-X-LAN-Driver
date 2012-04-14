@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2011 Intel Corporation.
+  Copyright(c) 1999 - 2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -124,6 +124,12 @@ IOLog("AppleIntelE1000e(Notice): " format, ## arg)
 
 /* Time to wait before putting the device into D3 if there's no link (in ms). */
 #define LINK_TIMEOUT		100
+
+/*
+ * Count for polling __E1000_RESET condition every 10-20msec.
+ * Experimentation has shown the reset can take approximately 210msec.
+ */
+#define E1000_CHECK_RESET_COUNT         25
 
 #define DEFAULT_RDTR			0
 #define DEFAULT_RADV			8
@@ -288,6 +294,7 @@ struct e1000_adapter {
 	u32 txd_cmd;
 
 	bool detect_tx_hung;
+	bool tx_hang_recheck;
 	u8 tx_timeout_factor;
 
 	u32 tx_int_delay;
@@ -563,7 +570,7 @@ extern void e1000e_clear_hw_cntrs_base(struct e1000_hw *hw);
 extern s32 e1000e_setup_fiber_serdes_link(struct e1000_hw *hw);
 extern s32 e1000e_copper_link_setup_m88(struct e1000_hw *hw);
 extern s32 e1000e_copper_link_setup_igp(struct e1000_hw *hw);
-extern s32 e1000e_setup_link(struct e1000_hw *hw);
+extern s32 e1000e_setup_link_generic(struct e1000_hw *hw);
 extern void e1000_clear_vfta_generic(struct e1000_hw *hw);
 extern void e1000e_init_rx_addrs(struct e1000_hw *hw, u16 rar_count);
 extern void e1000e_update_mc_addr_list_generic(struct e1000_hw *hw,
@@ -574,7 +581,6 @@ extern s32 e1000e_set_fc_watermarks(struct e1000_hw *hw);
 extern void e1000e_set_pcie_no_snoop(struct e1000_hw *hw, u32 no_snoop);
 extern s32 e1000e_get_hw_semaphore(struct e1000_hw *hw);
 extern s32 e1000e_valid_led_default(struct e1000_hw *hw, u16 *data);
-extern void e1000e_config_collision_dist(struct e1000_hw *hw);
 extern s32 e1000e_config_fc_after_link_up(struct e1000_hw *hw);
 extern s32 e1000e_force_mac_fc(struct e1000_hw *hw);
 extern s32 e1000e_blink_led_generic(struct e1000_hw *hw);
@@ -620,14 +626,6 @@ static inline s32 e1000_phy_hw_reset(struct e1000_hw *hw)
 {
 	if (hw->phy.ops.reset)
 		return hw->phy.ops.reset(hw);
-
-	return 0;
-}
-
-static inline s32 e1000_check_reset_block(struct e1000_hw *hw)
-{
-	if (hw->phy.ops.check_reset_block)
-		return hw->phy.ops.check_reset_block(hw);
 
 	return 0;
 }
@@ -710,46 +708,69 @@ extern s32 e1000e_mng_write_dhcp_info(struct e1000_hw *hw, u8 *buffer,
 
 static inline u32 __er32(struct e1000_hw *hw, unsigned long reg)
 {
-	return readl((u8*)hw->hw_addr + reg);
+	return readl((u8*)(hw->hw_addr) + reg);
+}
+
+#define er32(reg)	__er32(hw, E1000_##reg)
+
+/**
+ * __ew32_prepare - prepare to write to MAC CSR register on certain parts
+ * @hw: pointer to the HW structure
+ *
+ * When updating the MAC CSR registers, the Manageability Engine (ME) could
+ * be accessing the registers at the same time.  Normally, this is handled in
+ * h/w by an arbiter but on some parts there is a bug that acknowledges Host
+ * accesses later than it should which could result in the register to have
+ * an incorrect value.  Workaround this by checking the FWSM register which
+ * has bit 24 set while ME is accessing MAC CSR registers, wait if it is set
+ * and try again a number of times.
+ **/
+static inline s32 __ew32_prepare(struct e1000_hw *hw)
+{
+	s32 i = E1000_ICH_FWSM_PCIM2PCI_COUNT;
+
+	while ((er32(FWSM) & E1000_ICH_FWSM_PCIM2PCI) && --i)
+		udelay(50);
+
+	return i;
 }
 
 static inline void __ew32(struct e1000_hw *hw, unsigned long reg, u32 val)
 {
-	writel(val, (u8*)hw->hw_addr + reg);
+	if (hw->adapter->flags2 & FLAG2_PCIM2PCI_ARBITER_WA)
+		__ew32_prepare(hw);
+
+	writel(val, (u8*)(hw->hw_addr) + reg);
 }
 
-#define er32(reg)	__er32(hw, E1000_##reg)
 #define ew32(reg, val)	__ew32(hw, E1000_##reg, (val))
+
 #define e1e_flush()	er32(STATUS)
 
-#define E1000_WRITE_REG(a, reg, value) (writel((value), ((u8*)((a)->hw_addr) + reg)))
-
-#define E1000_READ_REG(a, reg) (readl((u8*)((a)->hw_addr) + reg))
-
 #define E1000_WRITE_REG_ARRAY(a, reg, offset, value) ( \
-	writel((value), ((u8*)((a)->hw_addr) + reg + ((offset) << 2))))
+	__ew32((a), (reg + ((offset) << 2)), (value)))
 
 #define E1000_READ_REG_ARRAY(a, reg, offset) ( \
 	readl((u8*)((a)->hw_addr) + reg + ((offset) << 2)))
 
 static inline u16 __er16flash(struct e1000_hw *hw, unsigned long reg)
 {
-	return readw((u8*)hw->flash_address + reg);
+	return readw((u8*)(hw->flash_address) + reg);
 }
 
 static inline u32 __er32flash(struct e1000_hw *hw, unsigned long reg)
 {
-	return readl((u8*)hw->flash_address + reg);
+	return readl((u8*)(hw->flash_address) + reg);
 }
 
 static inline void __ew16flash(struct e1000_hw *hw, unsigned long reg, u16 val)
 {
-	writew(val, (u8*)hw->flash_address + reg);
+	writew(val, (u8*)(hw->flash_address) + reg);
 }
 
 static inline void __ew32flash(struct e1000_hw *hw, unsigned long reg, u32 val)
 {
-	writel(val, (u8*)hw->flash_address + reg);
+	writel(val, (u8*)(hw->flash_address) + reg);
 }
 
 #define er16flash(reg)		__er16flash(hw, (reg))

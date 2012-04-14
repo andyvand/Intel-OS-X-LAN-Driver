@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2011 Intel Corporation.
+  Copyright(c) 1999 - 2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -89,11 +89,11 @@ static const u16 e1000_gg82563_cable_length_table[] = {
 static s32 e1000_init_phy_params_80003es2lan(struct e1000_hw *hw)
 {
 	struct e1000_phy_info *phy = &hw->phy;
-	s32 ret_val = 0;
+	s32 ret_val;
 
 	if (hw->phy.media_type != e1000_media_type_copper) {
 		phy->type = e1000_phy_none;
-		goto out;
+		return 0;
 	} else {
 		phy->ops.power_up = e1000_power_up_phy_copper;
 		phy->ops.power_down = e1000_power_down_phy_copper_80003es2lan;
@@ -125,12 +125,9 @@ static s32 e1000_init_phy_params_80003es2lan(struct e1000_hw *hw)
 	ret_val = e1000e_get_phy_id(hw);
 
 	/* Verify phy id */
-	if (phy->id != GG82563_E_PHY_ID) {
-		ret_val = -E1000_ERR_PHY;
-		goto out;
-	}
+	if (phy->id != GG82563_E_PHY_ID)
+		return -E1000_ERR_PHY;
 
-out:
 	return ret_val;
 }
 
@@ -234,7 +231,7 @@ static s32 e1000_init_mac_params_80003es2lan(struct e1000_hw *hw)
 	/* hw initialization */
 	mac->ops.init_hw = e1000_init_hw_80003es2lan;
 	/* link setup */
-	mac->ops.setup_link = e1000e_setup_link;
+	mac->ops.setup_link = e1000e_setup_link_generic;
 	/* check management mode */
 	mac->ops.check_mng_mode = e1000e_check_mng_mode_generic;
 	/* multicast address update */
@@ -246,7 +243,7 @@ static s32 e1000_init_mac_params_80003es2lan(struct e1000_hw *hw)
 	/* read mac address */
 	mac->ops.read_mac_addr = e1000_read_mac_addr_80003es2lan;
 	/* ID LED init */
-	mac->ops.id_led_init = e1000e_id_led_init;
+	mac->ops.id_led_init = e1000e_id_led_init_generic;
 	/* blink LED */
 	mac->ops.blink_led = e1000e_blink_led_generic;
 	/* setup LED */
@@ -353,14 +350,13 @@ static s32 e1000_acquire_nvm_80003es2lan(struct e1000_hw *hw)
 
 	ret_val = e1000_acquire_swfw_sync_80003es2lan(hw, E1000_SWFW_EEP_SM);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	ret_val = e1000e_acquire_nvm(hw);
 
 	if (ret_val)
 		e1000_release_swfw_sync_80003es2lan(hw, E1000_SWFW_EEP_SM);
 
-out:
 	return ret_val;
 }
 
@@ -389,14 +385,12 @@ static s32 e1000_acquire_swfw_sync_80003es2lan(struct e1000_hw *hw, u16 mask)
 	u32 swfw_sync;
 	u32 swmask = mask;
 	u32 fwmask = mask << 16;
-	s32 ret_val = 0;
-	s32 i = 0, timeout = 50;
+	s32 i = 0;
+	s32 timeout = 50;
 
 	while (i < timeout) {
-		if (e1000e_get_hw_semaphore(hw)) {
-			ret_val = -E1000_ERR_SWFW_SYNC;
-			goto out;
-		}
+		if (e1000e_get_hw_semaphore(hw))
+			return -E1000_ERR_SWFW_SYNC;
 
 		swfw_sync = er32(SW_FW_SYNC);
 		if (!(swfw_sync & (fwmask | swmask)))
@@ -413,8 +407,7 @@ static s32 e1000_acquire_swfw_sync_80003es2lan(struct e1000_hw *hw, u16 mask)
 
 	if (i == timeout) {
 		e_dbg("Driver can't access resource, SW_FW_SYNC timeout.\n");
-		ret_val = -E1000_ERR_SWFW_SYNC;
-		goto out;
+		return -E1000_ERR_SWFW_SYNC;
 	}
 
 	swfw_sync |= swmask;
@@ -422,8 +415,7 @@ static s32 e1000_acquire_swfw_sync_80003es2lan(struct e1000_hw *hw, u16 mask)
 
 	e1000e_put_hw_semaphore(hw);
 
-out:
-	return ret_val;
+	return 0;
 }
 
 /**
@@ -467,7 +459,7 @@ static s32 e1000_read_phy_reg_gg82563_80003es2lan(struct e1000_hw *hw,
 
 	ret_val = e1000_acquire_phy_80003es2lan(hw);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	/* Select Configuration Page */
 	if ((offset & MAX_PHY_REG_ADDRESS) < GG82563_MIN_ALT_REG) {
@@ -484,10 +476,10 @@ static s32 e1000_read_phy_reg_gg82563_80003es2lan(struct e1000_hw *hw,
 	ret_val = e1000e_write_phy_reg_mdic(hw, page_select, temp);
 	if (ret_val) {
 		e1000_release_phy_80003es2lan(hw);
-		goto out;
+		return ret_val;
 	}
 
-	if (hw->dev_spec.e80003es2lan.mdic_wa_enable == true) {
+	if (hw->dev_spec.e80003es2lan.mdic_wa_enable) {
 		/*
 		 * The "ready" bit in the MDIC register may be incorrectly set
 		 * before the device has completed the "Page Select" MDI
@@ -499,9 +491,8 @@ static s32 e1000_read_phy_reg_gg82563_80003es2lan(struct e1000_hw *hw,
 		ret_val = e1000e_read_phy_reg_mdic(hw, page_select, &temp);
 
 		if (((u16)offset >> GG82563_PAGE_SHIFT) != temp) {
-			ret_val = -E1000_ERR_PHY;
 			e1000_release_phy_80003es2lan(hw);
-			goto out;
+			return -E1000_ERR_PHY;
 		}
 
 		udelay(200);
@@ -519,7 +510,6 @@ static s32 e1000_read_phy_reg_gg82563_80003es2lan(struct e1000_hw *hw,
 
 	e1000_release_phy_80003es2lan(hw);
 
-out:
 	return ret_val;
 }
 
@@ -540,7 +530,7 @@ static s32 e1000_write_phy_reg_gg82563_80003es2lan(struct e1000_hw *hw,
 
 	ret_val = e1000_acquire_phy_80003es2lan(hw);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	/* Select Configuration Page */
 	if ((offset & MAX_PHY_REG_ADDRESS) < GG82563_MIN_ALT_REG) {
@@ -557,10 +547,10 @@ static s32 e1000_write_phy_reg_gg82563_80003es2lan(struct e1000_hw *hw,
 	ret_val = e1000e_write_phy_reg_mdic(hw, page_select, temp);
 	if (ret_val) {
 		e1000_release_phy_80003es2lan(hw);
-		goto out;
+		return ret_val;
 	}
 
-	if (hw->dev_spec.e80003es2lan.mdic_wa_enable == true) {
+	if (hw->dev_spec.e80003es2lan.mdic_wa_enable) {
 		/*
 		 * The "ready" bit in the MDIC register may be incorrectly set
 		 * before the device has completed the "Page Select" MDI
@@ -572,9 +562,8 @@ static s32 e1000_write_phy_reg_gg82563_80003es2lan(struct e1000_hw *hw,
 		ret_val = e1000e_read_phy_reg_mdic(hw, page_select, &temp);
 
 		if (((u16)offset >> GG82563_PAGE_SHIFT) != temp) {
-			ret_val = -E1000_ERR_PHY;
 			e1000_release_phy_80003es2lan(hw);
-			goto out;
+			return -E1000_ERR_PHY;
 		}
 
 		udelay(200);
@@ -592,7 +581,6 @@ static s32 e1000_write_phy_reg_gg82563_80003es2lan(struct e1000_hw *hw,
 
 	e1000_release_phy_80003es2lan(hw);
 
-out:
 	return ret_val;
 }
 
@@ -621,7 +609,6 @@ static s32 e1000_write_nvm_80003es2lan(struct e1000_hw *hw, u16 offset,
 static s32 e1000_get_cfg_done_80003es2lan(struct e1000_hw *hw)
 {
 	s32 timeout = PHY_CFG_TIMEOUT;
-	s32 ret_val = 0;
 	u32 mask = E1000_NVM_CFG_DONE_PORT_0;
 
 	if (hw->bus.func == 1)
@@ -635,12 +622,10 @@ static s32 e1000_get_cfg_done_80003es2lan(struct e1000_hw *hw)
 	}
 	if (!timeout) {
 		e_dbg("MNG configuration cycle has not completed.\n");
-		ret_val = -E1000_ERR_RESET;
-		goto out;
+		return -E1000_ERR_RESET;
 	}
 
-out:
-	return ret_val;
+	return 0;
 }
 
 /**
@@ -652,7 +637,7 @@ out:
  **/
 static s32 e1000_phy_force_speed_duplex_80003es2lan(struct e1000_hw *hw)
 {
-	s32 ret_val = 0;
+	s32 ret_val;
 	u16 phy_data;
 	bool link;
 
@@ -662,18 +647,18 @@ static s32 e1000_phy_force_speed_duplex_80003es2lan(struct e1000_hw *hw)
 	 */
 	ret_val = e1e_rphy(hw, M88E1000_PHY_SPEC_CTRL, &phy_data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	phy_data &= ~GG82563_PSCR_CROSSOVER_MODE_AUTO;
 	ret_val = e1e_wphy(hw, GG82563_PHY_SPEC_CTRL, phy_data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	e_dbg("GG82563 PSCR: %X\n", phy_data);
 
 	ret_val = e1e_rphy(hw, PHY_CONTROL, &phy_data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	e1000e_phy_force_speed_duplex_setup(hw, &phy_data);
 
@@ -682,18 +667,17 @@ static s32 e1000_phy_force_speed_duplex_80003es2lan(struct e1000_hw *hw)
 
 	ret_val = e1e_wphy(hw, PHY_CONTROL, phy_data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	udelay(1);
 
 	if (hw->phy.autoneg_wait_to_complete) {
-		e_dbg("Waiting for forced speed/duplex link "
-		      "on GG82563 phy.\n");
+		e_dbg("Waiting for forced speed/duplex link on GG82563 phy.\n");
 
 		ret_val = e1000e_phy_has_link_generic(hw, PHY_FORCE_LIMIT,
 						      100000, &link);
 		if (ret_val)
-			goto out;
+			return ret_val;
 
 		if (!link) {
 			/*
@@ -702,19 +686,19 @@ static s32 e1000_phy_force_speed_duplex_80003es2lan(struct e1000_hw *hw)
 			 */
 			ret_val = e1000e_phy_reset_dsp(hw);
 			if (ret_val)
-				goto out;
+				return ret_val;
 		}
 
 		/* Try once more */
 		ret_val = e1000e_phy_has_link_generic(hw, PHY_FORCE_LIMIT,
 						      100000, &link);
 		if (ret_val)
-			goto out;
+			return ret_val;
 	}
 
 	ret_val = e1e_rphy(hw, GG82563_PHY_MAC_SPEC_CTRL, &phy_data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	/*
 	 * Resetting the phy means we need to verify the TX_CLK corresponds
@@ -733,7 +717,6 @@ static s32 e1000_phy_force_speed_duplex_80003es2lan(struct e1000_hw *hw)
 	phy_data |= GG82563_MSCR_ASSERT_CRS_ON_TX;
 	ret_val = e1e_wphy(hw, GG82563_PHY_MAC_SPEC_CTRL, phy_data);
 
-out:
 	return ret_val;
 }
 
@@ -752,22 +735,19 @@ static s32 e1000_get_cable_length_80003es2lan(struct e1000_hw *hw)
 
 	ret_val = e1e_rphy(hw, GG82563_PHY_DSP_DISTANCE, &phy_data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	index = phy_data & GG82563_DSPD_CABLE_LENGTH;
 
-	if (index >= GG82563_CABLE_LENGTH_TABLE_SIZE - 5) {
-		ret_val = -E1000_ERR_PHY;
-		goto out;
-	}
+	if (index >= GG82563_CABLE_LENGTH_TABLE_SIZE - 5)
+		return -E1000_ERR_PHY;
 
 	phy->min_cable_length = e1000_gg82563_cable_length_table[index];
 	phy->max_cable_length = e1000_gg82563_cable_length_table[index + 5];
 
 	phy->cable_length = (phy->min_cable_length + phy->max_cable_length) / 2;
 
-out:
-	return ret_val;
+	return 0;
 }
 
 /**
@@ -833,16 +813,13 @@ static s32 e1000_reset_hw_80003es2lan(struct e1000_hw *hw)
 	ret_val = e1000e_get_auto_rd_done(hw);
 	if (ret_val)
 		/* We don't want to continue accessing MAC registers. */
-		goto out;
+		return ret_val;
 
 	/* Clear any pending interrupt events. */
 	ew32(IMC, 0xffffffff);
 	er32(ICR);
 
-	ret_val = e1000_check_alt_mac_addr_generic(hw);
-
-out:
-	return ret_val;
+	return e1000_check_alt_mac_addr_generic(hw);
 }
 
 /**
@@ -997,7 +974,7 @@ static s32 e1000_copper_link_setup_gg82563_80003es2lan(struct e1000_hw *hw)
 
 	ret_val = e1e_rphy(hw, GG82563_PHY_MAC_SPEC_CTRL, &data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	data |= GG82563_MSCR_ASSERT_CRS_ON_TX;
 	/* Use 25MHz for both link down and 1000Base-T for Tx clock. */
@@ -1005,7 +982,7 @@ static s32 e1000_copper_link_setup_gg82563_80003es2lan(struct e1000_hw *hw)
 
 	ret_val = e1e_wphy(hw, GG82563_PHY_MAC_SPEC_CTRL, data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	/*
 	 * Options:
@@ -1017,7 +994,7 @@ static s32 e1000_copper_link_setup_gg82563_80003es2lan(struct e1000_hw *hw)
 	 */
 	ret_val = e1e_rphy(hw, GG82563_PHY_SPEC_CTRL, &data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	data &= ~GG82563_PSCR_CROSSOVER_MODE_MASK;
 
@@ -1047,13 +1024,13 @@ static s32 e1000_copper_link_setup_gg82563_80003es2lan(struct e1000_hw *hw)
 
 	ret_val = e1e_wphy(hw, GG82563_PHY_SPEC_CTRL, data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	/* SW Reset the PHY so all changes take effect */
 	ret_val = e1000e_commit_phy(hw);
 	if (ret_val) {
 		e_dbg("Error Resetting the PHY\n");
-		goto out;
+		return ret_val;
 	}
 
 	/* Bypass Rx and Tx FIFO's */
@@ -1063,28 +1040,28 @@ static s32 e1000_copper_link_setup_gg82563_80003es2lan(struct e1000_hw *hw)
 						   |
 						   E1000_KMRNCTRLSTA_FIFO_CTRL_TX_BYPASS);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	ret_val = e1000_read_kmrn_reg_80003es2lan(hw,
 						  E1000_KMRNCTRLSTA_OFFSET_MAC2PHY_OPMODE,
 						  &data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 	data |= E1000_KMRNCTRLSTA_OPMODE_E_IDLE;
 	ret_val = e1000_write_kmrn_reg_80003es2lan(hw,
 						   E1000_KMRNCTRLSTA_OFFSET_MAC2PHY_OPMODE,
 						   data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	ret_val = e1e_rphy(hw, GG82563_PHY_SPEC_CTRL_2, &data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	data &= ~GG82563_PSCR2_REVERSE_AUTO_NEG;
 	ret_val = e1e_wphy(hw, GG82563_PHY_SPEC_CTRL_2, data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	ctrl_ext = er32(CTRL_EXT);
 	ctrl_ext &= ~(E1000_CTRL_EXT_LINK_MODE_MASK);
@@ -1092,28 +1069,28 @@ static s32 e1000_copper_link_setup_gg82563_80003es2lan(struct e1000_hw *hw)
 
 	ret_val = e1e_rphy(hw, GG82563_PHY_PWR_MGMT_CTRL, &data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	/*
 	 * Do not init these registers when the HW is in IAMT mode, since the
 	 * firmware will have already initialized them.  We only initialize
 	 * them if the HW is not in IAMT mode.
 	 */
-	if (!(hw->mac.ops.check_mng_mode(hw))) {
+	if (!hw->mac.ops.check_mng_mode(hw)) {
 		/* Enable Electrical Idle on the PHY */
 		data |= GG82563_PMCR_ENABLE_ELECTRICAL_IDLE;
 		ret_val = e1e_wphy(hw, GG82563_PHY_PWR_MGMT_CTRL, data);
 		if (ret_val)
-			goto out;
+			return ret_val;
 
 		ret_val = e1e_rphy(hw, GG82563_PHY_KMRN_MODE_CTRL, &data);
 		if (ret_val)
-			goto out;
+			return ret_val;
 
 		data &= ~GG82563_KMCR_PASS_FALSE_CARRIER;
 		ret_val = e1e_wphy(hw, GG82563_PHY_KMRN_MODE_CTRL, data);
 		if (ret_val)
-			goto out;
+			return ret_val;
 	}
 
 	/*
@@ -1122,15 +1099,14 @@ static s32 e1000_copper_link_setup_gg82563_80003es2lan(struct e1000_hw *hw)
 	 */
 	ret_val = e1e_rphy(hw, GG82563_PHY_INBAND_CTRL, &data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	data |= GG82563_ICR_DIS_PADDING;
 	ret_val = e1e_wphy(hw, GG82563_PHY_INBAND_CTRL, data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
-out:
-	return ret_val;
+	return 0;
 }
 
 /**
@@ -1159,36 +1135,33 @@ static s32 e1000_setup_copper_link_80003es2lan(struct e1000_hw *hw)
 	ret_val = e1000_write_kmrn_reg_80003es2lan(hw, GG82563_REG(0x34, 4),
 						   0xFFFF);
 	if (ret_val)
-		goto out;
+		return ret_val;
 	ret_val = e1000_read_kmrn_reg_80003es2lan(hw, GG82563_REG(0x34, 9),
 						  &reg_data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 	reg_data |= 0x3F;
 	ret_val = e1000_write_kmrn_reg_80003es2lan(hw, GG82563_REG(0x34, 9),
 						   reg_data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 	ret_val = e1000_read_kmrn_reg_80003es2lan(hw,
 						  E1000_KMRNCTRLSTA_OFFSET_INB_CTRL,
 						  &reg_data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 	reg_data |= E1000_KMRNCTRLSTA_INB_CTRL_DIS_PADDING;
 	ret_val = e1000_write_kmrn_reg_80003es2lan(hw,
 						   E1000_KMRNCTRLSTA_OFFSET_INB_CTRL,
 						   reg_data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	ret_val = e1000_copper_link_setup_gg82563_80003es2lan(hw);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
-	ret_val = e1000e_setup_copper_link(hw);
-
-out:
-	return ret_val;
+	return e1000e_setup_copper_link(hw);
 }
 
 /**
@@ -1209,7 +1182,7 @@ static s32 e1000_cfg_on_link_up_80003es2lan(struct e1000_hw *hw)
 		ret_val = e1000e_get_speed_and_duplex_copper(hw, &speed,
 							     &duplex);
 		if (ret_val)
-			goto out;
+			return ret_val;
 
 		if (speed == SPEED_1000)
 			ret_val = e1000_cfg_kmrn_1000_80003es2lan(hw);
@@ -1217,7 +1190,6 @@ static s32 e1000_cfg_on_link_up_80003es2lan(struct e1000_hw *hw)
 			ret_val = e1000_cfg_kmrn_10_100_80003es2lan(hw, duplex);
 	}
 
-out:
 	return ret_val;
 }
 
@@ -1231,7 +1203,7 @@ out:
  **/
 static s32 e1000_cfg_kmrn_10_100_80003es2lan(struct e1000_hw *hw, u16 duplex)
 {
-	s32 ret_val = 0;
+	s32 ret_val;
 	u32 tipg;
 	u32 i = 0;
 	u16 reg_data, reg_data2;
@@ -1241,7 +1213,7 @@ static s32 e1000_cfg_kmrn_10_100_80003es2lan(struct e1000_hw *hw, u16 duplex)
 						   E1000_KMRNCTRLSTA_OFFSET_HD_CTRL,
 						   reg_data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	/* Configure Transmit Inter-Packet Gap */
 	tipg = er32(TIPG);
@@ -1252,11 +1224,11 @@ static s32 e1000_cfg_kmrn_10_100_80003es2lan(struct e1000_hw *hw, u16 duplex)
 	do {
 		ret_val = e1e_rphy(hw, GG82563_PHY_KMRN_MODE_CTRL, &reg_data);
 		if (ret_val)
-			goto out;
+			return ret_val;
 
 		ret_val = e1e_rphy(hw, GG82563_PHY_KMRN_MODE_CTRL, &reg_data2);
 		if (ret_val)
-			goto out;
+			return ret_val;
 		i++;
 	} while ((reg_data != reg_data2) && (i < GG82563_MAX_KMRN_RETRY));
 
@@ -1265,10 +1237,7 @@ static s32 e1000_cfg_kmrn_10_100_80003es2lan(struct e1000_hw *hw, u16 duplex)
 	else
 		reg_data &= ~GG82563_KMCR_PASS_FALSE_CARRIER;
 
-	ret_val = e1e_wphy(hw, GG82563_PHY_KMRN_MODE_CTRL, reg_data);
-
-out:
-	return ret_val;
+	return e1e_wphy(hw, GG82563_PHY_KMRN_MODE_CTRL, reg_data);
 }
 
 /**
@@ -1280,7 +1249,7 @@ out:
  **/
 static s32 e1000_cfg_kmrn_1000_80003es2lan(struct e1000_hw *hw)
 {
-	s32 ret_val = 0;
+	s32 ret_val;
 	u16 reg_data, reg_data2;
 	u32 tipg;
 	u32 i = 0;
@@ -1290,7 +1259,7 @@ static s32 e1000_cfg_kmrn_1000_80003es2lan(struct e1000_hw *hw)
 						   E1000_KMRNCTRLSTA_OFFSET_HD_CTRL,
 						   reg_data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	/* Configure Transmit Inter-Packet Gap */
 	tipg = er32(TIPG);
@@ -1301,19 +1270,17 @@ static s32 e1000_cfg_kmrn_1000_80003es2lan(struct e1000_hw *hw)
 	do {
 		ret_val = e1e_rphy(hw, GG82563_PHY_KMRN_MODE_CTRL, &reg_data);
 		if (ret_val)
-			goto out;
+			return ret_val;
 
 		ret_val = e1e_rphy(hw, GG82563_PHY_KMRN_MODE_CTRL, &reg_data2);
 		if (ret_val)
-			goto out;
+			return ret_val;
 		i++;
 	} while ((reg_data != reg_data2) && (i < GG82563_MAX_KMRN_RETRY));
 
 	reg_data &= ~GG82563_KMCR_PASS_FALSE_CARRIER;
-	ret_val = e1e_wphy(hw, GG82563_PHY_KMRN_MODE_CTRL, reg_data);
 
-out:
-	return ret_val;
+	return e1e_wphy(hw, GG82563_PHY_KMRN_MODE_CTRL, reg_data);
 }
 
 /**
@@ -1334,7 +1301,7 @@ static s32 e1000_read_kmrn_reg_80003es2lan(struct e1000_hw *hw, u32 offset,
 
 	ret_val = e1000_acquire_mac_csr_80003es2lan(hw);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	kmrnctrlsta = ((offset << E1000_KMRNCTRLSTA_OFFSET_SHIFT) &
 		       E1000_KMRNCTRLSTA_OFFSET) | E1000_KMRNCTRLSTA_REN;
@@ -1348,7 +1315,6 @@ static s32 e1000_read_kmrn_reg_80003es2lan(struct e1000_hw *hw, u32 offset,
 
 	e1000_release_mac_csr_80003es2lan(hw);
 
-out:
 	return ret_val;
 }
 
@@ -1370,7 +1336,7 @@ static s32 e1000_write_kmrn_reg_80003es2lan(struct e1000_hw *hw, u32 offset,
 
 	ret_val = e1000_acquire_mac_csr_80003es2lan(hw);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	kmrnctrlsta = ((offset << E1000_KMRNCTRLSTA_OFFSET_SHIFT) &
 		       E1000_KMRNCTRLSTA_OFFSET) | data;
@@ -1381,7 +1347,6 @@ static s32 e1000_write_kmrn_reg_80003es2lan(struct e1000_hw *hw, u32 offset,
 
 	e1000_release_mac_csr_80003es2lan(hw);
 
-out:
 	return ret_val;
 }
 
@@ -1400,12 +1365,9 @@ static s32 e1000_read_mac_addr_80003es2lan(struct e1000_hw *hw)
 	 */
 	ret_val = e1000_check_alt_mac_addr_generic(hw);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
-	ret_val = e1000_read_mac_addr_generic(hw);
-
-out:
-	return ret_val;
+	return e1000_read_mac_addr_generic(hw);
 }
 
 /**
@@ -1418,7 +1380,8 @@ out:
 static void e1000_power_down_phy_copper_80003es2lan(struct e1000_hw *hw)
 {
 	/* If the management interface is not enabled, then power down */
-	if (!(hw->mac.ops.check_mng_mode(hw) || e1000_check_reset_block(hw)))
+	if (!(hw->mac.ops.check_mng_mode(hw) ||
+	      hw->phy.ops.check_reset_block(hw)))
 		e1000_power_down_phy_copper(hw);
 }
 

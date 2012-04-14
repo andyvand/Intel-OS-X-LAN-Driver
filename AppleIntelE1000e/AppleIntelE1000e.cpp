@@ -286,7 +286,8 @@ static void e1000_eeprom_checks(struct e1000_adapter *adapter)
 		return;
 	
 	ret_val = e1000_read_nvm(hw, NVM_INIT_CONTROL2_REG, 1, &buf);
-	if (!ret_val && (!(le16_to_cpu(buf) & (1 << 0)))) {
+	le16_to_cpus(&buf);
+	if (!ret_val && (!(buf & (1 << 0)))) {
 		/* Deep Smart Power Down (DSPD) */
 		IOLog("Warning: detected DSPD enabled in EEPROM\n");
 	}
@@ -569,7 +570,7 @@ void e1000e_reset(struct e1000_adapter *adapter)
 		fc->pause_time = 0xFFFF;
 	else
 		fc->pause_time = E1000_FC_PAUSE_TIME;
-	fc->send_xon = 1;
+	fc->send_xon = true;
 	fc->current_mode = fc->requested_mode;
 
 	switch (hw->mac.type) {
@@ -765,43 +766,16 @@ static int e1000e_write_uc_addr_list(struct net_device *netdev)
 
 #endif /* HAVE_SET_RX_MODE */
 
-/**
- * e1000e_update_tail_wa - helper function for e1000e_update_[rt]dt_wa()
- * @hw: pointer to the HW structure
- * @tail: address of tail descriptor register
- * @i: value to write to tail descriptor register
- *
- * When updating the tail register, the ME could be accessing Host CSR
- * registers at the same time.  Normally, this is handled in h/w by an
- * arbiter but on some parts there is a bug that acknowledges Host accesses
- * later than it should which could result in the descriptor register to
- * have an incorrect value.  Workaround this by checking the FWSM register
- * which has bit 24 set while ME is accessing Host CSR registers, wait
- * if it is set and try again a number of times.
- **/
-static inline s32 e1000e_update_tail_wa(struct e1000_hw *hw, void __iomem *tail,
-                                        unsigned int i)
-{
-	unsigned int j = 0;
-    
-	while ((j++ < E1000_ICH_FWSM_PCIM2PCI_COUNT) &&
-	       (er32(FWSM) & E1000_ICH_FWSM_PCIM2PCI))
-		udelay(50);
-    
-	writel(i, tail);
-    
-	if ((j == E1000_ICH_FWSM_PCIM2PCI_COUNT) && (i != readl(tail)))
-		return E1000_ERR_SWFW_SYNC;
-    
-	return 0;
-}
 
 static void e1000e_update_rdt_wa(struct e1000_ring *rx_ring, unsigned int i)
 {
 	struct e1000_adapter *adapter = rx_ring->adapter;
 	struct e1000_hw *hw = &adapter->hw;
-    
-	if (e1000e_update_tail_wa(hw, rx_ring->tail, i)) {
+	s32 ret_val = __ew32_prepare(hw);
+
+	writel(i, rx_ring->tail);
+	
+	if (unlikely(!ret_val && (i != readl(rx_ring->tail)))) {
 		u32 rctl = er32(RCTL);
 		ew32(RCTL, rctl & ~E1000_RCTL_EN);
 		e_err("ME firmware caused invalid RDT - resetting\n");
@@ -813,8 +787,11 @@ static void e1000e_update_tdt_wa(struct e1000_ring *tx_ring, unsigned int i)
 {
 	struct e1000_adapter *adapter = tx_ring->adapter;
 	struct e1000_hw *hw = &adapter->hw;
-    
-	if (e1000e_update_tail_wa(hw, tx_ring->tail, i)) {
+	s32 ret_val = __ew32_prepare(hw);
+	
+	writel(i, tx_ring->tail);
+	
+	if (unlikely(!ret_val && (i != readl(tx_ring->tail)))) {
 		u32 tctl = er32(TCTL);
 		ew32(TCTL, tctl & ~E1000_TCTL_EN);
 		e_err("ME firmware caused invalid TDT - resetting\n");
@@ -845,7 +822,7 @@ static unsigned int e1000_update_itr(struct e1000_adapter *adapter,
 	unsigned int retval = itr_setting;
 	
 	if (packets == 0)
-		goto update_itr_done;
+		return itr_setting;
 	
 	switch (itr_setting) {
 		case lowest_latency:
@@ -880,7 +857,6 @@ static unsigned int e1000_update_itr(struct e1000_adapter *adapter,
 			break;
 	}
 	
-update_itr_done:
 	return retval;
 }
 
@@ -976,7 +952,6 @@ static int e1000_tx_map(struct e1000_adapter *adapter, mbuf_t skb, unsigned int 
 		buffer_info = &tx_ring->buffer_info[i];
 		buffer_info->length = tx_segments[f].length;
 		bytecount += tx_segments[f].length;
-		/* set time_stamp *before* dma to help avoid a possible race */
 		// buffer_info->time_stamp = jiffies;
 		buffer_info->dma = tx_segments[f].location;
 		buffer_info->mapped_as_page = false;
@@ -1132,7 +1107,7 @@ static int e1000_init_phy_wakeup(struct e1000_adapter *adapter, u32 wufc)
 	/* Enable access to wakeup registers on and set page to BM_WUC_PAGE */
 	retval = e1000_enable_phy_wakeup_reg_access_bm(hw, &wuc_enable);
 	if (retval)
-		goto out;
+		goto release;
 	
 	/* copy MAC MTA to PHY MTA - only needed for pchlan */
 	for (i = 0; i < adapter->hw.mac.mta_reg_count; i++) {
@@ -1176,7 +1151,7 @@ static int e1000_init_phy_wakeup(struct e1000_adapter *adapter, u32 wufc)
 	retval = e1000_disable_phy_wakeup_reg_access_bm(hw, &wuc_enable);
 	if (retval)
 		e_err("Could not set PHY Host Wakeup bit\n");
-out:
+release:
 	hw->phy.ops.release(hw);
 	
 	return retval;
@@ -1417,7 +1392,7 @@ bool AppleIntelE1000e::start(IOService* provider)
 			adapter->hw.phy.ops.check_reset_block(&adapter->hw))
 			e_info("PHY reset is blocked due to SOL/IDER session.\n");
 		
-		if (e1000_check_reset_block(&adapter->hw))
+		if (hw->phy.ops.check_reset_block(hw))
 			e_info("PHY reset is blocked due to SOL/IDER session.\n");
 
 		if (e1000e_enable_mng_pass_thru(&adapter->hw))
@@ -1454,7 +1429,7 @@ bool AppleIntelE1000e::start(IOService* provider)
 		
 		// Initialize link parameters. User can change them with ethtool
 		adapter->hw.mac.autoneg = 1;
-		adapter->fc_autoneg = 1;
+		adapter->fc_autoneg = true;
 		if (adapter->hw.mac.type == e1000_pchlan) {
 			/* Workaround h/w hang when Tx flow control enabled */
 			adapter->hw.fc.requested_mode = e1000_fc_rx_pause;
@@ -1731,13 +1706,7 @@ void AppleIntelE1000e::e1000e_up()
 	e1000_configure();
 	
 	//clear_bit(__E1000_DOWN, &adapter->state);
-
-	/* fire a link status change interrupt to start the watchdog */
-	ew32(ICS, E1000_ICS_LSC);
 	
-#ifdef CONFIG_E1000E_NAPI
-	napi_enable(&adapter->napi);
-#endif
 	if (adapter->msix_entries)
 		e1000_configure_msix(adapter);
 	e1000_irq_enable(adapter);
@@ -2086,7 +2055,7 @@ void AppleIntelE1000e::interruptOccurred(IOInterruptEventSource * src)
 		return;  /* Not our interrupt */
 	
 	if (icr & E1000_ICR_LSC) {
-		hw->mac.get_link_status = 1;
+		hw->mac.get_link_status = true;
 		/*
 		 * ICH8 workaround-- Call gig speed drop workaround on cable
 		 * disconnect (LSC) before accessing any PHY registers
@@ -2285,20 +2254,26 @@ void AppleIntelE1000e::e1000_configure_tx()
 	/* enable Report Status bit */
 	adapter->txd_cmd |= E1000_TXD_CMD_RS;
 	
-	e1000e_config_collision_dist(hw);
+	hw->mac.ops.config_collision_dist(hw);
 }
 
 /**
  * e1000_setup_rctl - configure the receive control registers
  * @adapter: Board private structure
  **/
+#if	1
+// no support
+#define PAGE_USE_COUNT(S)	0
+#else
 #define PAGE_USE_COUNT(S) (((S) >> PAGE_SHIFT) + \
 (((S) & (PAGE_SIZE - 1)) ? 1 : 0))
+#endif
 void AppleIntelE1000e::e1000_setup_rctl()
 {
 	e1000_adapter *adapter = &priv_adapter;
 	struct e1000_hw *hw = &adapter->hw;
 	u32 rctl, rfctl;
+	u32 pages = 0;
 
 	/* Workaround Si errata on 82579 - configure jumbo frame flow */
 	if (hw->mac.type == e1000_pch2lan) {
@@ -2383,6 +2358,27 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	/* Enable Extended Status in all Receive Descriptors */
 	rfctl = er32(RFCTL);
 	rfctl |= E1000_RFCTL_EXTEN;
+	
+	/*
+	 * 82571 and greater support packet-split where the protocol
+	 * header is placed in skb->data and the packet data is
+	 * placed in pages hanging off of skb_shinfo(skb)->nr_frags.
+	 * In the case of a non-split, skb->data is linearly filled,
+	 * followed by the page buffers.  Therefore, skb->data is
+	 * sized to hold the largest protocol header.
+	 *
+	 * allocations using alloc_page take too long for regular MTU
+	 * so only enable packet split for jumbo frames
+	 *
+	 * Using pages when the page size is greater than 16k wastes
+	 * a lot of memory, since we allocate 3 pages at all times
+	 * per packet.
+	 */
+	pages = PAGE_USE_COUNT(adapter->netdev->mtu);
+	if ((pages <= 3) && (PAGE_SIZE <= 16384) && (rctl & E1000_RCTL_LPE))
+		adapter->rx_ps_pages = pages;
+	else
+		adapter->rx_ps_pages = 0;
 	
 	if (adapter->rx_ps_pages) {
 		u32 psrctl = 0;
@@ -2925,7 +2921,7 @@ bool AppleIntelE1000e::e1000_clean_rx_irq_ps()
 	unsigned int i, j;
 	u32 length, staterr;
 	int cleaned_count = 0;
-	bool cleaned = 0;
+	bool cleaned = false;
 	unsigned int total_rx_bytes = 0, total_rx_packets = 0;
 	
 	i = rx_ring->next_to_clean;
@@ -2947,7 +2943,7 @@ bool AppleIntelE1000e::e1000_clean_rx_irq_ps()
 		
 		next_buffer = &rx_ring->buffer_info[i];
 		
-		cleaned = 1;
+		cleaned = true;
 		cleaned_count++;
 
 		//buffer_info->dma = 0;
@@ -3103,7 +3099,7 @@ bool AppleIntelE1000e::e1000_clean_jumbo_rx_irq()
 	u32 length, staterr;
 	unsigned int i;
 	int cleaned_count = 0;
-	bool cleaned = 0;
+	bool cleaned = false;
 	unsigned int total_rx_bytes = 0, total_rx_packets = 0;
 	
 	i = rx_ring->next_to_clean;
@@ -3120,7 +3116,7 @@ bool AppleIntelE1000e::e1000_clean_jumbo_rx_irq()
 		
 		next_buffer = &rx_ring->buffer_info[i];
 		
-		cleaned = 1;
+		cleaned = true;
 		cleaned_count++;
 		
 		/* see !EOP comment in other rx routine */
@@ -3217,7 +3213,7 @@ bool AppleIntelE1000e::e1000_clean_tx_irq()
 	struct e1000_tx_desc *tx_desc, *eop_desc;
 	struct e1000_buffer *buffer_info;
 	unsigned int i, eop;
-	bool cleaned = 0, retval = 1;
+	bool cleaned = false, retval = true;
 	unsigned int total_tx_bytes = 0, total_tx_packets = 0;
 	
 	i = tx_ring->next_to_clean;
@@ -3225,7 +3221,7 @@ bool AppleIntelE1000e::e1000_clean_tx_irq()
 	eop_desc = E1000_TX_DESC(*tx_ring, eop);
 	
 	while (eop_desc->upper.data & cpu_to_le32(E1000_TXD_STAT_DD)) {
-		for (cleaned = 0; !cleaned; ) {
+		for (cleaned = false; !cleaned; ) {
 			tx_desc = E1000_TX_DESC(*tx_ring, i);
 			buffer_info = &tx_ring->buffer_info[i];
 			cleaned = (i == eop);
@@ -3258,11 +3254,12 @@ bool AppleIntelE1000e::e1000_clean_tx_irq()
 		 * Detect a transmit hang in hardware, this serializes the
 		 * check with the clearing of time_stamp and movement of i
 		 */
-		adapter->detect_tx_hung = 0;
-		if (tx_ring->buffer_info[eop].dma && !(er32(STATUS) & E1000_STATUS_TXOFF)) {
-			//schedule_work(&adapter->print_hang_task);
-			//queueRunning = false;
-		}
+		adapter->detect_tx_hung = false;
+		if (tx_ring->buffer_info[eop].dma &&
+			!(er32(STATUS) & E1000_STATUS_TXOFF))
+			;//schedule_work(&adapter->print_hang_task);
+		else
+			adapter->tx_hang_recheck = false;
 	}
 	adapter->total_tx_bytes += total_tx_bytes;
 	adapter->total_tx_packets += total_tx_packets;
@@ -3295,7 +3292,7 @@ bool AppleIntelE1000e::e1000e_has_link()
 {
 	e1000_adapter *adapter = &priv_adapter;
 	struct e1000_hw *hw = &priv_adapter.hw;
-	bool link_active = 0;
+	bool link_active = false;
 	SInt32 ret_val = 0;
 	
 	/*
@@ -3310,7 +3307,7 @@ bool AppleIntelE1000e::e1000e_has_link()
 			ret_val = hw->mac.ops.check_for_link(hw);
 			link_active = !hw->mac.get_link_status;
 		} else {
-			link_active = 1;
+			link_active = true;
 		}
 		break;
 	case e1000_media_type_fiber:
@@ -3372,7 +3369,10 @@ void AppleIntelE1000e::e1000_clean_tx_ring()
 	tx_ring->next_to_clean = 0;
 	
 	writel(0, tx_ring->head);
-	writel(0, tx_ring->tail);
+	if (tx_ring->adapter->flags2 & FLAG2_PCIM2PCI_ARBITER_WA)
+		e1000e_update_tdt_wa(tx_ring, 0);
+	else
+		writel(0, tx_ring->tail);
 }
 
 
@@ -3491,7 +3491,10 @@ void AppleIntelE1000e::e1000_clean_rx_ring()
 	adapter->flags2 &= ~FLAG2_IS_DISCARDING;
 	
 	writel(0, rx_ring->head);
-	writel(0, rx_ring->tail);
+	if (rx_ring->adapter->flags2 & FLAG2_PCIM2PCI_ARBITER_WA)
+		e1000e_update_rdt_wa(rx_ring, 0);
+	else
+		writel(0, rx_ring->tail);
 }
 
 
@@ -3565,7 +3568,7 @@ void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 			phy->ops.cfg_on_link_up(hw);
 
 		e1000e_enable_receives();
-		E1000_READ_REG(hw, E1000_STATUS);
+		//E1000_READ_REG(hw, E1000_STATUS);
 		UInt32 speed = 1000 * MBit;
 		if(adapter->link_speed == SPEED_100)
 			speed = 100 * MBit;
@@ -3630,8 +3633,8 @@ link_up:
 	e1000e_flush_descriptors(adapter);
 
 	/* Force detection of hung controller every watchdog period */
-	adapter->detect_tx_hung = 1;
-	
+	adapter->detect_tx_hung = true;
+
 	/*
 	 * With 82571 controllers, LAA may be overwritten due to controller
 	 * reset from the other port. Set the appropriate LAA in RAR[0]
@@ -3657,7 +3660,7 @@ void AppleIntelE1000e::e1000_print_link_info()
 {
 	e1000_adapter *adapter = &priv_adapter;
 	struct e1000_hw *hw = &adapter->hw;
-	UInt32 ctrl = E1000_READ_REG(hw, E1000_CTRL);
+	UInt32 ctrl = er32(CTRL);
 	
 	e_info("Link is Up %d Mbps %s, Flow Control: %s\n",
 		   adapter->link_speed,

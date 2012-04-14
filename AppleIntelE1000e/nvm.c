@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2011 Intel Corporation.
+  Copyright(c) 1999 - 2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -28,8 +28,7 @@
 
 #include "e1000.h"
 
-static void e1000_stop_nvm(struct e1000_hw *hw);
-static void e1000e_reload_nvm(struct e1000_hw *hw);
+static void e1000e_reload_nvm_generic(struct e1000_hw *hw);
 
 /**
  *  e1000_init_nvm_ops_generic - Initialize NVM function pointers
@@ -41,7 +40,7 @@ void e1000_init_nvm_ops_generic(struct e1000_hw *hw)
 {
 	struct e1000_nvm_info *nvm = &hw->nvm;
 	/* Initialize function pointers */
-	nvm->ops.reload = e1000e_reload_nvm;
+	nvm->ops.reload = e1000e_reload_nvm_generic;
 }
 
 /**
@@ -164,7 +163,6 @@ s32 e1000e_poll_eerd_eewr_done(struct e1000_hw *hw, int ee_reg)
 {
 	u32 attempts = 100000;
 	u32 i, reg = 0;
-	s32 ret_val = -E1000_ERR_NVM;
 
 	for (i = 0; i < attempts; i++) {
 		if (ee_reg == E1000_NVM_POLL_READ)
@@ -172,15 +170,13 @@ s32 e1000e_poll_eerd_eewr_done(struct e1000_hw *hw, int ee_reg)
 		else
 			reg = er32(EEWR);
 
-		if (reg & E1000_NVM_RW_REG_DONE) {
-			ret_val = 0;
-			break;
-		}
+		if (reg & E1000_NVM_RW_REG_DONE)
+			return 0;
 
 		udelay(5);
 	}
 
-	return ret_val;
+	return -E1000_ERR_NVM;
 }
 
 /**
@@ -195,7 +191,6 @@ s32 e1000e_acquire_nvm(struct e1000_hw *hw)
 {
 	u32 eecd = er32(EECD);
 	s32 timeout = E1000_NVM_GRANT_ATTEMPTS;
-	s32 ret_val = 0;
 
 	ew32(EECD, eecd | E1000_EECD_REQ);
 	eecd = er32(EECD);
@@ -211,10 +206,10 @@ s32 e1000e_acquire_nvm(struct e1000_hw *hw)
 		eecd &= ~E1000_EECD_REQ;
 		ew32(EECD, eecd);
 		e_dbg("Could not acquire NVM grant\n");
-		ret_val = -E1000_ERR_NVM;
+		return -E1000_ERR_NVM;
 	}
 
-	return ret_val;
+	return 0;
 }
 
 /**
@@ -286,7 +281,6 @@ static s32 e1000_ready_nvm_eeprom(struct e1000_hw *hw)
 {
 	struct e1000_nvm_info *nvm = &hw->nvm;
 	u32 eecd = er32(EECD);
-	s32 ret_val = 0;
 	u8 spi_stat_reg;
 
 	if (nvm->type == e1000_nvm_eeprom_spi) {
@@ -318,13 +312,11 @@ static s32 e1000_ready_nvm_eeprom(struct e1000_hw *hw)
 
 		if (!timeout) {
 			e_dbg("SPI NVM Status error\n");
-			ret_val = -E1000_ERR_NVM;
-			goto out;
+			return -E1000_ERR_NVM;
 		}
 	}
 
-out:
-	return ret_val;
+	return 0;
 }
 
 /**
@@ -349,8 +341,7 @@ s32 e1000e_read_nvm_eerd(struct e1000_hw *hw, u16 offset, u16 words, u16 *data)
 	if ((offset >= nvm->word_size) || (words > (nvm->word_size - offset)) ||
 	    (words == 0)) {
 		e_dbg("nvm parameter(s) out of bounds\n");
-		ret_val = -E1000_ERR_NVM;
-		goto out;
+		return -E1000_ERR_NVM;
 	}
 
 	for (i = 0; i < words; i++) {
@@ -365,7 +356,6 @@ s32 e1000e_read_nvm_eerd(struct e1000_hw *hw, u16 offset, u16 words, u16 *data)
 		data[i] = (er32(EERD) >> E1000_NVM_RW_REG_DATA);
 	}
 
-out:
 	return ret_val;
 }
 
@@ -394,13 +384,12 @@ s32 e1000e_write_nvm_spi(struct e1000_hw *hw, u16 offset, u16 words, u16 *data)
 	if ((offset >= nvm->word_size) || (words > (nvm->word_size - offset)) ||
 	    (words == 0)) {
 		e_dbg("nvm parameter(s) out of bounds\n");
-		ret_val = -E1000_ERR_NVM;
-		goto out;
+		return -E1000_ERR_NVM;
 	}
 
 	ret_val = nvm->ops.acquire(hw);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	while (widx < words) {
 		u8 write_opcode = NVM_WRITE_OPCODE_SPI;
@@ -447,7 +436,6 @@ s32 e1000e_write_nvm_spi(struct e1000_hw *hw, u16 offset, u16 words, u16 *data)
 release:
 	nvm->ops.release(hw);
 
-out:
 	return ret_val;
 }
 
@@ -471,20 +459,19 @@ s32 e1000_read_pba_string_generic(struct e1000_hw *hw, u8 *pba_num,
 
 	if (pba_num == NULL) {
 		e_dbg("PBA string buffer was null\n");
-		ret_val = E1000_ERR_INVALID_ARGUMENT;
-		goto out;
+		return -E1000_ERR_INVALID_ARGUMENT;
 	}
 
 	ret_val = e1000_read_nvm(hw, NVM_PBA_OFFSET_0, 1, &nvm_data);
 	if (ret_val) {
 		e_dbg("NVM Read Error\n");
-		goto out;
+		return ret_val;
 	}
 
 	ret_val = e1000_read_nvm(hw, NVM_PBA_OFFSET_1, 1, &pba_ptr);
 	if (ret_val) {
 		e_dbg("NVM Read Error\n");
-		goto out;
+		return ret_val;
 	}
 
 	/*
@@ -524,25 +511,23 @@ s32 e1000_read_pba_string_generic(struct e1000_hw *hw, u8 *pba_num,
 				pba_num[offset] += 'A' - 0xA;
 		}
 
-		goto out;
+		return 0;
 	}
 
 	ret_val = e1000_read_nvm(hw, pba_ptr, 1, &length);
 	if (ret_val) {
 		e_dbg("NVM Read Error\n");
-		goto out;
+		return ret_val;
 	}
 
 	if (length == 0xFFFF || length == 0) {
 		e_dbg("NVM PBA number section invalid length\n");
-		ret_val = E1000_ERR_NVM_PBA_SECTION;
-		goto out;
+		return -E1000_ERR_NVM_PBA_SECTION;
 	}
 	/* check if pba_num buffer is big enough */
 	if (pba_num_size < (((u32)length * 2) - 1)) {
 		e_dbg("PBA string buffer too small\n");
-		ret_val = E1000_ERR_NO_SPACE;
-		goto out;
+		return -E1000_ERR_NO_SPACE;
 	}
 
 	/* trim pba length from start of string */
@@ -553,15 +538,14 @@ s32 e1000_read_pba_string_generic(struct e1000_hw *hw, u8 *pba_num,
 		ret_val = e1000_read_nvm(hw, pba_ptr + offset, 1, &nvm_data);
 		if (ret_val) {
 			e_dbg("NVM Read Error\n");
-			goto out;
+			return ret_val;
 		}
 		pba_num[offset * 2] = (u8)(nvm_data >> 8);
 		pba_num[(offset * 2) + 1] = (u8)(nvm_data & 0xFF);
 	}
 	pba_num[offset * 2] = '\0';
 
-out:
-	return ret_val;
+	return 0;
 }
 
 /**
@@ -602,7 +586,7 @@ s32 e1000_read_mac_addr_generic(struct e1000_hw *hw)
  **/
 s32 e1000e_validate_nvm_checksum_generic(struct e1000_hw *hw)
 {
-	s32 ret_val = 0;
+	s32 ret_val;
 	u16 checksum = 0;
 	u16 i, nvm_data;
 
@@ -610,19 +594,17 @@ s32 e1000e_validate_nvm_checksum_generic(struct e1000_hw *hw)
 		ret_val = e1000_read_nvm(hw, i, 1, &nvm_data);
 		if (ret_val) {
 			e_dbg("NVM Read Error\n");
-			goto out;
+			return ret_val;
 		}
 		checksum += nvm_data;
 	}
 
 	if (checksum != (u16)NVM_SUM) {
 		e_dbg("NVM Checksum Invalid\n");
-		ret_val = -E1000_ERR_NVM;
-		goto out;
+		return -E1000_ERR_NVM;
 	}
 
-out:
-	return ret_val;
+	return 0;
 }
 
 /**
@@ -643,7 +625,7 @@ s32 e1000e_update_nvm_checksum_generic(struct e1000_hw *hw)
 		ret_val = e1000_read_nvm(hw, i, 1, &nvm_data);
 		if (ret_val) {
 			e_dbg("NVM Read Error while updating checksum.\n");
-			goto out;
+			return ret_val;
 		}
 		checksum += nvm_data;
 	}
@@ -652,18 +634,17 @@ s32 e1000e_update_nvm_checksum_generic(struct e1000_hw *hw)
 	if (ret_val)
 		e_dbg("NVM Write Error while updating checksum.\n");
 
-out:
 	return ret_val;
 }
 
 /**
- *  e1000e_reload_nvm - Reloads EEPROM
+ *  e1000e_reload_nvm_generic - Reloads EEPROM
  *  @hw: pointer to the HW structure
  *
  *  Reloads the EEPROM by setting the "Reinitialize from EEPROM" bit in the
  *  extended control register.
  **/
-static void e1000e_reload_nvm(struct e1000_hw *hw)
+static void e1000e_reload_nvm_generic(struct e1000_hw *hw)
 {
 	u32 ctrl_ext;
 

@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2011 Intel Corporation.
+  Copyright(c) 1999 - 2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -507,6 +507,8 @@ struct e1000_mac_operations {
 				     struct e1000_host_mng_command_header *);
 	 s32(*mng_enable_host_if) (struct e1000_hw *);
 	 s32(*wait_autoneg) (struct e1000_hw *);
+	 s32(*acquire_swfw_sync) (struct e1000_hw *, u16);
+	void (*release_swfw_sync) (struct e1000_hw *, u16);
 };
 
 /*

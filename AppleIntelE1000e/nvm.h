@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2011 Intel Corporation.
+  Copyright(c) 1999 - 2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -44,5 +44,4 @@ s32 e1000e_update_nvm_checksum_generic(struct e1000_hw *hw);
 void e1000e_release_nvm(struct e1000_hw *hw);
 
 #define E1000_STM_OPCODE	0xDB00
-
 #endif

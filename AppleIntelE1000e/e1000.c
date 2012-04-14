@@ -75,7 +75,7 @@ static struct {
 	{ E1000_DEV_ID_PCH2_LV_LM, board_pch2lan },
 	{ E1000_DEV_ID_PCH2_LV_V, board_pch2lan },
 
-	{ 0 }	/* terminate list */
+	{ 0, 0 }	/* terminate list */
 };
 
 
@@ -253,7 +253,7 @@ static s32 e1000_get_variants_ich8lan(struct e1000_adapter *adapter)
         }
     
 	if ((adapter->hw.mac.type == e1000_ich8lan) &&
-	    (adapter->hw.phy.type == e1000_phy_igp_3))
+	    (adapter->hw.phy.type != e1000_phy_ife))
 		adapter->flags |= FLAG_LSC_GIG_SPEED_DROP;
     
 	/* Enable workaround for 82579 w/ ME enabled */

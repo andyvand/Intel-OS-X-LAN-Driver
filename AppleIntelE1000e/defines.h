@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2011 Intel Corporation.
+  Copyright(c) 1999 - 2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -1216,6 +1216,7 @@
 #define NVM_VERSION			0x0005
 #define NVM_SERDES_AMPLITUDE		0x0006	/* SERDES output amplitude */
 #define NVM_PHY_CLASS_WORD		0x0007
+
 #define NVM_INIT_CONTROL1_REG		0x000A
 #define NVM_INIT_CONTROL2_REG		0x000F
 #define NVM_SWDEF_PINS_CTRL_PORT_1	0x0010

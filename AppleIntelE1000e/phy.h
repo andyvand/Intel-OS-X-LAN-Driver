@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2011 Intel Corporation.
+  Copyright(c) 1999 - 2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -29,7 +29,6 @@
 #ifndef _E1000_PHY_H_
 #define _E1000_PHY_H_
 
-void e1000_init_phy_ops_generic(struct e1000_hw *hw);
 s32 e1000e_check_downshift(struct e1000_hw *hw);
 s32 e1000_check_polarity_m88(struct e1000_hw *hw);
 s32 e1000_check_polarity_igp(struct e1000_hw *hw);

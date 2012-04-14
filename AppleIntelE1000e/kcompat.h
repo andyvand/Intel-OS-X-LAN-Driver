@@ -52,6 +52,11 @@
 #define	cpu_to_le64(x)	OSSwapHostToLittleConstInt64(x)
 #define	le16_to_cpu(x)	OSSwapLittleToHostInt16(x)
 #define	le32_to_cpu(x)	OSSwapLittleToHostInt32(x)
+#if		defined(__BIG_ENDIAN__)
+#define	le16_to_cpus(x)	(*(x)=le16_to_cpu(*(x)))
+#else
+#define	le16_to_cpus(x)
+#endif
 
 #define	writel(val, reg)	_OSWriteInt32(reg, 0, val)
 #define	writew(val, reg)	_OSWriteInt16(reg, 0, val)

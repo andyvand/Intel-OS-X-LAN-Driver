@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2011 Intel Corporation.
+  Copyright(c) 1999 - 2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -62,21 +62,18 @@ static u8 e1000_calculate_checksum(u8 *buffer, u32 length)
 s32 e1000_mng_enable_host_if(struct e1000_hw *hw)
 {
 	u32 hicr;
-	s32 ret_val = 0;
 	u8 i;
 
-	if (!(hw->mac.arc_subsystem_valid)) {
+	if (!hw->mac.arc_subsystem_valid) {
 		e_dbg("ARC subsystem not valid.\n");
-		ret_val = -E1000_ERR_HOST_INTERFACE_COMMAND;
-		goto out;
+		return -E1000_ERR_HOST_INTERFACE_COMMAND;
 	}
 
 	/* Check that the host interface is enabled. */
 	hicr = er32(HICR);
 	if ((hicr & E1000_HICR_EN) == 0) {
 		e_dbg("E1000_HOST_EN bit disabled.\n");
-		ret_val = -E1000_ERR_HOST_INTERFACE_COMMAND;
-		goto out;
+		return -E1000_ERR_HOST_INTERFACE_COMMAND;
 	}
 	/* check the previous command is completed */
 	for (i = 0; i < E1000_MNG_DHCP_COMMAND_TIMEOUT; i++) {
@@ -88,12 +85,10 @@ s32 e1000_mng_enable_host_if(struct e1000_hw *hw)
 
 	if (i == E1000_MNG_DHCP_COMMAND_TIMEOUT) {
 		e_dbg("Previous command timeout failed .\n");
-		ret_val = -E1000_ERR_HOST_INTERFACE_COMMAND;
-		goto out;
+		return -E1000_ERR_HOST_INTERFACE_COMMAND;
 	}
 
-out:
-	return ret_val;
+	return 0;
 }
 
 /**
@@ -131,7 +126,7 @@ bool e1000e_enable_tx_pkt_filtering(struct e1000_hw *hw)
 	/* No manageability, no filtering */
 	if (!hw->mac.ops.check_mng_mode(hw)) {
 		hw->mac.tx_pkt_filtering = false;
-		goto out;
+		return hw->mac.tx_pkt_filtering;
 	}
 
 	/*
@@ -141,7 +136,7 @@ bool e1000e_enable_tx_pkt_filtering(struct e1000_hw *hw)
 	ret_val = hw->mac.ops.mng_enable_host_if(hw);
 	if (ret_val) {
 		hw->mac.tx_pkt_filtering = false;
-		goto out;
+		return hw->mac.tx_pkt_filtering;
 	}
 
 	/* Read in the header.  Length and offset are in dwords. */
@@ -161,61 +156,14 @@ bool e1000e_enable_tx_pkt_filtering(struct e1000_hw *hw)
 	 */
 	if ((hdr_csum != csum) || (hdr->signature != E1000_IAMT_SIGNATURE)) {
 		hw->mac.tx_pkt_filtering = true;
-		goto out;
+		return hw->mac.tx_pkt_filtering;
 	}
 
 	/* Cookie area is valid, make the final check for filtering. */
-	if (!(hdr->status & E1000_MNG_DHCP_COOKIE_STATUS_PARSING)) {
+	if (!(hdr->status & E1000_MNG_DHCP_COOKIE_STATUS_PARSING))
 		hw->mac.tx_pkt_filtering = false;
-		goto out;
-	}
 
-out:
 	return hw->mac.tx_pkt_filtering;
-}
-
-/**
- *  e1000e_mng_write_dhcp_info - Writes DHCP info to host interface
- *  @hw: pointer to the HW structure
- *  @buffer: pointer to the host interface
- *  @length: size of the buffer
- *
- *  Writes the DHCP information to the host interface.
- **/
-s32 e1000e_mng_write_dhcp_info(struct e1000_hw *hw, u8 *buffer, u16 length)
-{
-	struct e1000_host_mng_command_header hdr;
-	s32 ret_val;
-	u32 hicr;
-
-	hdr.command_id = E1000_MNG_DHCP_TX_PAYLOAD_CMD;
-	hdr.command_length = length;
-	hdr.reserved1 = 0;
-	hdr.reserved2 = 0;
-	hdr.checksum = 0;
-
-	/* Enable the host interface */
-	ret_val = hw->mac.ops.mng_enable_host_if(hw);
-	if (ret_val)
-		goto out;
-
-	/* Populate the host interface with the contents of "buffer". */
-	ret_val = hw->mac.ops.mng_host_if_write(hw, buffer, length,
-						sizeof(hdr), &(hdr.checksum));
-	if (ret_val)
-		goto out;
-
-	/* Write the manageability command header */
-	ret_val = hw->mac.ops.mng_write_cmd_header(hw, &hdr);
-	if (ret_val)
-		goto out;
-
-	/* Tell the ARC a new command is pending. */
-	hicr = er32(HICR);
-	ew32(HICR, hicr | E1000_HICR_C);
-
-out:
-	return ret_val;
 }
 
 /**
@@ -262,15 +210,12 @@ s32 e1000_mng_host_if_write(struct e1000_hw *hw, u8 *buffer,
 	u8 *tmp;
 	u8 *bufptr = buffer;
 	u32 data = 0;
-	s32 ret_val = 0;
 	u16 remaining, i, j, prev_bytes;
 
 	/* sum = only sum of the data and it is not checksum */
 
-	if (length == 0 || offset + length > E1000_HI_MAX_MNG_DATA_LENGTH) {
-		ret_val = -E1000_ERR_PARAM;
-		goto out;
-	}
+	if (length == 0 || offset + length > E1000_HI_MAX_MNG_DATA_LENGTH)
+		return -E1000_ERR_PARAM;
 
 	tmp = (u8 *)&data;
 	prev_bytes = offset & 0x3;
@@ -317,8 +262,50 @@ s32 e1000_mng_host_if_write(struct e1000_hw *hw, u8 *buffer,
 		E1000_WRITE_REG_ARRAY(hw, E1000_HOST_IF, offset + i, data);
 	}
 
-out:
-	return ret_val;
+	return 0;
+}
+
+/**
+ *  e1000e_mng_write_dhcp_info - Writes DHCP info to host interface
+ *  @hw: pointer to the HW structure
+ *  @buffer: pointer to the host interface
+ *  @length: size of the buffer
+ *
+ *  Writes the DHCP information to the host interface.
+ **/
+s32 e1000e_mng_write_dhcp_info(struct e1000_hw *hw, u8 *buffer, u16 length)
+{
+	struct e1000_host_mng_command_header hdr;
+	s32 ret_val;
+	u32 hicr;
+
+	hdr.command_id = E1000_MNG_DHCP_TX_PAYLOAD_CMD;
+	hdr.command_length = length;
+	hdr.reserved1 = 0;
+	hdr.reserved2 = 0;
+	hdr.checksum = 0;
+
+	/* Enable the host interface */
+	ret_val = hw->mac.ops.mng_enable_host_if(hw);
+	if (ret_val)
+		return ret_val;
+
+	/* Populate the host interface with the contents of "buffer". */
+	ret_val = hw->mac.ops.mng_host_if_write(hw, buffer, length,
+						sizeof(hdr), &(hdr.checksum));
+	if (ret_val)
+		return ret_val;
+
+	/* Write the manageability command header */
+	ret_val = hw->mac.ops.mng_write_cmd_header(hw, &hdr);
+	if (ret_val)
+		return ret_val;
+
+	/* Tell the ARC a new command is pending. */
+	hicr = er32(HICR);
+	ew32(HICR, hicr | E1000_HICR_C);
+
+	return 0;
 }
 
 /**
@@ -332,12 +319,11 @@ bool e1000e_enable_mng_pass_thru(struct e1000_hw *hw)
 {
 	u32 manc;
 	u32 fwsm, factps;
-	bool ret_val = false;
 
 	manc = er32(MANC);
 
 	if (!(manc & E1000_MANC_RCV_TCO_EN))
-		goto out;
+		return false;
 
 	if (hw->mac.has_fwsm) {
 		fwsm = er32(FWSM);
@@ -345,10 +331,8 @@ bool e1000e_enable_mng_pass_thru(struct e1000_hw *hw)
 
 		if (!(factps & E1000_FACTPS_MNGCG) &&
 		    ((fwsm & E1000_FWSM_MODE_MASK) ==
-		     (e1000_mng_mode_pt << E1000_FWSM_MODE_SHIFT))) {
-			ret_val = true;
-			goto out;
-		}
+		     (e1000_mng_mode_pt << E1000_FWSM_MODE_SHIFT)))
+			return true;
 	} else if ((hw->mac.type == e1000_82574) ||
 		   (hw->mac.type == e1000_82583)) {
 		u16 data;
@@ -358,15 +342,11 @@ bool e1000e_enable_mng_pass_thru(struct e1000_hw *hw)
 
 		if (!(factps & E1000_FACTPS_MNGCG) &&
 		    ((data & E1000_NVM_INIT_CTRL2_MNGM) ==
-		     (e1000_mng_mode_pt << 13))) {
-			ret_val = true;
-			goto out;
-		}
+		     (e1000_mng_mode_pt << 13)))
+			return true;
 	} else if ((manc & E1000_MANC_SMBUS_EN) && !(manc & E1000_MANC_ASF_EN)) {
-		ret_val = true;
-		goto out;
+		return true;
 	}
 
-out:
-	return ret_val;
+	return false;
 }

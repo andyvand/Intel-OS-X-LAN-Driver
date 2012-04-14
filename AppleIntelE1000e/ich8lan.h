@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2011 Intel Corporation.
+  Copyright(c) 1999 - 2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -98,6 +98,10 @@
 
 #define E1000_FEXTNVM_SW_CONFIG		1
 #define E1000_FEXTNVM_SW_CONFIG_ICH8M	(1 << 27)	/* Bit redefined for ICH8M */
+
+#define E1000_FEXTNVM3	0x0003C	/* Future Extended NVM 3 - RW */
+#define E1000_FEXTNVM3_PHY_CFG_COUNTER_MASK	0x0C000000
+#define E1000_FEXTNVM3_PHY_CFG_COUNTER_50MSEC	0x08000000
 
 #define E1000_FEXTNVM4_BEACON_DURATION_MASK	0x7
 #define E1000_FEXTNVM4_BEACON_DURATION_8USEC	0x7
@@ -213,6 +217,7 @@
 
 /* PHY Power Management Control */
 #define HV_PM_CTRL		PHY_REG(770, 17)
+#define HV_PM_CTRL_PLL_STOP_IN_K1_GIGA	0x100
 
 #define SW_FLAG_TIMEOUT		1000	/* SW Semaphore flag timeout in ms */
 

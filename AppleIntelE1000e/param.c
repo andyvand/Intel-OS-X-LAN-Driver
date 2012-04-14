@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2011 Intel Corporation.
+  Copyright(c) 1999 - 2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -32,6 +32,7 @@
 #include <linux/module.h>
 #include <linux/pci.h>
 #endif
+
 #include "e1000.h"
 
 /*
@@ -86,7 +87,7 @@ MODULE_PARM_DESC(copybreak,
 #ifdef	__APPLE__
 #undef	E1000_PARAM
 #define E1000_PARAM(X, desc) static const int X[E1000_MAX_NIC+1] = E1000_PARAM_INIT; \
-    static unsigned int num_##X;
+	static unsigned int num_##X;
 #endif
 
 /*

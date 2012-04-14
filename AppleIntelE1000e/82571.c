@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2011 Intel Corporation.
+  Copyright(c) 1999 - 2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -90,11 +90,11 @@ static void e1000_power_down_phy_copper_82571(struct e1000_hw *hw);
 static s32 e1000_init_phy_params_82571(struct e1000_hw *hw)
 {
 	struct e1000_phy_info *phy = &hw->phy;
-	s32 ret_val = 0;
+	s32 ret_val;
 
 	if (hw->phy.media_type != e1000_media_type_copper) {
 		phy->type = e1000_phy_none;
-		goto out;
+		return 0;
 	}
 
 	phy->addr = 1;
@@ -152,8 +152,7 @@ static s32 e1000_init_phy_params_82571(struct e1000_hw *hw)
 		phy->ops.set_d3_lplu_state = e1000_set_d3_lplu_state_82574;
 		break;
 	default:
-		ret_val = -E1000_ERR_PHY;
-		goto out;
+		return -E1000_ERR_PHY;
 		break;
 	}
 
@@ -161,7 +160,7 @@ static s32 e1000_init_phy_params_82571(struct e1000_hw *hw)
 	ret_val = e1000_get_phy_id_82571(hw);
 	if (ret_val) {
 		e_dbg("Error getting PHY ID\n");
-		goto out;
+		return ret_val;
 	}
 
 	/* Verify phy id */
@@ -188,7 +187,6 @@ static s32 e1000_init_phy_params_82571(struct e1000_hw *hw)
 	if (ret_val)
 		e_dbg("PHY ID unknown: type = 0x%08x\n", phy->id);
 
-out:
 	return ret_val;
 }
 
@@ -342,7 +340,7 @@ static s32 e1000_init_mac_params_82571(struct e1000_hw *hw)
 	/* read mac address */
 	mac->ops.read_mac_addr = e1000_read_mac_addr_82571;
 	/* ID LED init */
-	mac->ops.id_led_init = e1000e_id_led_init;
+	mac->ops.id_led_init = e1000e_id_led_init_generic;
 	/* setup LED */
 	mac->ops.setup_led = e1000e_setup_led_generic;
 	/* cleanup LED */
@@ -402,8 +400,9 @@ static s32 e1000_init_mac_params_82571(struct e1000_hw *hw)
 			/* Only do this for the first interface on this card */
 			ew32(SWSM2, swsm2 | E1000_SWSM2_LOCK);
 			force_clear_smbi = true;
-		} else
+		} else {
 			force_clear_smbi = false;
+		}
 		break;
 	default:
 		force_clear_smbi = true;
@@ -457,7 +456,7 @@ void e1000_init_function_pointers_82571(struct e1000_hw *hw)
 static s32 e1000_get_phy_id_82571(struct e1000_hw *hw)
 {
 	struct e1000_phy_info *phy = &hw->phy;
-	s32 ret_val = 0;
+	s32 ret_val;
 	u16 phy_id = 0;
 
 	switch (hw->mac.type) {
@@ -472,29 +471,29 @@ static s32 e1000_get_phy_id_82571(struct e1000_hw *hw)
 		phy->id = IGP01E1000_I_PHY_ID;
 		break;
 	case e1000_82573:
-		ret_val = e1000e_get_phy_id(hw);
+		return e1000e_get_phy_id(hw);
 		break;
 	case e1000_82574:
 	case e1000_82583:
 		ret_val = e1e_rphy(hw, PHY_ID1, &phy_id);
 		if (ret_val)
-			goto out;
+			return ret_val;
 
 		phy->id = (u32)(phy_id << 16);
 		udelay(20);
 		ret_val = e1e_rphy(hw, PHY_ID2, &phy_id);
 		if (ret_val)
-			goto out;
+			return ret_val;
 
 		phy->id |= (u32)(phy_id);
 		phy->revision = (u32)(phy_id & ~PHY_REVISION_MASK);
 		break;
 	default:
-		ret_val = -E1000_ERR_PHY;
+		return -E1000_ERR_PHY;
 		break;
 	}
-out:
-	return ret_val;
+
+	return 0;
 }
 
 /**
@@ -506,7 +505,6 @@ out:
 static s32 e1000_get_hw_semaphore_82571(struct e1000_hw *hw)
 {
 	u32 swsm;
-	s32 ret_val = 0;
 	s32 sw_timeout = hw->nvm.word_size + 1;
 	s32 fw_timeout = hw->nvm.word_size + 1;
 	s32 i = 0;
@@ -552,12 +550,10 @@ static s32 e1000_get_hw_semaphore_82571(struct e1000_hw *hw)
 		/* Release semaphores */
 		e1000_put_hw_semaphore_82571(hw);
 		e_dbg("Driver can't access the NVM\n");
-		ret_val = -E1000_ERR_NVM;
-		goto out;
+		return -E1000_ERR_NVM;
 	}
 
-out:
-	return ret_val;
+	return 0;
 }
 
 /**
@@ -585,7 +581,6 @@ static void e1000_put_hw_semaphore_82571(struct e1000_hw *hw)
 static s32 e1000_get_hw_semaphore_82573(struct e1000_hw *hw)
 {
 	u32 extcnf_ctrl;
-	s32 ret_val = 0;
 	s32 i = 0;
 
 	extcnf_ctrl = er32(EXTCNF_CTRL);
@@ -607,12 +602,10 @@ static s32 e1000_get_hw_semaphore_82573(struct e1000_hw *hw)
 		/* Release semaphores */
 		e1000_put_hw_semaphore_82573(hw);
 		e_dbg("Driver can't access the PHY\n");
-		ret_val = -E1000_ERR_PHY;
-		goto out;
+		return -E1000_ERR_PHY;
 	}
 
-out:
-	return ret_val;
+	return 0;
 }
 
 /**
@@ -731,7 +724,7 @@ static s32 e1000_acquire_nvm_82571(struct e1000_hw *hw)
 
 	ret_val = e1000_get_hw_semaphore_82571(hw);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	switch (hw->mac.type) {
 	case e1000_82573:
@@ -744,7 +737,6 @@ static s32 e1000_acquire_nvm_82571(struct e1000_hw *hw)
 	if (ret_val)
 		e1000_put_hw_semaphore_82571(hw);
 
-out:
 	return ret_val;
 }
 
@@ -775,7 +767,7 @@ static void e1000_release_nvm_82571(struct e1000_hw *hw)
 static s32 e1000_write_nvm_82571(struct e1000_hw *hw, u16 offset, u16 words,
 				 u16 *data)
 {
-	s32 ret_val = 0;
+	s32 ret_val;
 
 	switch (hw->mac.type) {
 	case e1000_82573:
@@ -811,14 +803,14 @@ static s32 e1000_update_nvm_checksum_82571(struct e1000_hw *hw)
 
 	ret_val = e1000e_update_nvm_checksum_generic(hw);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	/*
 	 * If our nvm is an EEPROM, then we're done
 	 * otherwise, commit the checksum to the flash NVM.
 	 */
 	if (hw->nvm.type != e1000_nvm_flash_hw)
-		goto out;
+		return 0;
 
 	/* Check for pending operations. */
 	for (i = 0; i < E1000_FLASH_UPDATES; i++) {
@@ -827,10 +819,8 @@ static s32 e1000_update_nvm_checksum_82571(struct e1000_hw *hw)
 			break;
 	}
 
-	if (i == E1000_FLASH_UPDATES) {
-		ret_val = -E1000_ERR_NVM;
-		goto out;
-	}
+	if (i == E1000_FLASH_UPDATES)
+		return -E1000_ERR_NVM;
 
 	/* Reset the firmware if using STM opcode. */
 	if ((er32(FLOP) & 0xFF00) == E1000_STM_OPCODE) {
@@ -853,13 +843,10 @@ static s32 e1000_update_nvm_checksum_82571(struct e1000_hw *hw)
 			break;
 	}
 
-	if (i == E1000_FLASH_UPDATES) {
-		ret_val = -E1000_ERR_NVM;
-		goto out;
-	}
+	if (i == E1000_FLASH_UPDATES)
+		return -E1000_ERR_NVM;
 
-out:
-	return ret_val;
+	return 0;
 }
 
 /**
@@ -905,8 +892,7 @@ static s32 e1000_write_nvm_eewr_82571(struct e1000_hw *hw, u16 offset,
 	if ((offset >= nvm->word_size) || (words > (nvm->word_size - offset)) ||
 	    (words == 0)) {
 		e_dbg("nvm parameter(s) out of bounds\n");
-		ret_val = -E1000_ERR_NVM;
-		goto out;
+		return -E1000_ERR_NVM;
 	}
 
 	for (i = 0; i < words; i++) {
@@ -925,7 +911,6 @@ static s32 e1000_write_nvm_eewr_82571(struct e1000_hw *hw, u16 offset,
 			break;
 	}
 
-out:
 	return ret_val;
 }
 
@@ -938,7 +923,6 @@ out:
 static s32 e1000_get_cfg_done_82571(struct e1000_hw *hw)
 {
 	s32 timeout = PHY_CFG_TIMEOUT;
-	s32 ret_val = 0;
 
 	while (timeout) {
 		if (er32(EEMNGCTL) & E1000_NVM_CFG_DONE_PORT_0)
@@ -948,12 +932,10 @@ static s32 e1000_get_cfg_done_82571(struct e1000_hw *hw)
 	}
 	if (!timeout) {
 		e_dbg("MNG configuration cycle has not completed.\n");
-		ret_val = -E1000_ERR_RESET;
-		goto out;
+		return -E1000_ERR_RESET;
 	}
 
-out:
-	return ret_val;
+	return 0;
 }
 
 /**
@@ -970,25 +952,25 @@ out:
 static s32 e1000_set_d0_lplu_state_82571(struct e1000_hw *hw, bool active)
 {
 	struct e1000_phy_info *phy = &hw->phy;
-	s32 ret_val = 0;
+	s32 ret_val;
 	u16 data;
 
 	ret_val = e1e_rphy(hw, IGP02E1000_PHY_POWER_MGMT, &data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	if (active) {
 		data |= IGP02E1000_PM_D0_LPLU;
 		ret_val = e1e_wphy(hw, IGP02E1000_PHY_POWER_MGMT, data);
 		if (ret_val)
-			goto out;
+			return ret_val;
 
 		/* When LPLU is enabled, we should disable SmartSpeed */
 		ret_val = e1e_rphy(hw, IGP01E1000_PHY_PORT_CONFIG, &data);
 		data &= ~IGP01E1000_PSCFR_SMART_SPEED;
 		ret_val = e1e_wphy(hw, IGP01E1000_PHY_PORT_CONFIG, data);
 		if (ret_val)
-			goto out;
+			return ret_val;
 	} else {
 		data &= ~IGP02E1000_PM_D0_LPLU;
 		ret_val = e1e_wphy(hw, IGP02E1000_PHY_POWER_MGMT, data);
@@ -1002,29 +984,28 @@ static s32 e1000_set_d0_lplu_state_82571(struct e1000_hw *hw, bool active)
 			ret_val = e1e_rphy(hw,
 					   IGP01E1000_PHY_PORT_CONFIG, &data);
 			if (ret_val)
-				goto out;
+				return ret_val;
 
 			data |= IGP01E1000_PSCFR_SMART_SPEED;
 			ret_val = e1e_wphy(hw,
 					   IGP01E1000_PHY_PORT_CONFIG, data);
 			if (ret_val)
-				goto out;
+				return ret_val;
 		} else if (phy->smart_speed == e1000_smart_speed_off) {
 			ret_val = e1e_rphy(hw,
 					   IGP01E1000_PHY_PORT_CONFIG, &data);
 			if (ret_val)
-				goto out;
+				return ret_val;
 
 			data &= ~IGP01E1000_PSCFR_SMART_SPEED;
 			ret_val = e1e_wphy(hw,
 					   IGP01E1000_PHY_PORT_CONFIG, data);
 			if (ret_val)
-				goto out;
+				return ret_val;
 		}
 	}
 
-out:
-	return ret_val;
+	return 0;
 }
 
 /**
@@ -1099,7 +1080,7 @@ static s32 e1000_reset_hw_82571(struct e1000_hw *hw)
 	ret_val = e1000e_get_auto_rd_done(hw);
 	if (ret_val)
 		/* We don't want to continue accessing MAC registers. */
-		goto out;
+		return ret_val;
 
 	/*
 	 * Phy configuration from NVM just starts after EECD_AUTO_RD is set.
@@ -1125,7 +1106,7 @@ static s32 e1000_reset_hw_82571(struct e1000_hw *hw)
 		/* Install any alternate MAC address into RAR0 */
 		ret_val = e1000_check_alt_mac_addr_generic(hw);
 		if (ret_val)
-			goto out;
+			return ret_val;
 
 		e1000e_set_laa_state_82571(hw, true);
 	}
@@ -1134,8 +1115,7 @@ static s32 e1000_reset_hw_82571(struct e1000_hw *hw)
 	if (hw->phy.media_type == e1000_media_type_internal_serdes)
 		hw->mac.serdes_link_state = e1000_serdes_link_down;
 
-out:
-	return ret_val;
+	return 0;
 }
 
 /**
@@ -1368,8 +1348,8 @@ static void e1000_clear_vfta_82571(struct e1000_hw *hw)
 				       E1000_VFTA_ENTRY_SHIFT) &
 			    E1000_VFTA_ENTRY_MASK;
 			vfta_bit_in_reg =
-			    1 << (hw->mng_cookie.
-				  vlan_id & E1000_VFTA_ENTRY_BIT_SHIFT_MASK);
+			    1 << (hw->mng_cookie.vlan_id &
+				  E1000_VFTA_ENTRY_BIT_SHIFT_MASK);
 		}
 		break;
 	default:
@@ -1439,7 +1419,6 @@ bool e1000_check_phy_82574(struct e1000_hw *hw)
 {
 	u16 status_1kbt = 0;
 	u16 receive_errors = 0;
-	bool phy_hung = false;
 	s32 ret_val = 0;
 
 	/*
@@ -1448,17 +1427,17 @@ bool e1000_check_phy_82574(struct e1000_hw *hw)
 	 */
 	ret_val = e1e_rphy(hw, E1000_RECEIVE_ERROR_COUNTER, &receive_errors);
 	if (ret_val)
-		goto out;
+		return false;
 	if (receive_errors == E1000_RECEIVE_ERROR_MAX) {
 		ret_val = e1e_rphy(hw, E1000_BASE1000T_STATUS, &status_1kbt);
 		if (ret_val)
-			goto out;
+			return false;
 		if ((status_1kbt & E1000_IDLE_ERROR_COUNT_MASK) ==
 		    E1000_IDLE_ERROR_COUNT_MASK)
-			phy_hung = true;
+			return true;
 	}
-out:
-	return phy_hung;
+
+	return false;
 }
 
 /**
@@ -1489,7 +1468,7 @@ static s32 e1000_setup_link_82571(struct e1000_hw *hw)
 		break;
 	}
 
-	return e1000e_setup_link(hw);
+	return e1000e_setup_link_generic(hw);
 }
 
 /**
@@ -1519,17 +1498,14 @@ static s32 e1000_setup_copper_link_82571(struct e1000_hw *hw)
 		ret_val = e1000e_copper_link_setup_igp(hw);
 		break;
 	default:
-		ret_val = -E1000_ERR_PHY;
+		return -E1000_ERR_PHY;
 		break;
 	}
 
 	if (ret_val)
-		goto out;
+		return ret_val;
 
-	ret_val = e1000e_setup_copper_link(hw);
-
-out:
-	return ret_val;
+	return e1000e_setup_copper_link(hw);
 }
 
 /**
@@ -1745,7 +1721,7 @@ static s32 e1000_valid_led_default_82571(struct e1000_hw *hw, u16 *data)
 	ret_val = e1000_read_nvm(hw, NVM_ID_LED_SETTINGS, 1, data);
 	if (ret_val) {
 		e_dbg("NVM Read Error\n");
-		goto out;
+		return ret_val;
 	}
 
 	switch (hw->mac.type) {
@@ -1762,8 +1738,7 @@ static s32 e1000_valid_led_default_82571(struct e1000_hw *hw, u16 *data)
 		break;
 	}
 
-out:
-	return ret_val;
+	return 0;
 }
 
 /**
@@ -1819,11 +1794,11 @@ void e1000e_set_laa_state_82571(struct e1000_hw *hw, bool state)
 static s32 e1000_fix_nvm_checksum_82571(struct e1000_hw *hw)
 {
 	struct e1000_nvm_info *nvm = &hw->nvm;
-	s32 ret_val = 0;
+	s32 ret_val;
 	u16 data;
 
 	if (nvm->type != e1000_nvm_flash_hw)
-		goto out;
+		return 0;
 
 	/*
 	 * Check bit 4 of word 10h.  If it is 0, firmware is done updating
@@ -1831,7 +1806,7 @@ static s32 e1000_fix_nvm_checksum_82571(struct e1000_hw *hw)
 	 */
 	ret_val = e1000_read_nvm(hw, 0x10, 1, &data);
 	if (ret_val)
-		goto out;
+		return ret_val;
 
 	if (!(data & 0x10)) {
 		/*
@@ -1844,19 +1819,18 @@ static s32 e1000_fix_nvm_checksum_82571(struct e1000_hw *hw)
 		 */
 		ret_val = e1000_read_nvm(hw, 0x23, 1, &data);
 		if (ret_val)
-			goto out;
+			return ret_val;
 
 		if (!(data & 0x8000)) {
 			data |= 0x8000;
 			ret_val = e1000_write_nvm(hw, 0x23, 1, &data);
 			if (ret_val)
-				goto out;
+				return ret_val;
 			ret_val = e1000e_update_nvm_checksum(hw);
 		}
 	}
 
-out:
-	return ret_val;
+	return 0;
 }
 
 /**
@@ -1865,9 +1839,9 @@ out:
  **/
 static s32 e1000_read_mac_addr_82571(struct e1000_hw *hw)
 {
-	s32 ret_val = 0;
-
 	if (hw->mac.type == e1000_82571) {
+		s32 ret_val = 0;
+
 		/*
 		 * If there's an alternate MAC address place it in RAR0
 		 * so that it will override the Si installed default perm
@@ -1875,13 +1849,10 @@ static s32 e1000_read_mac_addr_82571(struct e1000_hw *hw)
 		 */
 		ret_val = e1000_check_alt_mac_addr_generic(hw);
 		if (ret_val)
-			goto out;
+			return ret_val;
 	}
 
-	ret_val = e1000_read_mac_addr_generic(hw);
-
-out:
-	return ret_val;
+	return e1000_read_mac_addr_generic(hw);
 }
 
 /**
@@ -1896,11 +1867,11 @@ static void e1000_power_down_phy_copper_82571(struct e1000_hw *hw)
 	struct e1000_phy_info *phy = &hw->phy;
 	struct e1000_mac_info *mac = &hw->mac;
 
-	if (!(phy->ops.check_reset_block))
+	if (!phy->ops.check_reset_block)
 		return;
 
 	/* If the management interface is not enabled, then power down */
-	if (!(mac->ops.check_mng_mode(hw) || e1000_check_reset_block(hw)))
+	if (!(mac->ops.check_mng_mode(hw) || phy->ops.check_reset_block(hw)))
 		e1000_power_down_phy_copper(hw);
 }
 
