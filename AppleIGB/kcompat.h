@@ -268,6 +268,8 @@ typedef void AppleIGB;
 #define	__MODULE_STRING(s)	"x"
 
 #define	printk(args...)	IOLog(args)
+#define	dev_warn(dev,args...)	IOLog(args)
+#define	dev_info(dev,args...)	IOLog(args)
 #define	in_interrupt()	(0)
 
 #define __stringify_1(x...)     #x

@@ -2790,9 +2790,11 @@ void igb_free_rx_resources(struct igb_adapter *adapter, struct igb_ring *rx_ring
 	if (!rx_ring->desc)
 		return;
 #ifdef __APPLE__
-	rx_ring->pool->complete();
-	rx_ring->pool->release();
-	rx_ring->pool = NULL;
+	if(rx_ring->pool){
+		rx_ring->pool->complete();
+		rx_ring->pool->release();
+		rx_ring->pool = NULL;
+	}
 #else
 	dma_free_coherent(rx_ring->dev, rx_ring->size,
 			  rx_ring->desc, rx_ring->dma);
@@ -5769,28 +5771,28 @@ static bool igb_clean_rx_irq(struct igb_q_vector *q_vector, int budget)
 		 */
 		rmb();
 
-#ifdef CONFIG_IGB_DISABLE_PACKET_SPLIT
-	#ifdef	__APPLE__
+#ifdef	__APPLE__
 		u16 length = le16_to_cpu(rx_desc->wb.upper.length);
-		skb = rx_ring->netdev->allocatePacket(length);
-		if(skb){
-			mbuf_copyback(skb, 0, length,
-						  buffer_info->pool->getBytesNoCopy(),
-						  MBUF_WAITOK);
+		if(buffer_info->pool == NULL){	// skb direct
+			// skb is already there
+		} else {
+			skb = rx_ring->netdev->allocatePacket(length);
+			if(skb){
+				mbuf_copyback(skb, 0, length,
+							  buffer_info->pool->getBytesNoCopy(),
+							  MBUF_WAITOK);
+			}
+			buffer_info->pool->complete();
 		}
-		buffer_info->pool->complete();
-	#else
+		buffer_info->dma = 0;
+#else	__APPLE__
+#ifdef CONFIG_IGB_DISABLE_PACKET_SPLIT
 		__skb_put(skb, le16_to_cpu(rx_desc->wb.upper.length));
 		dma_unmap_single(rx_ring->dev, buffer_info->dma,
 				 rx_ring->rx_buffer_len,
 				 DMA_FROM_DEVICE);
-	#endif
 		buffer_info->dma = 0;
 #else	// CONFIG_IGB_DISABLE_PACKET_SPLIT
-	#ifdef	__APPLE__
-		// there is nothing to do about skb
-		// clear the other rx_descs ?
-	#else
 		if (!skb_is_nonlinear(skb)) {
 			__skb_put(skb, igb_get_hlen(rx_desc));
 			dma_unmap_single(rx_ring->dev, buffer_info->dma,
@@ -5816,7 +5818,6 @@ static bool igb_clean_rx_irq(struct igb_q_vector *q_vector, int budget)
 				       PAGE_SIZE / 2, DMA_FROM_DEVICE);
 			buffer_info->page_dma = 0;
 		}
-	#endif
 		if (!igb_test_staterr(rx_desc, E1000_RXD_STAT_EOP)) {
 			struct igb_rx_buffer *next_buffer;
 			next_buffer = &rx_ring->rx_buffer_info[i];
@@ -5828,6 +5829,7 @@ static bool igb_clean_rx_irq(struct igb_q_vector *q_vector, int budget)
 		}
 		
 #endif /* CONFIG_IGB_DISABLE_PACKET_SPLIT */
+#endif	__APPLE__
 		if (igb_test_staterr(rx_desc,
 				     E1000_RXDEXT_ERR_FRAME_ERR_MASK)) {
 			((AppleIGB*)netdev_ring(rx_ring))->receiveError(skb);
@@ -5891,55 +5893,57 @@ static bool igb_alloc_mapped_skb(struct igb_ring *rx_ring,
 				 struct igb_rx_buffer *bi)
 {
 #ifdef	__APPLE__
-#ifdef CONFIG_IGB_DISABLE_PACKET_SPLIT
-	// actually, skb is not allocated.
-	IOBufferMemoryDescriptor *pool = bi->pool;
-	dma_addr_t dma = bi->dma;
-	
-	if (dma){
-		IOLog("igb_alloc_mapped_skb: dma is still active\n");
-		return true;
-	}
+	dma_addr_t dma;
 
-	if (pool) {
-		//IOLog("igb_alloc_mapped_skb: resuse pool\n");
-	} else {
-		//IOLog("igb_alloc_mapped_skb: new pool, size = %d\n", (int)rx_ring->rx_buffer_len);
-		pool = IOBufferMemoryDescriptor::inTaskWithOptions( kernel_task,
-											kIODirectionInOut | kIOMemoryPhysicallyContiguous,
-											(vm_size_t)(rx_ring->rx_buffer_len), PAGE_SIZE/2 );
-		bi->pool = pool;
-		if (unlikely(!pool)) {
+	if(rx_ring->rx_buffer_len <= 2048){	// direct receive
+		struct sk_buff *skb = bi->skb;
+		
+		if (likely(!skb)) {
+			skb = netdev_alloc_skb_ip_align(netdev_ring(rx_ring),
+											rx_ring->rx_buffer_len);
+			bi->skb = skb;
+			if (!skb) {
+				rx_ring->rx_stats.alloc_failed++;
+				return false;
+			}
+			
+			/* initialize skb for ring */
+			skb_record_rx_queue(skb, ring_queue_index(rx_ring));
+		}
+		struct IOPhysicalSegment vec[2];
+		UInt32 count = netdev_ring(rx_ring)->rxCursor()->getPhysicalSegmentsWithCoalesce(skb, vec, 1);
+		if(count == 0){
 			rx_ring->rx_stats.alloc_failed++;
+			netdev_ring(rx_ring)->freePacket(skb);
+			bi->skb = NULL;
 			return false;
 		}
-	}
-	pool->prepare();
-	dma = pool->getPhysicalAddress();
-#else	// CONFIG_IGB_DISABLE_PACKET_SPLIT
-	struct sk_buff *skb = bi->skb;
-	dma_addr_t dma = bi->dma;
-
-	if (likely(!skb)) {
-		skb = netdev_alloc_skb_ip_align(netdev_ring(rx_ring),
-										IGB_RX_HDR_LEN);
-		bi->skb = skb;
-		if (!skb) {
-			rx_ring->rx_stats.alloc_failed++;
-			return false;
+		dma = vec[0].location;
+	} else {
+		// actually, skb is not allocated - alloc/copy on receive.
+		IOBufferMemoryDescriptor *pool = bi->pool;
+		dma = bi->dma;
+		if (dma){
+			IOLog("igb_alloc_mapped_skb: dma is still active\n");
+			return true;
 		}
 		
-		/* initialize skb for ring */
-		skb_record_rx_queue(skb, ring_queue_index(rx_ring));
+		if (pool) {
+			//IOLog("igb_alloc_mapped_skb: resuse pool\n");
+		} else {
+			//IOLog("igb_alloc_mapped_skb: new pool, size = %d\n", (int)rx_ring->rx_buffer_len);
+			pool = IOBufferMemoryDescriptor::inTaskWithOptions( kernel_task,
+															   kIODirectionInOut | kIOMemoryPhysicallyContiguous,
+															   (vm_size_t)(rx_ring->rx_buffer_len), PAGE_SIZE/2 );
+			bi->pool = pool;
+			if (unlikely(!pool)) {
+				rx_ring->rx_stats.alloc_failed++;
+				return false;
+			}
+		}
+		pool->prepare();
+		dma = pool->getPhysicalAddress();
 	}
-	struct IOPhysicalSegment vec[2];
-	UInt32 count = rx_ring(rx_ring)->rxCursor()->getPhysicalSegmentsWithCoalesce(skb, vec, 1);
-	if(count == 0){
-		rx_ring->rx_stats.alloc_failed++;
-		return false;
-	}
-	dma = vec[0].location;
-#endif	// CONFIG_IGB_DISABLE_PACKET_SPLIT
 #else	// __APPLE__
 	struct sk_buff *skb = bi->skb;
 	dma_addr_t dma = bi->dma;
