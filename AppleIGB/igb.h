@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel(R) Gigabit Ethernet Linux driver
-  Copyright(c) 2007-2010 Intel Corporation.
+  Copyright(c) 2007-2012 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -149,6 +149,7 @@ struct igb_adapter;
 #define OUI_LEN                            3
 #define IGB_MAX_VMDQ_QUEUES                8
 
+#define E1000_DMACDC	0x3F1C
 
 struct vf_data_storage {
 	unsigned char vf_mac_addresses[ETH_ALEN];
@@ -204,6 +205,8 @@ struct vf_data_storage {
  */
 /* Supported Rx Buffer Sizes */
 #define IGB_RXBUFFER_512   512
+#define IGB_RXBUFFER_2048  2048
+#define IGB_RXBUFFER_256   256
 #define IGB_RXBUFFER_16384 16384
 #define IGB_RX_HDR_LEN     IGB_RXBUFFER_512
 
@@ -300,8 +303,8 @@ struct igb_tx_buffer {
 #ifdef	__APPLE__
 	IOBufferMemoryDescriptor* page;
 #endif
-	dma_addr_t dma;
-	u32 length;
+	DEFINE_DMA_UNMAP_ADDR(dma);
+	DEFINE_DMA_UNMAP_LEN(len);
 	u32 tx_flags;
 };
 
@@ -330,6 +333,10 @@ struct igb_rx_queue_stats {
 	u64 drops;
 	u64 csum_err;
 	u64 alloc_failed;
+	u64 csum_good;
+	u64 rx_hdr_split;
+	u64 lli_int;
+	u64 pif_count;
 };
 
 struct igb_ring_container {
@@ -466,6 +473,13 @@ static inline u16 igb_desc_unused(const struct igb_ring *ring)
 	return ((ntc > ntu) ? 0 : ring->count) + ntc - ntu - 1;
 }
 
+#ifdef CONFIG_BQL
+static inline struct netdev_queue *txring_txq(const struct igb_ring *tx_ring)
+{
+	return netdev_get_tx_queue(tx_ring->netdev, tx_ring->queue_index);
+}
+#endif /* CONFIG_BQL */
+
 // #ifdef EXT_THERMAL_SENSOR_SUPPORT
 // #ifdef IGB_PROCFS
 struct igb_therm_proc_data
@@ -600,8 +614,12 @@ struct igb_adapter {
 #endif
 	int vferr_refcount;
 	int dmac;
+	u64 dmac_entries;
+	int count;
 	u32 *shadow_vfta;
 
+	/* External Thermal Sensor support flag */
+	bool ets;
 #ifdef IGB_SYSFS
 	struct kobject *info_kobj;
 	struct kobject *therm_kobj[E1000_MAX_SENSORS];
@@ -677,6 +695,8 @@ struct igb_vmdq_adapter {
 #define FW_MAX_RETRIES       3
 #define FW_STATUS_SUCCESS    0x1
 #define FW_FAMILY_DRV_VER    0Xffffffff
+
+#define IGB_MAX_LINK_TRIES   20
 
 struct e1000_fw_hdr {
 	u8 cmd;

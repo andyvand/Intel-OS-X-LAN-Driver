@@ -61,7 +61,7 @@
 #define DRV_EXTRAVERSION ""
 #endif
 
-#define DRV_VERSION "1.10.6" DRV_EXTRAVERSION
+#define DRV_VERSION "1.11.3" DRV_EXTRAVERSION
 char e1000e_driver_name[] = "e1000e";
 const char e1000e_driver_version[] = DRV_VERSION;
 
@@ -181,7 +181,7 @@ static struct e1000_info e1000_82574_info = {
 	    | FLAG_HAS_SMART_POWER_DOWN
 	    | FLAG_HAS_AMT | FLAG_HAS_CTRLEXT_ON_LOAD,
 	.flags2 = FLAG2_CHECK_PHY_HANG
-	    | FLAG2_DISABLE_ASPM_L0S | FLAG2_NO_DISABLE_RX,
+	    | FLAG2_DISABLE_ASPM_L0S | FLAG2_NO_DISABLE_RX | FLAG2_DMA_BURST,
 	.pba = 32,
 	.max_hw_frame_size = DEFAULT_JUMBO,
 	.init_ops = e1000_init_function_pointers_82571,
@@ -1340,8 +1340,16 @@ static void e1000_print_hw_hang(struct work_struct *work)
 		return;
 
 	if (!adapter->tx_hang_recheck && (adapter->flags2 & FLAG2_DMA_BURST)) {
-		/* May be block on write-back, flush and detect again
+		/*
+		 * May be block on write-back, flush and detect again
 		 * flush pending descriptor writebacks to memory
+		 */
+		ew32(TIDV, adapter->tx_int_delay | E1000_TIDV_FPD);
+		/* execute the writes immediately */
+		e1e_flush();
+		/*
+		 * Due to rare timing issues, write to TIDV again to ensure
+		 * the write is successful
 		 */
 		ew32(TIDV, adapter->tx_int_delay | E1000_TIDV_FPD);
 		/* execute the writes immediately */
@@ -4200,6 +4208,16 @@ static void e1000e_flush_descriptors(struct e1000_adapter *adapter)
 		return;
 
 	/* flush pending descriptor writebacks to memory */
+	ew32(TIDV, adapter->tx_int_delay | E1000_TIDV_FPD);
+	ew32(RDTR, adapter->rx_int_delay | E1000_RDTR_FPD);
+
+	/* execute the writes immediately */
+	e1e_flush();
+
+	/*
+	 * due to rare timing issues, write to TIDV/RDTR again to ensure the
+	 * write is successful
+	 */
 	ew32(TIDV, adapter->tx_int_delay | E1000_TIDV_FPD);
 	ew32(RDTR, adapter->rx_int_delay | E1000_RDTR_FPD);
 

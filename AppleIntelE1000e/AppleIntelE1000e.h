@@ -151,6 +151,7 @@ private:
 	bool e1000_clean_rx_irq();
 	bool e1000_clean_rx_irq_ps();
 	bool e1000_clean_jumbo_rx_irq();
+	void e1000_print_hw_hang();
 
 	void e1000_put_txbuf(e1000_buffer *buffer_info);
 	void e1000_alloc_rx_buffers(int cleaned_count);

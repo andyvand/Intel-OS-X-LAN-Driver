@@ -17,11 +17,11 @@
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.10.6</string>
+	<string>1.11.3</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>1.10.6</string>
+	<string>1.11.3</string>
 	<key>IOKitPersonalities</key>
 	<dict>
 		<key>80003ES2</key>

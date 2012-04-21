@@ -1086,6 +1086,16 @@ static void e1000e_flush_descriptors(struct e1000_adapter *adapter)
     
 	/* execute the writes immediately */
 	e1e_flush();
+
+	/*
+	 * due to rare timing issues, write to TIDV/RDTR again to ensure the
+	 * write is successful
+	 */
+	ew32(TIDV, adapter->tx_int_delay | E1000_TIDV_FPD);
+	ew32(RDTR, adapter->rx_int_delay | E1000_RDTR_FPD);
+	
+	/* execute the writes immediately */
+	e1e_flush();
 }
 
 static int e1000_init_phy_wakeup(struct e1000_adapter *adapter, u32 wufc)
@@ -3198,7 +3208,78 @@ bool AppleIntelE1000e::e1000_clean_jumbo_rx_irq()
 	return cleaned;
 }
 
+void AppleIntelE1000e::e1000_print_hw_hang()
+{
+	e1000_adapter *adapter = &priv_adapter;
+	struct e1000_ring *tx_ring = adapter->tx_ring;
+	unsigned int i = tx_ring->next_to_clean;
+	unsigned int eop = tx_ring->buffer_info[i].next_to_watch;
+	struct e1000_tx_desc *eop_desc = E1000_TX_DESC(*tx_ring, eop);
+	struct e1000_hw *hw = &adapter->hw;
+	u16 phy_status, phy_1000t_status, phy_ext_status;
+	u16 pci_status;
+	
+//	if (test_bit(__E1000_DOWN, &adapter->state))
+//		return;
+	
+	if (!adapter->tx_hang_recheck && (adapter->flags2 & FLAG2_DMA_BURST)) {
+		/*
+		 * May be block on write-back, flush and detect again
+		 * flush pending descriptor writebacks to memory
+		 */
+		ew32(TIDV, adapter->tx_int_delay | E1000_TIDV_FPD);
+		/* execute the writes immediately */
+		e1e_flush();
+		/*
+		 * Due to rare timing issues, write to TIDV again to ensure
+		 * the write is successful
+		 */
+		ew32(TIDV, adapter->tx_int_delay | E1000_TIDV_FPD);
+		/* execute the writes immediately */
+		e1e_flush();
+		adapter->tx_hang_recheck = true;
+		return;
+	}
+	/* Real hang detected */
+	adapter->tx_hang_recheck = false;
+//	netif_stop_queue(netdev);
+	
+	e1e_rphy(hw, PHY_STATUS, &phy_status);
+	e1e_rphy(hw, PHY_1000T_STATUS, &phy_1000t_status);
+	e1e_rphy(hw, PHY_EXT_STATUS, &phy_ext_status);
 
+	pci_status = pciDevice->configRead16( kIOPCIConfigStatus );
+	
+	/* detected Hardware unit hang */
+	e_err("Detected Hardware Unit Hang:\n"
+	      "  TDH                  <%x>\n"
+	      "  TDT                  <%x>\n"
+	      "  next_to_use          <%x>\n"
+	      "  next_to_clean        <%x>\n"
+	      "buffer_info[next_to_clean]:\n"
+	      "  time_stamp           <%lx>\n"
+	      "  next_to_watch        <%x>\n"
+	      "  next_to_watch.status <%x>\n"
+	      "MAC Status             <%x>\n"
+	      "PHY Status             <%x>\n"
+	      "PHY 1000BASE-T Status  <%x>\n"
+	      "PHY Extended Status    <%x>\n"
+	      "PCI Status             <%x>\n",
+	      readl(tx_ring->head),
+	      readl(tx_ring->tail),
+	      tx_ring->next_to_use,
+	      tx_ring->next_to_clean,
+	      tx_ring->buffer_info[eop].time_stamp,
+	      eop,
+	      eop_desc->upper.fields.status,
+	      er32(STATUS),
+	      phy_status, phy_1000t_status, phy_ext_status, pci_status);
+	
+	/* Suggest workaround for known h/w issue */
+	if ((hw->mac.type == e1000_pchlan) && (er32(CTRL) & E1000_CTRL_TFCE))
+		e_err("Try turning off Tx pause (flow control) via ethtool\n");
+}
+	
 /**
  * e1000_clean_tx_irq - Reclaim resources after transmit completes
  * @adapter: board private structure
@@ -3257,7 +3338,7 @@ bool AppleIntelE1000e::e1000_clean_tx_irq()
 		adapter->detect_tx_hung = false;
 		if (tx_ring->buffer_info[eop].dma &&
 			!(er32(STATUS) & E1000_STATUS_TXOFF))
-			;//schedule_work(&adapter->print_hang_task);
+			e1000_print_hw_hang();
 		else
 			adapter->tx_hang_recheck = false;
 	}
