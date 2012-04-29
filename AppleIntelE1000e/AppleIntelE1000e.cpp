@@ -272,7 +272,7 @@ static int e1000_sw_init(struct e1000_adapter *adapter)
 	/* Explicitly disable IRQ since the NIC can be in any state. */
 	e1000_irq_disable(adapter);
 	
-	//set_bit(__E1000_DOWN, &adapter->state);
+	set_bit(__E1000_DOWN, &adapter->state);
 	return 0;
 }
 
@@ -1167,6 +1167,13 @@ release:
 	return retval;
 }
 
+static void e1000e_downshift_workaround(struct e1000_adapter *adapter)
+{
+	if (test_bit(__E1000_DOWN, &adapter->state))
+		return;
+	
+	e1000e_gig_downshift_workaround_ich8lan(&adapter->hw);
+}
 
 /////////////////
 
@@ -1715,7 +1722,7 @@ void AppleIntelE1000e::e1000e_up()
 	/* hardware has been reset, we need to reload some things */
 	e1000_configure();
 	
-	//clear_bit(__E1000_DOWN, &adapter->state);
+	clear_bit(__E1000_DOWN, &adapter->state);
 	
 	if (adapter->msix_entries)
 		e1000_configure_msix(adapter);
@@ -1744,7 +1751,7 @@ void AppleIntelE1000e::e1000e_down()
 	 * signal that we're down so the interrupt handler does not
 	 * reschedule our watchdog timer
 	 */
-	//set_bit(__E1000_DOWN, &adapter->state);
+	set_bit(__E1000_DOWN, &adapter->state);
 	
 	/* disable receives in the hardware */
 	rctl = er32(RCTL);
@@ -2061,7 +2068,7 @@ void AppleIntelE1000e::interruptOccurred(IOInterruptEventSource * src)
 	if(!enabledForNetif)
 		return;
 
-	if (!icr)
+	if (!icr || test_bit(__E1000_DOWN, &adapter->state))
 		return;  /* Not our interrupt */
 	
 	if (icr & E1000_ICR_LSC) {
@@ -2073,7 +2080,7 @@ void AppleIntelE1000e::interruptOccurred(IOInterruptEventSource * src)
 		
 		if ((adapter->flags & FLAG_LSC_GIG_SPEED_DROP) &&
 		    (!(er32(STATUS) & E1000_STATUS_LU)))
-			e1000e_gig_downshift_workaround_ich8lan(hw);
+			e1000e_downshift_workaround(adapter);
 
 		/*
 		 * 80003ES2LAN workaround--
@@ -3219,8 +3226,8 @@ void AppleIntelE1000e::e1000_print_hw_hang()
 	u16 phy_status, phy_1000t_status, phy_ext_status;
 	u16 pci_status;
 	
-//	if (test_bit(__E1000_DOWN, &adapter->state))
-//		return;
+	if (test_bit(__E1000_DOWN, &adapter->state))
+		return;
 	
 	if (!adapter->tx_hang_recheck && (adapter->flags2 & FLAG2_DMA_BURST)) {
 		/*
@@ -3329,6 +3336,23 @@ bool AppleIntelE1000e::e1000_clean_tx_irq()
 	}
 	
 	tx_ring->next_to_clean = i;
+
+#if	0
+#define TX_WAKE_THRESHOLD 32
+	if (cleaned && netif_carrier_ok(netdev) &&
+	    e1000_desc_unused(tx_ring) >= TX_WAKE_THRESHOLD) {
+		/* Make sure that anybody stopping the queue after this
+		 * sees the new next_to_clean.
+		 */
+		smp_mb();
+		
+		if (netif_queue_stopped(netdev) &&
+		    !(test_bit(__E1000_DOWN, &adapter->state))) {
+			netif_wake_queue(netdev);
+			++adapter->restart_queue;
+		}
+	}
+#endif
 
 	if (adapter->detect_tx_hung) {
 		/*
