@@ -3250,7 +3250,8 @@ void AppleIntelE1000e::e1000_print_hw_hang()
 	/* Real hang detected */
 	adapter->tx_hang_recheck = false;
 //	netif_stop_queue(netdev);
-	
+
+#if	0
 	e1e_rphy(hw, PHY_STATUS, &phy_status);
 	e1e_rphy(hw, PHY_1000T_STATUS, &phy_1000t_status);
 	e1e_rphy(hw, PHY_EXT_STATUS, &phy_ext_status);
@@ -3285,6 +3286,7 @@ void AppleIntelE1000e::e1000_print_hw_hang()
 	/* Suggest workaround for known h/w issue */
 	if ((hw->mac.type == e1000_pchlan) && (er32(CTRL) & E1000_CTRL_TFCE))
 		e_err("Try turning off Tx pause (flow control) via ethtool\n");
+#endif
 }
 	
 /**
