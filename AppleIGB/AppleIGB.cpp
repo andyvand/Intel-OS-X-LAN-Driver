@@ -3648,52 +3648,50 @@ static void igb_tx_csum(struct igb_ring *tx_ring, struct igb_tx_buffer *first)
           (checksumDemanded&IONetworkController::kChecksumUDP)?"UDP ":""
           );
 #endif    
-	if(checksumDemanded == 0)
-		return;
-
-	int  ehdrlen, ip_hlen;
-	u16	vtag;
-    u8* packet;
-
-	vlan_macip_lens = type_tucmd = mss_l4len_idx = 0;
-	
-	/*
-	 ** In advanced descriptors the vlan tag must 
-	 ** be placed into the context descriptor, thus
-	 ** we need to be here just for that setup.
-	 */
-	if (mbuf_get_vlan_tag(skb, &vtag)==0) {
-		vlan_macip_lens |= (vtag << E1000_ADVTXD_VLAN_SHIFT);
-		ehdrlen = ETHER_HDR_LEN + VLAN_HLEN;
-	} else{
-		ehdrlen = ETHER_HDR_LEN;
+	if(checksumDemanded){
+		int  ehdrlen, ip_hlen;
+		u16	vtag;
+		u8* packet;
+		
+		vlan_macip_lens = type_tucmd = mss_l4len_idx = 0;
+		
+		/*
+		 ** In advanced descriptors the vlan tag must 
+		 ** be placed into the context descriptor, thus
+		 ** we need to be here just for that setup.
+		 */
+		if (mbuf_get_vlan_tag(skb, &vtag)==0) {
+			ehdrlen = ETHER_HDR_LEN + VLAN_HLEN;
+		} else{
+			ehdrlen = ETHER_HDR_LEN;
+		}
+		
+		/* Set the ether header length */
+		vlan_macip_lens |= ehdrlen << E1000_ADVTXD_MACLEN_SHIFT;
+		packet = (u8*)mbuf_data(skb) + ehdrlen;
+		
+		if(0){		// IPv6
+			//struct ip6_hdr *ip6 = (struct ip6_hdr *)((u8*)mbuf_data(skb) + ehdrlen);
+			ip_hlen = sizeof(struct ip6_hdr);
+			type_tucmd |= E1000_ADVTXD_TUCMD_IPV6;
+		} else {
+			struct ip *ip = (struct ip *)((u8*)mbuf_data(skb) + ehdrlen);
+			ip_hlen = ip->ip_hl << 2;
+			type_tucmd |= E1000_ADVTXD_TUCMD_IPV4;
+		}
+		
+		if(checksumDemanded & IONetworkController::kChecksumTCP){
+			type_tucmd |= E1000_ADVTXD_TUCMD_L4T_TCP;
+			struct tcphdr* tcph = (struct tcphdr*)(packet + ip_hlen);
+			mss_l4len_idx = (tcph->th_off << 2) << E1000_ADVTXD_L4LEN_SHIFT;
+		} else if(checksumDemanded & IONetworkController::kChecksumUDP){
+			type_tucmd |= E1000_ADVTXD_TUCMD_L4T_UDP;
+			mss_l4len_idx = sizeof(struct udphdr) << E1000_ADVTXD_L4LEN_SHIFT;
+		}
+		
+		vlan_macip_lens |= ip_hlen;
+		first->tx_flags |= IGB_TX_FLAGS_CSUM;
 	}
-	
-	/* Set the ether header length */
-	vlan_macip_lens |= ehdrlen << E1000_ADVTXD_MACLEN_SHIFT;
-    packet = (u8*)mbuf_data(skb) + ehdrlen;
-	
-	if(0){		// IPv6
-		//struct ip6_hdr *ip6 = (struct ip6_hdr *)((u8*)mbuf_data(skb) + ehdrlen);
-		ip_hlen = sizeof(struct ip6_hdr);
-		type_tucmd |= E1000_ADVTXD_TUCMD_IPV6;
-	} else {
-		struct ip *ip = (struct ip *)((u8*)mbuf_data(skb) + ehdrlen);
-		ip_hlen = ip->ip_hl << 2;
-		type_tucmd |= E1000_ADVTXD_TUCMD_IPV4;
-	}
-
-    if(checksumDemanded & IONetworkController::kChecksumTCP){
-        type_tucmd |= E1000_ADVTXD_TUCMD_L4T_TCP;
-        struct tcphdr* tcph = (struct tcphdr*)(packet + ip_hlen);
-        mss_l4len_idx = (tcph->th_off << 2) << E1000_ADVTXD_L4LEN_SHIFT;
-    } else if(checksumDemanded & IONetworkController::kChecksumUDP){
-        type_tucmd |= E1000_ADVTXD_TUCMD_L4T_UDP;
-        mss_l4len_idx = sizeof(struct udphdr) << E1000_ADVTXD_L4LEN_SHIFT;
-    }
-	
-	vlan_macip_lens |= ip_hlen;
-	first->tx_flags |= IGB_TX_FLAGS_CSUM;
 
 #else	// __APPLE__
 	
@@ -4024,32 +4022,24 @@ static inline int igb_maybe_stop_tx(struct igb_ring *tx_ring, const u16 size)
 	return __igb_maybe_stop_tx(tx_ring, size);
 }
 
+#ifndef __APPLE__	// see outputPacket()
 netdev_tx_t igb_xmit_frame_ring(struct igb_adapter *adapter,struct sk_buff *skb,
 				struct igb_ring *tx_ring)
 {
 	struct igb_tx_buffer *first;
 	int tso;
 	u32 tx_flags = 0;
-#ifndef __APPLE__
 	__be16 protocol = vlan_get_protocol(skb);
-#endif
 	u8 hdr_len = 0;
 	/* need: 1 descriptor per page,
 	 *       + 2 desc gap to keep tail from touching head,
 	 *       + 1 desc for skb->data,
 	 *       + 1 desc for context descriptor,
 	 * otherwise try next time */
-#ifdef	__APPLE__
-	if (igb_maybe_stop_tx(tx_ring, MAX_SKB_FRAGS + 4)) {
-		/* this is a hard error */
-		return NETDEV_TX_BUSY;
-	}
-#else
 	if (igb_maybe_stop_tx(tx_ring, skb_shinfo(skb)->nr_frags + 4)) {
 		/* this is a hard error */
 		return NETDEV_TX_BUSY;
 	}
-#endif
 	/* record the location of the first descriptor for this packet */
 	first = &tx_ring->tx_buffer_info[tx_ring->next_to_use];
 	first->skb = skb;
@@ -4062,24 +4052,14 @@ netdev_tx_t igb_xmit_frame_ring(struct igb_adapter *adapter,struct sk_buff *skb,
 		tx_flags |= IGB_TX_FLAGS_TSTAMP;
 	}
 #endif
-#ifdef __APPLE__
-	UInt16 vlan;
-	if(mbuf_get_vlan_tag(skb,&vlan) == 0){
-		tx_flags |= IGB_TX_FLAGS_VLAN;
-		tx_flags |= (vlan << IGB_TX_FLAGS_VLAN_SHIFT);
-	}
-#else
 	if (vlan_tx_tag_present(skb)) {
 		tx_flags |= IGB_TX_FLAGS_VLAN;
 		tx_flags |= (vlan_tx_tag_get(skb) << IGB_TX_FLAGS_VLAN_SHIFT);
 	}
-#endif
 
 	/* record initial flags and protocol */
 	first->tx_flags = tx_flags;
-#ifndef __APPLE__
 	first->protocol = protocol;
-#endif
 	
 	tso = igb_tso(tx_ring, first, &hdr_len);
 	if (tso < 0)
@@ -4103,6 +4083,7 @@ out_drop:
 
 	return NETDEV_TX_OK;
 }
+#endif
 
 #ifdef HAVE_TX_MQ
 static inline struct igb_ring *igb_tx_queue_mapping(struct igb_adapter *adapter,
@@ -5844,6 +5825,22 @@ static void igb_rx_hwtstamp(struct igb_q_vector *q_vector,
 	igb_systim_to_hwtstamp(adapter, skb_hwtstamps(skb), regval);
 }
 #endif
+#ifdef __APPLE__
+static u16 igb_rx_vlan(struct igb_ring *ring,
+			union e1000_adv_rx_desc *rx_desc,
+			struct sk_buff *skb)
+{
+	u16 vid = 0;
+	if (igb_test_staterr(rx_desc, E1000_RXD_STAT_VP)) {
+		if (igb_test_staterr(rx_desc, E1000_RXDEXT_STATERR_LB) &&
+			test_bit(IGB_RING_FLAG_RX_LB_VLAN_BSWAP, &ring->flags))
+			vid = be16_to_cpu(rx_desc->wb.upper.vlan);
+		else
+			vid = le16_to_cpu(rx_desc->wb.upper.vlan);
+	}
+	return vid;
+}
+#else /* __APPLE__ */
 static void igb_rx_vlan(struct igb_ring *ring,
 			union e1000_adv_rx_desc *rx_desc,
 			struct sk_buff *skb)
@@ -5856,16 +5853,15 @@ static void igb_rx_vlan(struct igb_ring *ring,
 		else
 			vid = le16_to_cpu(rx_desc->wb.upper.vlan);
 #ifdef HAVE_VLAN_RX_REGISTER
-		//IGB_CB(skb)->vid = vid;
-		mbuf_set_vlan_tag(skb, vid);
+		IGB_CB(skb)->vid = vid;
 	} else {
-		//IGB_CB(skb)->vid = 0;
-		mbuf_set_vlan_tag(skb, 0);
+		IGB_CB(skb)->vid = 0;
 #else
-		mbuf_set_vlan_tag(skb, vid);
+		__vlan_hwaccel_put_tag(skb, vid);
 #endif
 	}
 }
+#endif
 
 #ifndef CONFIG_IGB_DISABLE_PACKET_SPLIT
 static inline u16 igb_get_hlen(union e1000_adv_rx_desc *rx_desc)
@@ -5890,6 +5886,9 @@ static bool igb_clean_rx_irq(struct igb_q_vector *q_vector, int budget)
 	unsigned int total_bytes = 0, total_packets = 0;
 	u16 cleaned_count = igb_desc_unused(rx_ring);
 	u16 i = rx_ring->next_to_clean;
+#ifdef __APPLE__
+	u16 vid;
+#endif
 
 	rx_desc = IGB_RX_DESC(rx_ring, i);
 
@@ -5929,14 +5928,14 @@ static bool igb_clean_rx_irq(struct igb_q_vector *q_vector, int budget)
 			buffer_info->pool->complete();
 		}
 		buffer_info->dma = 0;
-#else	__APPLE__
+#else	/* __APPLE__ */
 #ifdef CONFIG_IGB_DISABLE_PACKET_SPLIT
 		__skb_put(skb, le16_to_cpu(rx_desc->wb.upper.length));
 		dma_unmap_single(rx_ring->dev, buffer_info->dma,
 				 rx_ring->rx_buffer_len,
 				 DMA_FROM_DEVICE);
 		buffer_info->dma = 0;
-#else	// CONFIG_IGB_DISABLE_PACKET_SPLIT
+#else	/* CONFIG_IGB_DISABLE_PACKET_SPLIT */
 		if (!skb_is_nonlinear(skb)) {
 			__skb_put(skb, igb_get_hlen(rx_desc));
 			dma_unmap_single(rx_ring->dev, buffer_info->dma,
@@ -5973,7 +5972,7 @@ static bool igb_clean_rx_irq(struct igb_q_vector *q_vector, int budget)
 		}
 		
 #endif /* CONFIG_IGB_DISABLE_PACKET_SPLIT */
-#endif	__APPLE__
+#endif	/* __APPLE__ */
 		if (igb_test_staterr(rx_desc,
 				     E1000_RXDEXT_ERR_FRAME_ERR_MASK)) {
 			((AppleIGB*)netdev_ring(rx_ring))->receiveError(skb);
@@ -5987,7 +5986,7 @@ static bool igb_clean_rx_irq(struct igb_q_vector *q_vector, int budget)
 		igb_rx_hash(rx_ring, rx_desc, skb);
 #endif
 		igb_rx_checksum(rx_ring, rx_desc, skb);
-		igb_rx_vlan(rx_ring, rx_desc, skb);
+		vid = igb_rx_vlan(rx_ring, rx_desc, skb);
 
 		if (rx_desc->wb.lower.lo_dword.hs_rss.hdr_info &
 		    cpu_to_le16(E1000_RXDADV_SPH))
@@ -6007,7 +6006,7 @@ static bool igb_clean_rx_irq(struct igb_q_vector *q_vector, int budget)
 #ifdef HAVE_VLAN_RX_REGISTER
 		igb_receive_skb(q_vector, skb);
 #else
-		((AppleIGB*)netdev_ring(rx_ring))->receive(skb);
+		((AppleIGB*)netdev_ring(rx_ring))->receive(skb, (UInt32)vid);
 #endif
 
 #ifndef NETIF_F_GRO
@@ -6524,7 +6523,6 @@ void igb_vlan_mode(IOEthernetController *netdev, u32 features)
 #endif
 
 	if (enable) {
-
 		/* Disable CFI check */
 		rctl = E1000_READ_REG(hw, E1000_RCTL);
 		rctl &= ~E1000_RCTL_CFIEN;
@@ -7726,7 +7724,7 @@ bool AppleIGB::start(IOService* provider)
 
 		adapter->watchdog_task = watchdogSource;
 		if (adapter->flags & IGB_FLAG_DETECT_BAD_DMA)
-			adapter->dma_err_task, dmaErrSource;
+			adapter->dma_err_task = dmaErrSource;
 		adapter->reset_task = resetSource;
 		
 		rxMbufCursor = IOMbufNaturalMemoryCursor::withSpecification(_mtu + ETH_HLEN + ETH_FCS_LEN, 1);
@@ -8007,6 +8005,7 @@ IOReturn AppleIGB::disable(IONetworkInterface * netif)
 UInt32 AppleIGB::outputPacket(mbuf_t skb, void * param)
 {
 	struct igb_adapter *adapter = &priv_adapter;
+    UInt32 rc = kIOReturnOutputSuccess;
 	
 	if (enabledForNetif == false) {             // drop the packet.
 		return kIOReturnOutputDropped;
@@ -8027,12 +8026,55 @@ UInt32 AppleIGB::outputPacket(mbuf_t skb, void * param)
 	 * in order to meet this minimum size requirement.
 	 */
 	// not applied to Mac OS X
-	
-	if(igb_xmit_frame_ring(adapter, skb, igb_tx_queue_mapping(adapter, skb)) == 0)
-		return kIOReturnOutputSuccess;
+	// igb_xmit_frame_ring is inlined here
+	do {
+        struct igb_ring *tx_ring = igb_tx_queue_mapping(adapter, skb);
+        struct igb_tx_buffer *first;
+        int tso;
+        u32 tx_flags = 0;
+        u8 hdr_len = 0;
+        /* need: 1 descriptor per page,
+         *       + 2 desc gap to keep tail from touching head,
+         *       + 1 desc for skb->data,
+         *       + 1 desc for context descriptor,
+         * otherwise try next time */
+        if (igb_maybe_stop_tx(tx_ring, MAX_SKB_FRAGS + 4)) {
+            /* this is a hard error */
+            rc = kIOReturnOutputDropped;
+            break;
+        }
+        /* record the location of the first descriptor for this packet */
+        first = &tx_ring->tx_buffer_info[tx_ring->next_to_use];
+        first->skb = skb;
+        first->bytecount = mbuf_pkthdr_len(skb);
+        first->gso_segs = 1;
+        
+        UInt32 vlan;
+        if(getVlanTagDemand(skb,&vlan)){
+			//IOLog("vlan = %d\n",(int)vlan);
+            tx_flags |= IGB_TX_FLAGS_VLAN;
+            tx_flags |= (vlan << IGB_TX_FLAGS_VLAN_SHIFT);
+        }
+        
+        /* record initial flags and protocol */
+        first->tx_flags = tx_flags;
+        
+        tso = igb_tso(tx_ring, first, &hdr_len);
+        if (tso < 0){
+            igb_unmap_and_free_tx_resource(adapter, tx_ring, first);
+        } else {
+			if (!tso)
+				igb_tx_csum(tx_ring, first);
+			igb_tx_map(tx_ring, first, hdr_len);
+            
+			/* Make sure there is space in the ring for the next send. */
+			igb_maybe_stop_tx(tx_ring, MAX_SKB_FRAGS + 4);
+        }
+    } while(false);
 
-	netStats->outputErrors += 1;
-	return kIOReturnOutputDropped;
+    if(rc != kIOReturnOutputSuccess)
+		netStats->outputErrors += 1;
+	return rc;
 }
 
 void AppleIGB::getPacketBufferConstraints(IOPacketBufferConstraints * constraints) const
@@ -8566,15 +8608,15 @@ IOReturn AppleIGB::getPacketFilters(const OSSymbol * group, UInt32 * filters) co
 	return super::getPacketFilters(group, filters);
 }
 
+UInt32 AppleIGB::getFeatures() const {
+	return kIONetworkFeatureMultiPages | kIONetworkFeatureHardwareVlan;
+}
+    
+    
 
 /**
  * Linux porting helpers
  **/
-
-
-UInt32 AppleIGB::getFeatures() const {
-		return kIONetworkFeatureMultiPages;
-}
 
 
 void AppleIGB::startTxQueue()
@@ -8614,10 +8656,10 @@ void AppleIGB::setCarrier(bool stat)
 		UInt64 speed = 1000 * MBit;
 		switch (priv_adapter.link_speed) {
 			case SPEED_10:
-				10 * MBit;
+				speed = 10 * MBit;
 				break;
 			case SPEED_100:
-				100 * MBit;
+				speed = 100 * MBit;
 				break;
 		}
 		setLinkStatus(preLinkStatus, getCurrentMedium(), speed);
@@ -8628,8 +8670,12 @@ void AppleIGB::setCarrier(bool stat)
 	
 }
 	
-void AppleIGB::receive(mbuf_t skb)
+void AppleIGB::receive(mbuf_t skb, UInt32 vlanTag)
 {
+	if(vlanTag){
+		IOLog("receive: vlan = %d\n",(int)vlanTag);
+		setVlanTag(skb, vlanTag);
+	}
 	netif->inputPacket(skb);
 }
 

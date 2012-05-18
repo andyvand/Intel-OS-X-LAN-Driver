@@ -129,7 +129,7 @@ public:
 	IONetworkStats* getNetStats(){ return netStats; }
 	IOEthernetStats* getEtherStats() { return etherStats; }
 	dma_addr_t mapSingle( mbuf_t );
-	void receive(mbuf_t skb);
+	void receive(mbuf_t skb, UInt32 vlanTag );
 	void receiveError(mbuf_t skb);
 	IOMbufNaturalMemoryCursor * txCursor(){ return txMbufCursor; }
 	IOMbufNaturalMemoryCursor * rxCursor(){ return rxMbufCursor; }
