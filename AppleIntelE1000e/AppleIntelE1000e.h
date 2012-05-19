@@ -101,6 +101,7 @@ public:
     virtual IOReturn setWakeOnMagicPacket(bool active);
     virtual IOReturn getPacketFilters(const OSSymbol * group, UInt32 * filters) const;
 
+    virtual UInt32 getFeatures() const;
 private:
 	IOWorkLoop* workLoop;
 	IOPCIDevice* pciDevice;

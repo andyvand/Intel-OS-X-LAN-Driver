@@ -766,6 +766,35 @@ static int e1000e_write_uc_addr_list(struct net_device *netdev)
 
 #endif /* HAVE_SET_RX_MODE */
 
+/**
+ * e1000e_vlan_strip_enable - helper to disable HW VLAN stripping
+ * @adapter: board private structure to initialize
+ **/
+static void e1000e_vlan_strip_disable(struct e1000_adapter *adapter)
+{
+	struct e1000_hw *hw = &adapter->hw;
+	u32 ctrl;
+	
+	/* disable VLAN tag insert/strip */
+	ctrl = er32(CTRL);
+	ctrl &= ~E1000_CTRL_VME;
+	ew32(CTRL, ctrl);
+}
+
+/**
+ * e1000e_vlan_strip_enable - helper to enable HW VLAN stripping
+ * @adapter: board private structure to initialize
+ **/
+static void e1000e_vlan_strip_enable(struct e1000_adapter *adapter)
+{
+	struct e1000_hw *hw = &adapter->hw;
+	u32 ctrl;
+	
+	/* enable VLAN tag insert/strip */
+	ctrl = er32(CTRL);
+	ctrl |= E1000_CTRL_VME;
+	ew32(CTRL, ctrl);
+}
 
 static void e1000e_update_rdt_wa(struct e1000_ring *rx_ring, unsigned int i)
 {
@@ -1826,7 +1855,13 @@ UInt32 AppleIntelE1000e::outputPacket(mbuf_t skb, void * param)
 		return kIOReturnOutputDropped;
 	}
 
-	if (e1000_tx_csum(skb)) {
+	UInt32 vlan;
+	if (getVlanTagDemand(skb,&vlan)) {
+		tx_flags |= E1000_TX_FLAGS_VLAN;
+		tx_flags |= (vlan << E1000_TX_FLAGS_VLAN_SHIFT);
+	}
+	
+    if (e1000_tx_csum(skb)) {
 		tx_flags |= E1000_TX_FLAGS_CSUM;
 	}
 
@@ -3843,6 +3878,7 @@ void AppleIntelE1000e::e1000_configure()
 	adapter->flags &= ~FLAG_MSI_ENABLED;
 
 	setMulticastList(NULL,0);
+	e1000e_vlan_strip_enable(adapter);
 #ifdef NETIF_F_HW_VLAN_TX
 	e1000_restore_vlan(adapter);
 #endif
@@ -3865,9 +3901,12 @@ void AppleIntelE1000e::e1000_configure()
 void AppleIntelE1000e::e1000_receive_skb(mbuf_t skb, u32 length, u8 status, __le16 vlan)
 {
 #ifndef HAVE_VLAN_RX_REGISTER
-	//u16 tag = le16_to_cpu(vlan);
+	u16 tag = le16_to_cpu(vlan);
+	if(tag){
+		//IOLog("receive: vlan = %d\n",(int)tag);
+		setVlanTag(skb, tag);
+	}
 #endif
-	//skb->protocol = eth_type_trans(skb, netdev);
 	
 #ifdef NETIF_F_HW_VLAN_TX
 	if (adapter->vlgrp && (status & E1000_RXD_STAT_VP))
@@ -4260,4 +4299,7 @@ int AppleIntelE1000e::getIntOption( int def, const char *name )
 	return val;
 }
 
+UInt32 AppleIntelE1000e::getFeatures() const {
+	return kIONetworkFeatureMultiPages | kIONetworkFeatureHardwareVlan;
+}
 

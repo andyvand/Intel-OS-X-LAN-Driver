@@ -8673,7 +8673,7 @@ void AppleIGB::setCarrier(bool stat)
 void AppleIGB::receive(mbuf_t skb, UInt32 vlanTag)
 {
 	if(vlanTag){
-		IOLog("receive: vlan = %d\n",(int)vlanTag);
+		//IOLog("receive: vlan = %d\n",(int)vlanTag);
 		setVlanTag(skb, vlanTag);
 	}
 	netif->inputPacket(skb);
