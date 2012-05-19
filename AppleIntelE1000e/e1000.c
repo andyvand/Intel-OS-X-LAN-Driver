@@ -337,6 +337,22 @@ static struct e1000_info e1000_pch2_info = {
 	.get_variants = e1000_get_variants_ich8lan,
 };
 
+static struct e1000_info e1000_pch_lpt_info = {
+	.mac = e1000_pch_lpt,
+	.flags = FLAG_IS_ICH | FLAG_HAS_WOL
+#ifndef HAVE_NDO_SET_FEATURES
+	| FLAG_RX_CSUM_ENABLED
+#endif
+	| FLAG_HAS_CTRLEXT_ON_LOAD
+	| FLAG_HAS_AMT
+	| FLAG_HAS_FLASH | FLAG_HAS_JUMBO_FRAMES | FLAG_APME_IN_WUC,
+	.flags2 = FLAG2_HAS_PHY_STATS | FLAG2_HAS_EEE,
+	.pba = 26,
+	.max_hw_frame_size = DEFAULT_JUMBO,
+	.init_ops = e1000_init_function_pointers_ich8lan,
+	.get_variants = e1000_get_variants_ich8lan,
+};
+
 static const struct e1000_info *e1000_info_tbl[] = {
 	[board_82571] = &e1000_82571_info,
 	[board_82572] = &e1000_82572_info,
@@ -349,6 +365,7 @@ static const struct e1000_info *e1000_info_tbl[] = {
 	[board_ich10lan] = &e1000_ich10_info,
 	[board_pchlan] = &e1000_pch_info,
 	[board_pch2lan] = &e1000_pch2_info,
+	[board_pch_lpt] = &e1000_pch_lpt_info,
 };
 
 

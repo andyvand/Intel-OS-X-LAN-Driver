@@ -17,13 +17,24 @@
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.11.3a</string>
+	<string>2.0.0</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>1.11.3</string>
+	<string>2.0.0</string>
 	<key>IOKitPersonalities</key>
 	<dict>
+		<key>I217</key>
+		<dict>
+			<key>CFBundleIdentifier</key>
+			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
+			<key>IOClass</key>
+			<string>${PRODUCT_NAME}</string>
+			<key>IOPCIMatch</key>
+			<string>0x153a8086 0x153b8086</string>
+			<key>IOProviderClass</key>
+			<string>IOPCIDevice</string>
+		</dict>
 		<key>80003ES2</key>
 		<dict>
 			<key>CFBundleIdentifier</key>
@@ -68,7 +79,7 @@
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
 		</dict>
-		<key>Intel 82571</key>
+		<key>82571</key>
 		<dict>
 			<key>CFBundleIdentifier</key>
 			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
@@ -79,7 +90,7 @@
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
 		</dict>
-		<key>Intel 82572</key>
+		<key>82572</key>
 		<dict>
 			<key>CFBundleIdentifier</key>
 			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
@@ -92,7 +103,7 @@
 			<key>TX_CSUM</key>
 			<integer>0</integer>
 		</dict>
-		<key>Intel 82573</key>
+		<key>82573</key>
 		<dict>
 			<key>CFBundleIdentifier</key>
 			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
@@ -103,7 +114,7 @@
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
 		</dict>
-		<key>Intel 82574</key>
+		<key>82574</key>
 		<dict>
 			<key>CFBundleIdentifier</key>
 			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
@@ -114,7 +125,7 @@
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
 		</dict>
-		<key>Intel 82578</key>
+		<key>82578</key>
 		<dict>
 			<key>CFBundleIdentifier</key>
 			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
@@ -125,7 +136,7 @@
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
 		</dict>
-		<key>Intel 82579</key>
+		<key>82579</key>
 		<dict>
 			<key>CFBundleIdentifier</key>
 			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
@@ -136,7 +147,7 @@
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
 		</dict>
-		<key>Intel 82583</key>
+		<key>82583</key>
 		<dict>
 			<key>CFBundleIdentifier</key>
 			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>

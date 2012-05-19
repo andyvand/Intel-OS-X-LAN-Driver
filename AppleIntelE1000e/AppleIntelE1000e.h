@@ -132,6 +132,7 @@ private:
 	struct e1000_adapter priv_adapter;
 	struct pci_dev priv_pdev;
 	struct net_device priv_netdev;
+	UInt32 netdev_features;
 	
 private:
 	void interruptOccurred(IOInterruptEventSource * src);
@@ -150,13 +151,11 @@ private:
 	void e1000e_enable_receives();
 	bool e1000_clean_tx_irq();
 	bool e1000_clean_rx_irq();
-	bool e1000_clean_rx_irq_ps();
 	bool e1000_clean_jumbo_rx_irq();
 	void e1000_print_hw_hang();
 
 	void e1000_put_txbuf(e1000_buffer *buffer_info);
 	void e1000_alloc_rx_buffers(int cleaned_count);
-	void e1000_alloc_rx_buffers_ps(int cleaned_count);
 	void e1000_alloc_jumbo_rx_buffers(int cleaned_count);
 	
 	void e1000_configure_rx();

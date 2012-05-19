@@ -68,12 +68,17 @@
 
 #define E1000_FWSM_PROXY_MODE		0x00000008	/* FW is in proxy mode */
 #define E1000_FWSM_MEMC			0x00000010	/* ME Messaging capable */
+#define E1000_FWSM_WLOCK_MAC_MASK	0x0380
+#define E1000_FWSM_WLOCK_MAC_SHIFT	7
 
 /* Shared Receive Address Registers */
 #define E1000_SHRAL(_i)		(0x05438 + ((_i) * 8))
 #define E1000_SHRAH(_i)		(0x0543C + ((_i) * 8))
 #define E1000_SHRAH_AV		0x80000000	/* Addr Valid bit */
 #define E1000_SHRAH_MAV		0x40000000	/* Multicast Addr Valid bit */
+
+#define E1000_SHRAL_PCH_LPT(_i)		(0x05408 + ((_i) * 8))
+#define E1000_SHRAH_PCH_LPT(_i)		(0x0540C + ((_i) * 8))
 
 #define E1000_H2ME		0x05B50	/* Host to ME */
 #define E1000_H2ME_LSECREQ	0x00000001	/* Linksec Request */
@@ -111,6 +116,7 @@
 
 #define E1000_ICH_RAR_ENTRIES	7
 #define E1000_PCH2_RAR_ENTRIES	5	/* RAR[0], SHRA[0-3] */
+#define E1000_PCH_LPT_RAR_ENTRIES	12	/* RAR[0], SHRA[0-10] */
 
 #define PHY_PAGE_SHIFT		5
 #define PHY_REG(page, reg)	(((page) << PHY_PAGE_SHIFT) | \
@@ -144,6 +150,11 @@
 #define BM_SHRAL_UPPER(_i)	(BM_PHY_REG(BM_WUC_PAGE, 45 + ((_i) * 4)))
 #define BM_SHRAH_LOWER(_i)	(BM_PHY_REG(BM_WUC_PAGE, 46 + ((_i) * 4)))
 #define BM_SHRAH_UPPER(_i)	(BM_PHY_REG(BM_WUC_PAGE, 47 + ((_i) * 4)))
+
+#define I217_SHRAL_LOWER(_i)	(BM_PHY_REG(BM_WUC_PAGE, 20 + ((_i) * 4)))
+#define I217_SHRAL_UPPER(_i)	(BM_PHY_REG(BM_WUC_PAGE, 21 + ((_i) * 4)))
+#define I217_SHRAH_LOWER(_i)	(BM_PHY_REG(BM_WUC_PAGE, 22 + ((_i) * 4)))
+#define I217_SHRAH_UPPER(_i)	(BM_PHY_REG(BM_WUC_PAGE, 23 + ((_i) * 4)))
 
 #define BM_RCTL_UPE		0x0001	/* Unicast Promiscuous Mode */
 #define BM_RCTL_MPE		0x0002	/* Multicast Promiscuous Mode */
@@ -187,16 +198,25 @@
 #define E1000_NVM_K1_CONFIG	0x1B	/* NVM K1 Config Word */
 #define E1000_NVM_K1_ENABLE	0x1	/* NVM Enable K1 bit */
 
+/* SMBus Control Phy Register */
+#define CV_SMB_CTRL		PHY_REG(769, 23)
+#define CV_SMB_CTRL_FORCE_SMBUS	0x0001
+
 /* SMBus Address Phy Register */
 #define HV_SMB_ADDR		PHY_REG(768, 26)
 #define HV_SMB_ADDR_MASK	0x007F
 #define HV_SMB_ADDR_PEC_EN	0x0200
 #define HV_SMB_ADDR_VALID	0x0080
+#define HV_SMB_ADDR_FREQ_MASK		0x1100
+#define HV_SMB_ADDR_FREQ_LOW_SHIFT	8
+#define HV_SMB_ADDR_FREQ_HIGH_SHIFT	12
 
 /* Strapping Option Register - RO */
 #define E1000_STRAP			0x0000C
 #define E1000_STRAP_SMBUS_ADDRESS_MASK	0x00FE0000
 #define E1000_STRAP_SMBUS_ADDRESS_SHIFT	17
+#define E1000_STRAP_SMT_FREQ_MASK	0x00003000
+#define E1000_STRAP_SMT_FREQ_SHIFT	12
 
 /* OEM Bits Phy Register */
 #define HV_OEM_BITS		PHY_REG(768, 25)
@@ -218,6 +238,8 @@
 /* PHY Power Management Control */
 #define HV_PM_CTRL		PHY_REG(770, 17)
 #define HV_PM_CTRL_PLL_STOP_IN_K1_GIGA	0x100
+#define I217_MEM_PM_CFG		PHY_REG(772, 27)	/* I217 PHY Mem PM Cfg Reg */
+#define I217_MEM_PM_CFG_TXF_SD	0x0020	/* Tx FIFO Memories Shutdown */
 
 #define SW_FLAG_TIMEOUT		1000	/* SW Semaphore flag timeout in ms */
 
@@ -232,6 +254,19 @@
 #define I82579_LPI_UPDATE_TIMER	0x4805	/* in 40ns units + 40 ns base value */
 #define I82579_MSE_THRESHOLD	0x084F	/* Mean Square Error Threshold */
 #define I82579_MSE_LINK_DOWN	0x2411	/* MSE count before dropping link */
+#define I217_EEE_ADVERTISEMENT	0x8001	/* IEEE MMD Register 7.60 */
+#define I217_EEE_LP_ABILITY	0x8002	/* IEEE MMD Register 7.61 */
+#define I217_EEE_100_SUPPORTED	(1 << 1)	/* 100BaseTx EEE supported */
+
+/* Intel Rapid Start Technology Support */
+#define I217_PROXY_CTRL			PHY_REG(BM_WUC_PAGE, 70)
+#define I217_PROXY_CTRL_AUTO_DISABLE	0x0080
+#define I217_SxCTRL			PHY_REG(BM_PORT_CTRL_PAGE, 28)
+#define I217_SxCTRL_MASK		0x1000
+#define I217_CGFREG			PHY_REG(772, 29)
+#define I217_CGFREG_MASK		0x0002
+#define I217_MEMPWR			PHY_REG(772, 26)
+#define I217_MEMPWR_MASK		0x0010
 
 /*
  * Additional interrupts need to be handled for ICH family:

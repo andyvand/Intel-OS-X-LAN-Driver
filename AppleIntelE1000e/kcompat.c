@@ -1046,10 +1046,6 @@ void _kc_skb_add_rx_frag(struct sk_buff *skb, int i, struct page *page,
 }
 #endif /* < 2.6.28 */
 
-/*****************************************************************************/
-#if ( LINUX_VERSION_CODE < KERNEL_VERSION(2,6,30) )
-#endif /* < 2.6.30 */
-
 #if ( LINUX_VERSION_CODE < KERNEL_VERSION(2,6,35) )
 #endif /* < 2.6.35 */
 
@@ -1073,6 +1069,10 @@ int _kc_ethtool_op_set_flags(struct net_device *dev, u32 data, u32 supported)
 	return 0;
 }
 #endif /* < 2.6.36 */
+
+/*****************************************************************************/
+#if ( LINUX_VERSION_CODE < KERNEL_VERSION(2,6,38) )
+#endif /* < 2.6.38 */
 
 /******************************************************************************/
 #if ( LINUX_VERSION_CODE < KERNEL_VERSION(2,6,39) )

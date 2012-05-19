@@ -29,6 +29,7 @@ extern "C" {
 #define E1000_TX_FLAGS_VLAN		0x00000002
 #define E1000_TX_FLAGS_TSO		0x00000004
 #define E1000_TX_FLAGS_IPV4		0x00000008
+#define E1000_TX_FLAGS_NO_FCS		0x00000010
 #define E1000_TX_FLAGS_VLAN_MASK	0xffff0000
 #define E1000_TX_FLAGS_VLAN_SHIFT	16
 
@@ -62,6 +63,21 @@ static void release_mutex(){
 		swflag_mutex = NULL;
 	}
 }
+
+static uint32_t jiffies()
+{
+#if defined(MAC_OS_X_VERSION_10_6)
+	clock_sec_t seconds;
+	clock_usec_t microsecs;
+#else
+	uint32_t seconds;
+	uint32_t microsecs;
+#endif
+	clock_get_system_microtime(&seconds, &microsecs);
+	return  seconds * 100 + microsecs / 10000; // 10 ms
+}
+#define	HZ	100
+#define	time_after(a,b)	((a)>(b))
 
 /**
  * e1000_desc_unused - calculate if we have unused descriptors
@@ -606,6 +622,7 @@ void e1000e_reset(struct e1000_adapter *adapter)
 			fc->refresh_time = 0x1000;
 			break;
 		case e1000_pch2lan:
+		case e1000_pch_lpt:
 			fc->high_water = 0x05C20;
 			fc->low_water = 0x05048;
 			fc->pause_time = 0x0650;
@@ -980,12 +997,11 @@ static int e1000_tx_map(struct e1000_adapter *adapter, mbuf_t skb, unsigned int 
 	for(f = 0; f < nr_frags; f++) {
 		buffer_info = &tx_ring->buffer_info[i];
 		buffer_info->length = tx_segments[f].length;
+		buffer_info->time_stamp = jiffies();
+		buffer_info->next_to_watch = i;
 		bytecount += tx_segments[f].length;
-		// buffer_info->time_stamp = jiffies;
 		buffer_info->dma = tx_segments[f].location;
 		buffer_info->mapped_as_page = false;
-		
-		buffer_info->next_to_watch = i;
 
 		count++;
 		
@@ -1044,6 +1060,9 @@ static void e1000_tx_queue(struct e1000_ring *tx_ring, int tx_flags, int count)
 		txd_upper |= (tx_flags & E1000_TX_FLAGS_VLAN_MASK);
 	}
 	
+	if (unlikely(tx_flags & E1000_TX_FLAGS_NO_FCS))
+		txd_lower &= ~(E1000_TXD_CMD_IFCS);
+	
 	i = tx_ring->next_to_use;
 	
 	do {
@@ -1060,6 +1079,10 @@ static void e1000_tx_queue(struct e1000_ring *tx_ring, int tx_flags, int count)
 	} while (--count > 0);
 	
 	tx_desc->lower.data |= cpu_to_le32(adapter->txd_cmd);
+	
+	/* txd_cmd re-enables FCS, so we'll re-disable it here as desired. */
+	if (unlikely(tx_flags & E1000_TX_FLAGS_NO_FCS))
+		tx_desc->lower.data &= ~(cpu_to_le32(E1000_TXD_CMD_IFCS));
 	
 	/*
 	 * Force memory writes to complete before letting h/w
@@ -1257,7 +1280,7 @@ bool AppleIntelE1000e::init(OSDictionary *properties)
 	rxMbufCursor = NULL;
 	txMbufCursor = NULL;
 	
-	
+	netdev_features = 0;
 	// for ich8lan
 	init_mutex();
 
@@ -1476,14 +1499,8 @@ bool AppleIntelE1000e::start(IOService* provider)
 		// Initialize link parameters. User can change them with ethtool
 		adapter->hw.mac.autoneg = 1;
 		adapter->fc_autoneg = true;
-		if (adapter->hw.mac.type == e1000_pchlan) {
-			/* Workaround h/w hang when Tx flow control enabled */
-			adapter->hw.fc.requested_mode = e1000_fc_rx_pause;
-			adapter->hw.fc.current_mode = e1000_fc_rx_pause;
-		} else {
-			adapter->hw.fc.requested_mode = e1000_fc_default;
-			adapter->hw.fc.current_mode = e1000_fc_default;
-		}
+		adapter->hw.fc.requested_mode = e1000_fc_default;
+		adapter->hw.fc.current_mode = e1000_fc_default;
 		adapter->hw.phy.autoneg_advertised = 0x2f;
 		
 		/* ring size defaults */
@@ -2327,8 +2344,8 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	u32 rctl, rfctl;
 	u32 pages = 0;
 
-	/* Workaround Si errata on 82579 - configure jumbo frame flow */
-	if (hw->mac.type == e1000_pch2lan) {
+	/* Workaround Si errata on PCHx - configure jumbo frame flow */
+	if (hw->mac.type >= e1000_pch2lan) {
 		s32 ret_val;
         
 		if (adapter->netdev->mtu > ETH_DATA_LEN)
@@ -2410,7 +2427,8 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	/* Enable Extended Status in all Receive Descriptors */
 	rfctl = er32(RFCTL);
 	rfctl |= E1000_RFCTL_EXTEN;
-	
+	ew32(RFCTL, rfctl);
+
 	/*
 	 * 82571 and greater support packet-split where the protocol
 	 * header is placed in skb->data and the packet data is
@@ -2435,13 +2453,6 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	if (adapter->rx_ps_pages) {
 		u32 psrctl = 0;
 
-		/*
-		 * disable packet split support for IPv6 extension headers,
-		 * because some malformed IPv6 headers can hang the Rx
-		 */
-		rfctl |= (E1000_RFCTL_IPV6_EX_DIS |
-				  E1000_RFCTL_NEW_IPV6_EXT_DIS);
-
 		/* Enable Packet split descriptors */
 		rctl |= E1000_RCTL_DTYP_PS;
 		
@@ -2460,7 +2471,22 @@ void AppleIntelE1000e::e1000_setup_rctl()
 		ew32(PSRCTL, psrctl);
 	}
 	
-	ew32(RFCTL, rfctl);
+	/* This is useful for sniffing bad packets. */
+	if (netdev_features & NETIF_F_RXALL) {
+		/* UPE and MPE will be handled by normal PROMISC logic
+		 * in e1000e_set_rx_mode */
+		rctl |= (E1000_RCTL_SBP |	/* Receive bad packets */
+				 E1000_RCTL_BAM |	/* RX All Bcast Pkts */
+				 E1000_RCTL_PMCF);	/* RX All MAC Ctrl Pkts */
+		
+		rctl &= ~(E1000_RCTL_VFE |	/* Disable VLAN filter */
+				  E1000_RCTL_DPF |	/* Allow filtered pause */
+				  E1000_RCTL_CFIEN);	/* Dis VLAN CFIEN Filter */
+		/* Do not mess with E1000_CTRL_VME, it affects transmit as well,
+		 * and that breaks VLANs.
+		 */
+	}
+	
 	ew32(RCTL, rctl);
 
 	/* just started the receive unit, no need to restart */
@@ -2680,106 +2706,6 @@ void AppleIntelE1000e::e1000_alloc_rx_buffers(int cleaned_count)
 
 
 /**
- * e1000_alloc_rx_buffers_ps - Replace used receive buffers; packet split
- * @adapter: address of board private structure
- **/
-void AppleIntelE1000e::e1000_alloc_rx_buffers_ps( int cleaned_count )
-{
-	e1000_adapter *adapter = &priv_adapter;
-	union e1000_rx_desc_packet_split *rx_desc;
-	struct e1000_ring *rx_ring = adapter->rx_ring;
-	struct e1000_buffer *buffer_info;
-	struct e1000_ps_page *ps_page;
-	mbuf_t skb;
-	unsigned int i, j;
-	
-	i = rx_ring->next_to_use;
-	buffer_info = &rx_ring->buffer_info[i];
-	
-	while (cleaned_count--) {
-		rx_desc = E1000_RX_DESC_PS(*rx_ring, i);
-		
-		for (j = 0; j < PS_PAGE_BUFFERS; j++) {
-			ps_page = &buffer_info->ps_pages[j];
-			if (j >= adapter->rx_ps_pages) {
-				/* all unused desc entries get hw null ptr */
-				rx_desc->read.buffer_addr[j + 1] = ~cpu_to_le64(0);
-				continue;
-			}
-			if (!ps_page->page) {
-				ps_page->pool = IOBufferMemoryDescriptor::inTaskWithOptions( kernel_task, kIODirectionInOut | kIOMemoryPhysicallyContiguous,
-																		 PAGE_SIZE, PAGE_SIZE );
-				if (!ps_page->pool) {
-					adapter->alloc_rx_buff_failed++;
-					goto no_buffers;
-				}
-				ps_page->pool->prepare();
-				ps_page->page = (page*)ps_page->pool->getBytesNoCopy();
-				ps_page->dma = ps_page->pool->getPhysicalAddress();
-			}
-			/*
-			 * Refresh the desc even if buffer_addrs
-			 * didn't change because each write-back
-			 * erases this info.
-			 */
-			rx_desc->read.buffer_addr[j + 1] = cpu_to_le64(ps_page->dma);
-		}
-		
-		skb = buffer_info->skb;
-		if (skb) {
-			mbuf_pkthdr_setlen(skb, 0);
-			goto map_skb;
-		}
-		
-		skb = allocatePacket(adapter->rx_ps_bsize0);
-		
-		if (!skb) {
-			adapter->alloc_rx_buff_failed++;
-			break;
-		}
-		
-		buffer_info->skb = skb;
-		
-	map_skb:
-		{
-			IOPhysicalSegment segment;
-			if( txMbufCursor->getPhysicalSegmentsWithCoalesce(skb, &segment, 1) == 0 ){
-				IOLog("getPhysicalSegments failed in alloc_rx_buffer_ps.\n");
-				adapter->rx_dma_failed++;
-				freePacket(skb);
-				buffer_info->skb = NULL;
-				break;
-			}
-			buffer_info->dma = segment.location;
-		}
-		
-		rx_desc->read.buffer_addr[0] = cpu_to_le64(buffer_info->dma);
-
-		if (unlikely(!(i & (E1000_RX_BUFFER_WRITE - 1)))) {
-			/*
-			 * Force memory writes to complete before letting h/w
-			 * know there are new descriptors to fetch.  (Only
-			 * applicable for weak-ordered memory model archs,
-			 * such as IA-64).
-			 */
-			wmb();
-			if (adapter->flags2 & FLAG2_PCIM2PCI_ARBITER_WA)
-				e1000e_update_rdt_wa(rx_ring, i << 1);
-			else
-				writel(i<<1, rx_ring->tail);
-		}
-		
-		i++;
-		if (i == rx_ring->count)
-			i = 0;
-		buffer_info = &rx_ring->buffer_info[i];
-	}
-	
-no_buffers:
-	rx_ring->next_to_use = i;
-}
-
-/**
  * e1000_alloc_jumbo_rx_buffers - Replace used jumbo receive buffers
  * @adapter: address of board private structure
  * @cleaned_count: number of buffers to allocate this pass
@@ -2903,13 +2829,22 @@ bool AppleIntelE1000e::e1000_clean_rx_irq()
 			buffer_info->skb = skb;
 			if (staterr & E1000_RXD_STAT_EOP)
 				adapter->flags2 &= ~FLAG2_IS_DISCARDING;
-		} else if (staterr & E1000_RXDEXT_ERR_FRAME_ERR_MASK) {
+		} else if (unlikely((staterr & E1000_RXDEXT_ERR_FRAME_ERR_MASK) &&
+						 !(netdev_features & NETIF_F_RXALL))) {
 			/* recycle */
 			buffer_info->skb = skb;
 		} else if(length > 4) {
 			/* adjust length to remove Ethernet CRC */
-			if (!(adapter->flags2 & FLAG2_CRC_STRIPPING))
-				length -= 4;
+			if (!(adapter->flags2 & FLAG2_CRC_STRIPPING)) {
+				/* If configured to store CRC, don't subtract FCS,
+				 * but keep the FCS bytes out of the total_rx_bytes
+				 * counter
+				 */
+				if (netdev_features & NETIF_F_RXFCS)
+					total_rx_bytes -= 4;
+				else
+					length -= 4;
+			}
 			
 			total_rx_bytes += length;
 			total_rx_packets++;
@@ -2961,183 +2896,6 @@ next_desc:
 	return cleaned;
 }
 
-bool AppleIntelE1000e::e1000_clean_rx_irq_ps()
-{
-	struct e1000_adapter *adapter = &priv_adapter;
-	//struct e1000_hw *hw = &adapter->hw;
-	union e1000_rx_desc_packet_split *rx_desc, *next_rxd;
-	struct e1000_ring *rx_ring = adapter->rx_ring;
-	struct e1000_buffer *buffer_info, *next_buffer;
-	struct e1000_ps_page *ps_page;
-	mbuf_t skb;
-	unsigned int i, j;
-	u32 length, staterr;
-	int cleaned_count = 0;
-	bool cleaned = false;
-	unsigned int total_rx_bytes = 0, total_rx_packets = 0;
-	
-	i = rx_ring->next_to_clean;
-	rx_desc = E1000_RX_DESC_PS(*rx_ring, i);
-	staterr = le32_to_cpu(rx_desc->wb.middle.status_error);
-	buffer_info = &rx_ring->buffer_info[i];
-	
-	while (staterr & E1000_RXD_STAT_DD) {
-		skb = buffer_info->skb;
-		
-		/* in the packet split case this is header only */
-		prefetch(skb->data - NET_IP_ALIGN);
-
-		i++;
-		if (i == rx_ring->count)
-			i = 0;
-		next_rxd = E1000_RX_DESC_PS(*rx_ring, i);
-		prefetch(next_rxd);
-		
-		next_buffer = &rx_ring->buffer_info[i];
-		
-		cleaned = true;
-		cleaned_count++;
-
-		//buffer_info->dma = 0;
-		
-		/* see !EOP comment in other rx routine */
-		if (!(staterr & E1000_RXD_STAT_EOP))
-			adapter->flags2 |= FLAG2_IS_DISCARDING;
-		
-		if (adapter->flags2 & FLAG2_IS_DISCARDING) {
-			IOLog("Packet Split buffers didn't pick up the full "
-			      "packet\n");
-			freePacket(skb);
-			if (staterr & E1000_RXD_STAT_EOP)
-				adapter->flags2 &= ~FLAG2_IS_DISCARDING;
-			goto next_desc;
-		}
-		
-		if (staterr & E1000_RXDEXT_ERR_FRAME_ERR_MASK) {
-			freePacket(skb);
-			goto next_desc;
-		}
-		
-		length = le16_to_cpu(rx_desc->wb.middle.length0);
-		
-		if (!length) {
-			e_dbg("Last part of the packet spanning multiple "
-			      "descriptors\n");
-			freePacket(skb);
-			goto next_desc;
-		}
-		
-		/* Good Receive */
-		//mbuf_pkthdr_setlen(skb, length);
-		//mbuf_setlen(skb, length);
-
-#ifdef CONFIG_E1000E_NAPI
-		{
-			/*
-			 * this looks ugly, but it seems compiler issues make it
-			 * more efficient than reusing j
-			 */
-			int l1 = le16_to_cpu(rx_desc->wb.upper.length[0]);
-			
-			/*
-			 * page alloc/put takes too long and effects small packet
-			 * throughput, so unsplit small packets and save the alloc/put
-			 * only valid in softirq (napi) context to call kmap_*
-			 */
-			if (l1 && (l1 <= copybreak) &&
-				((length + l1) <= adapter->rx_ps_bsize0)) {
-				u8 *vaddr;
-				
-				ps_page = &buffer_info->ps_pages[0];
-				
-				/*
-				 * there is no documentation about how to call
-				 * kmap_atomic, so we can't hold the mapping
-				 * very long
-				 */
-				pci_dma_sync_single_for_cpu(pdev, ps_page->dma,
-											PAGE_SIZE, PCI_DMA_FROMDEVICE);
-				vaddr = kmap_atomic(ps_page->page, KM_SKB_DATA_SOFTIRQ);
-				memcpy(skb_tail_pointer(skb), vaddr, l1);
-				kunmap_atomic(vaddr, KM_SKB_DATA_SOFTIRQ);
-				pci_dma_sync_single_for_device(pdev, ps_page->dma,
-											   PAGE_SIZE, PCI_DMA_FROMDEVICE);
-				
-				/* remove the CRC */
-				if (!(adapter->flags2 & FLAG2_CRC_STRIPPING))
-					l1 -= 4;
-				
-				skb_put(skb, l1);
-				goto copydone;
-			} /* if */
-		}
-#endif
-		
-		for (j = 0; j < PS_PAGE_BUFFERS; j++) {
-			u32 pagelen = le16_to_cpu(rx_desc->wb.upper.length[j]);
-			if (!pagelen)
-				break;
-
-			ps_page = &buffer_info->ps_pages[j];
-			mbuf_copyback(skb, length, pagelen, ps_page->page, MBUF_WAITOK);
-
-			length += pagelen;
-		}
-		
-		/* strip the ethernet crc, problem is we're using pages now so
-		 * this whole operation can get a little cpu intensive
-		 */
-		if (!(adapter->flags2 & FLAG2_CRC_STRIPPING))
-			length -= 4;
-		
-#ifdef CONFIG_E1000E_NAPI
-	copydone:
-#endif
-		total_rx_bytes += length;
-		total_rx_packets++;
-		
-		e1000_rx_checksum(skb, staterr);
-		
-		if (rx_desc->wb.upper.header_status &
-			cpu_to_le16(E1000_RXDPS_HDRSTAT_HDRSP))
-			adapter->rx_hdr_split++;
-		
-		e1000_receive_skb(skb, length, staterr, rx_desc->wb.middle.vlan);
-		
-	next_desc:
-		rx_desc->wb.middle.status_error &= cpu_to_le32(~0xFF);
-		buffer_info->skb = NULL;
-		
-		/* return some buffers to hardware, one at a time is too slow */
-		if (cleaned_count >= E1000_RX_BUFFER_WRITE) {
-			this->alloc_rx_buf(cleaned_count);
-			cleaned_count = 0;
-		}
-		
-		/* use prefetched values */
-		rx_desc = next_rxd;
-		buffer_info = next_buffer;
-		
-		staterr = le32_to_cpu(rx_desc->wb.middle.status_error);
-	}
-	rx_ring->next_to_clean = i;
-	
-	cleaned_count = e1000_desc_unused(rx_ring);
-	if (cleaned_count)
-		this->alloc_rx_buf(cleaned_count);
-	
-	adapter->total_rx_bytes += total_rx_bytes;
-	adapter->total_rx_packets += total_rx_packets;
-#ifdef HAVE_NDO_GET_STATS64
-#elif HAVE_NETDEV_STATS_IN_NETDEV
-	netdev->stats.rx_bytes += total_rx_bytes;
-	netdev->stats.rx_packets += total_rx_packets;
-#else
-	adapter->net_stats.rx_bytes += total_rx_bytes;
-	adapter->net_stats.rx_packets += total_rx_packets;
-#endif
-	return cleaned;
-}
 
 bool AppleIntelE1000e::e1000_clean_jumbo_rx_irq()
 {
@@ -3286,7 +3044,6 @@ void AppleIntelE1000e::e1000_print_hw_hang()
 	adapter->tx_hang_recheck = false;
 //	netif_stop_queue(netdev);
 
-#if	0
 	e1e_rphy(hw, PHY_STATUS, &phy_status);
 	e1e_rphy(hw, PHY_1000T_STATUS, &phy_1000t_status);
 	e1e_rphy(hw, PHY_EXT_STATUS, &phy_ext_status);
@@ -3317,7 +3074,7 @@ void AppleIntelE1000e::e1000_print_hw_hang()
 	      eop_desc->upper.fields.status,
 	      er32(STATUS),
 	      phy_status, phy_1000t_status, phy_ext_status, pci_status);
-	
+#if	0
 	/* Suggest workaround for known h/w issue */
 	if ((hw->mac.type == e1000_pchlan) && (er32(CTRL) & E1000_CTRL_TFCE))
 		e_err("Try turning off Tx pause (flow control) via ethtool\n");
@@ -3328,7 +3085,8 @@ void AppleIntelE1000e::e1000_print_hw_hang()
  * e1000_clean_tx_irq - Reclaim resources after transmit completes
  * @adapter: board private structure
  *
- * the return value indicates if there is more work to do (later)
+ * the return value indicates whether actual cleaning was done, there
+ * is no guarantee that everything was cleaned
  **/
 bool AppleIntelE1000e::e1000_clean_tx_irq()
 {
@@ -3338,15 +3096,19 @@ bool AppleIntelE1000e::e1000_clean_tx_irq()
 	struct e1000_tx_desc *tx_desc, *eop_desc;
 	struct e1000_buffer *buffer_info;
 	unsigned int i, eop;
-	bool cleaned = false, retval = true;
+	unsigned int count = 0;
 	unsigned int total_tx_bytes = 0, total_tx_packets = 0;
+	unsigned int bytes_compl = 0, pkts_compl = 0;
 	
 	i = tx_ring->next_to_clean;
 	eop = tx_ring->buffer_info[i].next_to_watch;
 	eop_desc = E1000_TX_DESC(*tx_ring, eop);
 	
-	while (eop_desc->upper.data & cpu_to_le32(E1000_TXD_STAT_DD)) {
-		for (cleaned = false; !cleaned; ) {
+	while ((eop_desc->upper.data & cpu_to_le32(E1000_TXD_STAT_DD)) &&
+	       (count < tx_ring->count)) {
+		bool cleaned = false;
+		//rmb();
+		for (; !cleaned; count++) {
 			tx_desc = E1000_TX_DESC(*tx_ring, i);
 			buffer_info = &tx_ring->buffer_info[i];
 			cleaned = (i == eop);
@@ -3354,7 +3116,10 @@ bool AppleIntelE1000e::e1000_clean_tx_irq()
 			if (cleaned) {
 				total_tx_packets++;
 				total_tx_bytes += buffer_info->bytecount;
-
+				if (buffer_info->skb) {
+					//bytes_compl += buffer_info->skb->len;
+					pkts_compl++;
+				}
 				netStats->outputPackets++;
 			}
 				
@@ -3376,7 +3141,7 @@ bool AppleIntelE1000e::e1000_clean_tx_irq()
 
 #if	0
 #define TX_WAKE_THRESHOLD 32
-	if (cleaned && netif_carrier_ok(netdev) &&
+	if (count && netif_carrier_ok(netdev) &&
 	    e1000_desc_unused(tx_ring) >= TX_WAKE_THRESHOLD) {
 		/* Make sure that anybody stopping the queue after this
 		 * sees the new next_to_clean.
@@ -3397,7 +3162,9 @@ bool AppleIntelE1000e::e1000_clean_tx_irq()
 		 * check with the clearing of time_stamp and movement of i
 		 */
 		adapter->detect_tx_hung = false;
-		if (tx_ring->buffer_info[eop].dma &&
+		if (tx_ring->buffer_info[i].time_stamp &&
+		    time_after(jiffies(), tx_ring->buffer_info[i].time_stamp
+					   + (adapter->tx_timeout_factor * HZ)) &&
 			!(er32(STATUS) & E1000_STATUS_TXOFF))
 			e1000_print_hw_hang();
 		else
@@ -3412,8 +3179,7 @@ bool AppleIntelE1000e::e1000_clean_tx_irq()
 	adapter->net_stats.tx_bytes += total_tx_bytes;
 	adapter->net_stats.tx_packets += total_tx_packets;
 #endif
-	
-	return retval;
+	return count < tx_ring->count;
 }
 
 
@@ -3454,9 +3220,7 @@ bool AppleIntelE1000e::e1000e_has_link()
 		break;
 	case e1000_media_type_fiber:
 		ret_val = hw->mac.ops.check_for_link(hw);
-/* *INDENT-OFF* */
 		link_active = !!(er32(STATUS) & E1000_STATUS_LU);
-/* *INDENT-ON* */
 		break;
 	case e1000_media_type_internal_serdes:
 		ret_val = hw->mac.ops.check_for_link(hw);
@@ -3482,6 +3246,7 @@ void AppleIntelE1000e::e1000_put_txbuf(e1000_buffer *buffer_info)
 		freePacket(buffer_info->skb);
 		buffer_info->skb = NULL;
 	}
+	buffer_info->time_stamp = 0;
 }
 
 
@@ -3502,6 +3267,9 @@ void AppleIntelE1000e::e1000_clean_tx_ring()
 		e1000_put_txbuf(buffer_info);
 	}
 	
+#ifdef CONFIG_BQL
+	netdev_reset_queue(adapter->netdev);
+#endif
 	size = sizeof(struct e1000_buffer) * tx_ring->count;
 	bzero(tx_ring->buffer_info, size);
 	
@@ -3684,14 +3452,24 @@ void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 		    (adapter->link_duplex == HALF_DUPLEX)) {
 			UInt16 autoneg_exp;
 			
-			hw->phy.ops.read_reg(hw, PHY_AUTONEG_EXP,
-								 &autoneg_exp);
+			e1e_rphy(hw, PHY_AUTONEG_EXP, &autoneg_exp);
 			
 			if (!(autoneg_exp & NWAY_ER_LP_NWAY_CAPS))
 				e_info("Autonegotiated half duplex but"
 				       " link partner cannot autoneg. "
 				       " Try forcing full duplex if "
 				       "link gets many collisions.");
+		}
+
+		/* adjust timeout factor according to speed/duplex */
+		adapter->tx_timeout_factor = 1;
+		switch (adapter->link_speed) {
+			case SPEED_10:
+				adapter->tx_timeout_factor = 16;
+				break;
+			case SPEED_100:
+				adapter->tx_timeout_factor = 10;
+				break;
 		}
 		
 		/*
@@ -4072,12 +3850,11 @@ void AppleIntelE1000e::e1000_change_mtu(UInt32 new_mtu){
 	e1000_adapter *adapter = &priv_adapter;
 
 
-	/* Jumbo frame workaround on 82579 requires CRC be stripped */
-	if ((adapter->hw.mac.type == e1000_pch2lan) &&
+	/* Jumbo frame workaround on 82579 and newer requires CRC be stripped */
+	if ((adapter->hw.mac.type >= e1000_pch2lan) &&
 	    !(adapter->flags2 & FLAG2_CRC_STRIPPING) &&
 	    (new_mtu > ETH_DATA_LEN)) {
-		e_err("Jumbo Frames not supported on 82579 when CRC "
-		      "stripping is disabled.\n");
+		e_err("Jumbo Frames not supported on this device when CRC stripping is disabled.\n");
 		return;
 	}
 
@@ -4176,6 +3953,11 @@ int AppleIntelE1000e::__e1000_shutdown(bool *enable_wake, bool runtime)
 	netif_device_detach(netdev);
 	
 	if (netif_running(netdev)) {
+		int count = E1000_CHECK_RESET_COUNT;
+		
+		while (test_bit(__E1000_RESETTING, &adapter->state) && count--)
+			usleep_range(10000, 20000);
+		
 		WARN_ON(test_bit(__E1000_RESETTING, &adapter->state));
 		e1000e_down(adapter);
 		e1000_free_irq(adapter);
@@ -4242,9 +4024,7 @@ int AppleIntelE1000e::__e1000_shutdown(bool *enable_wake, bool runtime)
 		ew32(WUFC, 0);
 	}
 	
-/* *INDENT-OFF* */
 	*enable_wake = !!wufc;
-/* *INDENT-ON* */
 	
 	/* make sure adapter isn't asleep if manageability is enabled */
 	if ((adapter->flags & FLAG_MNG_PT_ENABLED) ||
@@ -4269,9 +4049,6 @@ int AppleIntelE1000e::__e1000_shutdown(bool *enable_wake, bool runtime)
 
 bool AppleIntelE1000e::clean_rx_irq()
 {
-	if(priv_adapter.rx_ps_pages)
-		return e1000_clean_rx_irq_ps();
-
 	if(priv_adapter.rx_buffer_len > PAGE_SIZE)
 		return e1000_clean_jumbo_rx_irq();
 
@@ -4280,9 +4057,7 @@ bool AppleIntelE1000e::clean_rx_irq()
 
 void AppleIntelE1000e::alloc_rx_buf(int cleaned_count)
 {
-	if(priv_adapter.rx_ps_pages)
-		e1000_alloc_rx_buffers_ps(cleaned_count);
-	else if(priv_adapter.rx_buffer_len > PAGE_SIZE)
+	if(priv_adapter.rx_buffer_len > PAGE_SIZE)
 		e1000_alloc_jumbo_rx_buffers(cleaned_count);
 	else
 		e1000_alloc_rx_buffers(cleaned_count);

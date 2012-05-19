@@ -139,6 +139,7 @@
 #define E1000_CTRL_EXT_GPI1_EN		0x00000002	/* Maps SDP5 to GPI1 */
 #define E1000_CTRL_EXT_PHYINT_EN	E1000_CTRL_EXT_GPI1_EN
 #define E1000_CTRL_EXT_GPI2_EN		0x00000004	/* Maps SDP6 to GPI2 */
+#define E1000_CTRL_EXT_LPCD		0x00000004	/* LCD Power Cycle Done */
 #define E1000_CTRL_EXT_GPI3_EN		0x00000008	/* Maps SDP7 to GPI3 */
 /* Reserved (bits 4,5) in >= 82575 */
 #define E1000_CTRL_EXT_SDP4_DATA	0x00000010	/* SW Definable Pin 4 data */
@@ -151,6 +152,7 @@
 #define E1000_CTRL_EXT_SDP5_DIR	0x00000200	/* Direction of SDP5 0=in 1=out */
 #define E1000_CTRL_EXT_SDP6_DIR	0x00000400	/* Direction of SDP6 0=in 1=out */
 #define E1000_CTRL_EXT_SDP3_DIR	0x00000800	/* Direction of SDP3 0=in 1=out */
+#define E1000_CTRL_EXT_FORCE_SMBUS	0x00000800	/* Force SMBus mode */
 #define E1000_CTRL_EXT_ASDCHK	0x00001000	/* Initiate an ASD sequence */
 #define E1000_CTRL_EXT_EE_RST	0x00002000	/* Reinitialize from EEPROM */
 #define E1000_CTRL_EXT_IPS	0x00004000	/* Invert Power State */
@@ -1340,6 +1342,7 @@
 #define I82577_E_PHY_ID		0x01540050
 #define I82578_E_PHY_ID		0x004DD040
 #define I82579_E_PHY_ID		0x01540090
+#define I217_E_PHY_ID		0x015400A0
 #define M88_VENDOR		0x0141
 
 /* M88E1000 Specific Registers */

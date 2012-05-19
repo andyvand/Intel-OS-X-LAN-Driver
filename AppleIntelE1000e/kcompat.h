@@ -155,6 +155,12 @@ struct work_struct {
 #define VLAN_N_VID              4096
 
 #define NET_IP_ALIGN	2
+#ifndef NETIF_F_RXFCS
+#define NETIF_F_RXFCS	0
+#endif /* NETIF_F_RXFCS */
+#ifndef NETIF_F_RXALL
+#define NETIF_F_RXALL	0
+#endif /* NETIF_F_RXALL */
 
 #define	PCI_EXP_DEVCTL	8
 #define	PCI_EXP_DEVCTL_CERE	0x0001	/* Correctable Error Reporting En. */

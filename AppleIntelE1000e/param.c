@@ -184,8 +184,8 @@ E1000_PARAM(KumeranLockLoss, "Enable Kumeran lock loss workaround");
  *
  * Default Value: 1 (enabled)
  */
-E1000_PARAM(CrcStripping, "Enable CRC Stripping, disable if your BMC needs "
-	    "the CRC");
+E1000_PARAM(CrcStripping,
+			"Enable CRC Stripping, disable if your BMC needs the CRC");
 
 /*
  * Enable/disable EEE (a.k.a. IEEE802.3az)
@@ -411,8 +411,8 @@ void __devinit e1000e_check_options(struct e1000_adapter *adapter)
 				adapter->itr = 20000;
 				break;
 			case 4:
-				e_info("%s set to simplified (2000-8000 ints) "
-				       "mode\n", opt.name);
+					e_info("%s set to simplified (2000-8000 ints) mode\n",
+						   opt.name);
 				adapter->itr_setting = 4;
 				break;
 			default:
@@ -516,10 +516,13 @@ void __devinit e1000e_check_options(struct e1000_adapter *adapter)
 		if (num_CrcStripping > bd) {
 			unsigned int crc_stripping = CrcStripping[bd];
 			e1000_validate_option(&crc_stripping, &opt, adapter);
-			if (crc_stripping == OPTION_ENABLED)
+			if (crc_stripping == OPTION_ENABLED) {
 				adapter->flags2 |= FLAG2_CRC_STRIPPING;
+				adapter->flags2 |= FLAG2_DFLT_CRC_STRIPPING;
+			}
 		} else {
 			adapter->flags2 |= FLAG2_CRC_STRIPPING;
+			adapter->flags2 |= FLAG2_DFLT_CRC_STRIPPING;
 		}
 	}
 	{			/* Kumeran Lock Loss Workaround */
