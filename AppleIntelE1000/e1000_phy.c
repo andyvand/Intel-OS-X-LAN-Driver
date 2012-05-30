@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2008 Intel Corporation.
+  Copyright(c) 1999 - 2010 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -29,21 +29,21 @@
 #include "e1000_api.h"
 
 /* Cable length tables */
-static const u16 e1000_m88_cable_length_table[] =
-	{ 0, 50, 80, 110, 140, 140, E1000_CABLE_LENGTH_UNDEFINED };
+static const u16 e1000_m88_cable_length_table[] = {
+	0, 50, 80, 110, 140, 140, E1000_CABLE_LENGTH_UNDEFINED };
 #define M88E1000_CABLE_LENGTH_TABLE_SIZE \
                 (sizeof(e1000_m88_cable_length_table) / \
                  sizeof(e1000_m88_cable_length_table[0]))
 
-static const u16 e1000_igp_2_cable_length_table[] =
-    { 0, 0, 0, 0, 0, 0, 0, 0, 3, 5, 8, 11, 13, 16, 18, 21,
-      0, 0, 0, 3, 6, 10, 13, 16, 19, 23, 26, 29, 32, 35, 38, 41,
-      6, 10, 14, 18, 22, 26, 30, 33, 37, 41, 44, 48, 51, 54, 58, 61,
-      21, 26, 31, 35, 40, 44, 49, 53, 57, 61, 65, 68, 72, 75, 79, 82,
-      40, 45, 51, 56, 61, 66, 70, 75, 79, 83, 87, 91, 94, 98, 101, 104,
-      60, 66, 72, 77, 82, 87, 92, 96, 100, 104, 108, 111, 114, 117, 119, 121,
-      83, 89, 95, 100, 105, 109, 113, 116, 119, 122, 124,
-      104, 109, 114, 118, 121, 124};
+static const u16 e1000_igp_2_cable_length_table[] = {
+	0, 0, 0, 0, 0, 0, 0, 0, 3, 5, 8, 11, 13, 16, 18, 21, 0, 0, 0, 3,
+	6, 10, 13, 16, 19, 23, 26, 29, 32, 35, 38, 41, 6, 10, 14, 18, 22,
+	26, 30, 33, 37, 41, 44, 48, 51, 54, 58, 61, 21, 26, 31, 35, 40,
+	44, 49, 53, 57, 61, 65, 68, 72, 75, 79, 82, 40, 45, 51, 56, 61,
+	66, 70, 75, 79, 83, 87, 91, 94, 98, 101, 104, 60, 66, 72, 77, 82,
+	87, 92, 96, 100, 104, 108, 111, 114, 117, 119, 121, 83, 89, 95,
+	100, 105, 109, 113, 116, 119, 122, 124, 104, 109, 114, 118, 121,
+	124};
 #define IGP02E1000_CABLE_LENGTH_TABLE_SIZE \
                 (sizeof(e1000_igp_2_cable_length_table) / \
                  sizeof(e1000_igp_2_cable_length_table[0]))
@@ -69,16 +69,29 @@ void e1000_init_phy_ops_generic(struct e1000_hw *hw)
 	phy->ops.get_cfg_done = e1000_null_ops_generic;
 	phy->ops.get_cable_length = e1000_null_ops_generic;
 	phy->ops.get_info = e1000_null_ops_generic;
+	phy->ops.set_page = e1000_null_set_page;
 	phy->ops.read_reg = e1000_null_read_reg;
 	phy->ops.read_reg_locked = e1000_null_read_reg;
+	phy->ops.read_reg_page = e1000_null_read_reg;
 	phy->ops.release = e1000_null_phy_generic;
 	phy->ops.reset = e1000_null_ops_generic;
 	phy->ops.set_d0_lplu_state = e1000_null_lplu_state;
 	phy->ops.set_d3_lplu_state = e1000_null_lplu_state;
 	phy->ops.write_reg = e1000_null_write_reg;
 	phy->ops.write_reg_locked = e1000_null_write_reg;
+	phy->ops.write_reg_page = e1000_null_write_reg;
 	phy->ops.power_up = e1000_null_phy_generic;
 	phy->ops.power_down = e1000_null_phy_generic;
+}
+
+/**
+ *  e1000_null_set_page - No-op function, return 0
+ *  @hw: pointer to the HW structure
+ **/
+s32 e1000_null_set_page(struct e1000_hw *hw, u16 data)
+{
+	DEBUGFUNC("e1000_null_set_page");
+	return E1000_SUCCESS;
 }
 
 /**
@@ -159,18 +172,18 @@ s32 e1000_get_phy_id(struct e1000_hw *hw)
 	if (!(phy->ops.read_reg))
 		goto out;
 
-		ret_val = phy->ops.read_reg(hw, PHY_ID1, &phy_id);
-		if (ret_val)
-			goto out;
+	ret_val = phy->ops.read_reg(hw, PHY_ID1, &phy_id);
+	if (ret_val)
+		goto out;
 
-		phy->id = (u32)(phy_id << 16);
-		usec_delay(20);
-		ret_val = phy->ops.read_reg(hw, PHY_ID2, &phy_id);
-		if (ret_val)
-			goto out;
+	phy->id = (u32)(phy_id << 16);
+	usec_delay(20);
+	ret_val = phy->ops.read_reg(hw, PHY_ID2, &phy_id);
+	if (ret_val)
+		goto out;
 
-		phy->id |= (u32)(phy_id & PHY_REVISION_MASK);
-		phy->revision = (u32)(phy_id & ~PHY_REVISION_MASK);
+	phy->id |= (u32)(phy_id & PHY_REVISION_MASK);
+	phy->revision = (u32)(phy_id & ~PHY_REVISION_MASK);
 
 out:
 	return ret_val;
@@ -384,6 +397,26 @@ out:
 }
 
 /**
+ *  e1000_set_page_igp - Set page as on IGP-like PHY(s)
+ *  @hw: pointer to the HW structure
+ *  @page: page to set (shifted left when necessary)
+ *
+ *  Sets PHY page required for PHY register access.  Assumes semaphore is
+ *  already acquired.  Note, this function sets phy.addr to 1 so the caller
+ *  must set it appropriately (if necessary) after this function returns.
+ **/
+s32 e1000_set_page_igp(struct e1000_hw *hw, u16 page)
+{
+	DEBUGFUNC("e1000_set_page_igp");
+
+	DEBUGOUT1("Setting page 0x%x\n", page);
+
+	hw->phy.addr = 1;
+
+	return e1000_write_phy_reg_mdic(hw, IGP01E1000_PHY_PAGE_SELECT, page);
+}
+
+/**
  *  __e1000_read_phy_reg_igp - Read igp PHY register
  *  @hw: pointer to the HW structure
  *  @offset: register offset to be read
@@ -561,6 +594,7 @@ static s32 __e1000_read_kmrn_reg(struct e1000_hw *hw, u32 offset, u16 *data,
 	kmrnctrlsta = ((offset << E1000_KMRNCTRLSTA_OFFSET_SHIFT) &
 	               E1000_KMRNCTRLSTA_OFFSET) | E1000_KMRNCTRLSTA_REN;
 	E1000_WRITE_REG(hw, E1000_KMRNCTRLSTA, kmrnctrlsta);
+	E1000_WRITE_FLUSH(hw);
 
 	usec_delay(2);
 
@@ -635,6 +669,7 @@ static s32 __e1000_write_kmrn_reg(struct e1000_hw *hw, u32 offset, u16 data,
 	kmrnctrlsta = ((offset << E1000_KMRNCTRLSTA_OFFSET_SHIFT) &
 	               E1000_KMRNCTRLSTA_OFFSET) | data;
 	E1000_WRITE_REG(hw, E1000_KMRNCTRLSTA, kmrnctrlsta);
+	E1000_WRITE_FLUSH(hw);
 
 	usec_delay(2);
 
@@ -1932,11 +1967,12 @@ s32 e1000_get_cable_length_igp_2(struct e1000_hw *hw)
 	u16 phy_data, i, agc_value = 0;
 	u16 cur_agc_index, max_agc_index = 0;
 	u16 min_agc_index = IGP02E1000_CABLE_LENGTH_TABLE_SIZE - 1;
-	u16 agc_reg_array[IGP02E1000_PHY_CHANNEL_NUM] =
-	                                                 {IGP02E1000_PHY_AGC_A,
-	                                                  IGP02E1000_PHY_AGC_B,
-	                                                  IGP02E1000_PHY_AGC_C,
-	                                                  IGP02E1000_PHY_AGC_D};
+	static const u16 agc_reg_array[IGP02E1000_PHY_CHANNEL_NUM] = {
+	       IGP02E1000_PHY_AGC_A,
+	       IGP02E1000_PHY_AGC_B,
+	       IGP02E1000_PHY_AGC_C,
+	       IGP02E1000_PHY_AGC_D
+	};
 
 	DEBUGFUNC("e1000_get_cable_length_igp_2");
 
@@ -2437,7 +2473,7 @@ s32 e1000_determine_phy_address(struct e1000_hw *hw)
 			 * If phy_type is valid, break - we found our
 			 * PHY address
 			 */
-			if (phy_type  != e1000_phy_unknown) {
+			if (phy_type != e1000_phy_unknown) {
 				ret_val = E1000_SUCCESS;
 				goto out;
 			}

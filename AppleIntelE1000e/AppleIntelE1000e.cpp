@@ -39,13 +39,7 @@ extern "C" {
 
 static int cards_found = 0;
 
-static inline void RELEASE(OSObject* x)
-{
-	if(x != NULL) {
-		x->release();
-		x = NULL;
-	} 
-}
+#define	RELEASE(x)	(if(x)x->release();x=NULL;)
 
 static void init_mutex(){
 	nvm_mutex = IOLockAlloc();

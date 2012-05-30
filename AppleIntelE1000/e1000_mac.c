@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2008 Intel Corporation.
+  Copyright(c) 1999 - 2010 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -219,17 +219,30 @@ s32 e1000_get_bus_info_pcie_generic(struct e1000_hw *hw)
 	DEBUGFUNC("e1000_get_bus_info_pcie_generic");
 
 	bus->type = e1000_bus_type_pci_express;
-	bus->speed = e1000_bus_speed_2500;
 
 	ret_val = e1000_read_pcie_cap_reg(hw,
 	                                  PCIE_LINK_STATUS,
 	                                  &pcie_link_status);
-	if (ret_val)
+	if (ret_val) {
 		bus->width = e1000_bus_width_unknown;
-	else
+		bus->speed = e1000_bus_speed_unknown;
+	} else {
+		switch (pcie_link_status & PCIE_LINK_SPEED_MASK) {
+		case PCIE_LINK_SPEED_2500:
+			bus->speed = e1000_bus_speed_2500;
+			break;
+		case PCIE_LINK_SPEED_5000:
+			bus->speed = e1000_bus_speed_5000;
+			break;
+		default:
+			bus->speed = e1000_bus_speed_unknown;
+			break;
+		}
+
 		bus->width = (enum e1000_bus_width)((pcie_link_status &
 		                                PCIE_LINK_WIDTH_MASK) >>
 		                               PCIE_LINK_WIDTH_SHIFT);
+	}
 
 	mac->ops.set_lan_id(hw);
 
@@ -333,7 +346,7 @@ void e1000_write_vfta_generic(struct e1000_hw *hw, u32 offset, u32 value)
  *  @hw: pointer to the HW structure
  *  @rar_count: receive address registers
  *
- *  Setups the receive address registers by setting the base receive address
+ *  Setup the receive address registers by setting the base receive address
  *  register to the devices MAC address and clearing all the other receive
  *  address registers to 0.
  **/
@@ -376,6 +389,11 @@ s32 e1000_check_alt_mac_addr_generic(struct e1000_hw *hw)
 
 	DEBUGFUNC("e1000_check_alt_mac_addr_generic");
 
+	ret_val = hw->nvm.ops.read(hw, NVM_COMPAT, 1, &nvm_data);
+	if (ret_val)
+		goto out;
+
+
 	ret_val = hw->nvm.ops.read(hw, NVM_ALT_MAC_ADDR_PTR, 1,
 	                         &nvm_alt_mac_addr_offset);
 	if (ret_val) {
@@ -383,10 +401,10 @@ s32 e1000_check_alt_mac_addr_generic(struct e1000_hw *hw)
 		goto out;
 	}
 
-	if (nvm_alt_mac_addr_offset == 0xFFFF) {
+	if ((nvm_alt_mac_addr_offset == 0xFFFF) ||
+	    (nvm_alt_mac_addr_offset == 0x0000))
 		/* There is no Alternate MAC Address */
 		goto out;
-	}
 
 	if (hw->bus.func == E1000_FUNC_1)
 		nvm_alt_mac_addr_offset += E1000_ALT_MAC_ADDRESS_OFFSET_LAN1;
@@ -767,7 +785,7 @@ s32 e1000_check_for_fiber_link_generic(struct e1000_hw *hw)
 			mac->autoneg_failed = 1;
 			goto out;
 		}
-		DEBUGOUT("NOT RXing /C/, disable AutoNeg and force link.\n");
+		DEBUGOUT("NOT Rx'ing /C/, disable AutoNeg and force link.\n");
 
 		/* Disable auto-negotiation in the TXCW register */
 		E1000_WRITE_REG(hw, E1000_TXCW, (mac->txcw & ~E1000_TXCW_ANE));
@@ -790,7 +808,7 @@ s32 e1000_check_for_fiber_link_generic(struct e1000_hw *hw)
 		 * and disable forced link in the Device Control register
 		 * in an attempt to auto-negotiate with our link partner.
 		 */
-		DEBUGOUT("RXing /C/, enable AutoNeg and stop forcing link.\n");
+		DEBUGOUT("Rx'ing /C/, enable AutoNeg and stop forcing link.\n");
 		E1000_WRITE_REG(hw, E1000_TXCW, mac->txcw);
 		E1000_WRITE_REG(hw, E1000_CTRL, (ctrl & ~E1000_CTRL_SLU));
 
@@ -835,7 +853,7 @@ s32 e1000_check_for_serdes_link_generic(struct e1000_hw *hw)
 			mac->autoneg_failed = 1;
 			goto out;
 		}
-		DEBUGOUT("NOT RXing /C/, disable AutoNeg and force link.\n");
+		DEBUGOUT("NOT Rx'ing /C/, disable AutoNeg and force link.\n");
 
 		/* Disable auto-negotiation in the TXCW register */
 		E1000_WRITE_REG(hw, E1000_TXCW, (mac->txcw & ~E1000_TXCW_ANE));
@@ -858,7 +876,7 @@ s32 e1000_check_for_serdes_link_generic(struct e1000_hw *hw)
 		 * and disable forced link in the Device Control register
 		 * in an attempt to auto-negotiate with our link partner.
 		 */
-		DEBUGOUT("RXing /C/, enable AutoNeg and stop forcing link.\n");
+		DEBUGOUT("Rx'ing /C/, enable AutoNeg and stop forcing link.\n");
 		E1000_WRITE_REG(hw, E1000_TXCW, mac->txcw);
 		E1000_WRITE_REG(hw, E1000_CTRL, (ctrl & ~E1000_CTRL_SLU));
 
@@ -1451,7 +1469,7 @@ s32 e1000_config_fc_after_link_up_generic(struct e1000_hw *hw)
 			 * of pause frames.  In this case, we had to advertise
 			 * FULL flow control because we could not advertise Rx
 			 * ONLY. Hence, we must now check to see if we need to
-			 * turn OFF  the TRANSMISSION of PAUSE frames.
+			 * turn OFF the TRANSMISSION of PAUSE frames.
 			 */
 			if (hw->fc.requested_mode == e1000_fc_full) {
 				hw->fc.current_mode = e1000_fc_full;

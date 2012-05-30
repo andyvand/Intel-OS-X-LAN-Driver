@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2008 Intel Corporation.
+  Copyright(c) 1999 - 2010 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -608,6 +608,12 @@ void __devinit e1000_check_options(struct e1000_adapter *adapter)
 					opt.name);
 				adapter->itr_setting = adapter->itr;
 				adapter->itr = 20000;
+				break;
+			case 4:
+				DPRINTK(PROBE, INFO,
+						"%s set to simplified (2000-8000 ints) mode\n",
+						opt.name);
+				adapter->itr_setting = adapter->itr;
 				break;
 			default:
 				/*

@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2008 Intel Corporation.
+  Copyright(c) 1999 - 2010 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -139,6 +139,13 @@ static inline void ew32(u8 __iomem *reg, u32 val)
 #define E1000_READ_REG_ARRAY_BYTE(a, reg, offset) ( \
     readb((a)->hw_addr + E1000_REGISTER(a, reg) + (offset)))
 
+#ifdef	__APPLE__
+#define E1000_WRITE_REG_IO(a, reg, offset)	e1000_writeRegIO((a),reg,offset)
+
+#define E1000_WRITE_FLUSH(a) E1000_READ_REG(a, E1000_STATUS)
+
+#else	/* __APPLE__ */
+extern void e1000_writeRegIO(e1000_hw* hw, u32 reg, u32 offset);
 #define E1000_WRITE_REG_IO(a, reg, offset) do { \
     outl(reg, ((a)->io_base));                  \
     outl(offset, ((a)->io_base + 4));      } while(0)
@@ -154,5 +161,6 @@ static inline void ew32(u8 __iomem *reg, u32 val)
 #define E1000_READ_FLASH_REG(a, reg) (readl((a)->flash_address + reg))
 
 #define E1000_READ_FLASH_REG16(a, reg) (readw((a)->flash_address + reg))
+#endif
 
 #endif /* _E1000_OSDEP_H_ */

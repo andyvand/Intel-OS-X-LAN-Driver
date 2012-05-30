@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2008 Intel Corporation.
+  Copyright(c) 1999 - 2010 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -28,8 +28,6 @@
 
 #include "e1000_api.h"
 
-static u8 e1000_calculate_checksum(u8 *buffer, u32 length);
-
 /**
  *  e1000_calculate_checksum - Calculate checksum for buffer
  *  @buffer: pointer to EEPROM
@@ -41,7 +39,7 @@ static u8 e1000_calculate_checksum(u8 *buffer, u32 length);
 static u8 e1000_calculate_checksum(u8 *buffer, u32 length)
 {
 	u32 i;
-	u8  sum = 0;
+	u8 sum = 0;
 
 	DEBUGFUNC("e1000_calculate_checksum");
 
@@ -71,6 +69,12 @@ s32 e1000_mng_enable_host_if_generic(struct e1000_hw *hw)
 	u8 i;
 
 	DEBUGFUNC("e1000_mng_enable_host_if_generic");
+
+	if (!(hw->mac.arc_subsystem_valid)) {
+		DEBUGOUT("ARC subsystem not valid.\n");
+		ret_val = -E1000_ERR_HOST_INTERFACE_COMMAND;
+		goto out;
+	}
 
 	/* Check that the host interface is enabled. */
 	hicr = E1000_READ_REG(hw, E1000_HICR);
@@ -359,7 +363,7 @@ bool e1000_enable_mng_pass_thru(struct e1000_hw *hw)
 	if (!(manc & E1000_MANC_RCV_TCO_EN))
 		goto out;
 
-	if (hw->mac.arc_subsystem_valid) {
+	if (hw->mac.has_fwsm) {
 		fwsm = E1000_READ_REG(hw, E1000_FWSM);
 		factps = E1000_READ_REG(hw, E1000_FACTPS);
 
@@ -369,12 +373,10 @@ bool e1000_enable_mng_pass_thru(struct e1000_hw *hw)
 			ret_val = true;
 			goto out;
 		}
-	} else {
-		if ((manc & E1000_MANC_SMBUS_EN) &&
+	} else if ((manc & E1000_MANC_SMBUS_EN) &&
 		    !(manc & E1000_MANC_ASF_EN)) {
 			ret_val = true;
 			goto out;
-		}
 	}
 
 out:

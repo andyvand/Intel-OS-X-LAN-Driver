@@ -18,13 +18,7 @@ enum
 #define TBDS_PER_TCB 12
 #define USE_TX_CSUM	0
 
-static inline void RELEASE(OSObject* x)
-{
-	if(x != NULL) {
-		x->release();
-		x = NULL;
-	} 
-}
+#define	RELEASE(x)	(if(x)x->release();x=NULL;)
 
 #define super IOEthernetController
 

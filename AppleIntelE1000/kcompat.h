@@ -34,7 +34,7 @@
 #define	__iomem
 #define	__devinit
 
-#define	dma_addr_t	void*
+#define	dma_addr_t	IOPhysicalAddress
 
 typedef struct { volatile int counter; } atomic_t;
 typedef struct { int dummy; } spinlock_t;
@@ -135,6 +135,9 @@ struct work_struct {
 
 #define	ENOMEM	12
 #define	EIO	5
+#define EBUSY           16      /* Device or resource busy */
+#define EINVAL          22      /* Invalid argument */
+
 #define NETDEV_TX_OK	0
 #define NETDEV_TX_BUSY	1
 
@@ -171,6 +174,11 @@ struct work_struct {
 //#define NETIF_F_TSO_ECN         (SKB_GSO_TCP_ECN << NETIF_F_GSO_SHIFT)
 //#define NETIF_F_TSO6            (SKB_GSO_TCPV6 << NETIF_F_GSO_SHIFT)
 //#define NETIF_F_FSO             (SKB_GSO_FCOE << NETIF_F_GSO_SHIFT)
+#define IFF_PROMISC     0x100           /* receive all packets          */
+#define IFF_ALLMULTI    0x200           /* receive all multicast packets*/
+
+#define DUPLEX_HALF             0x00
+#define DUPLEX_FULL             0x01
 
 enum {
      SKB_GSO_TCPV4 = 1 << 0,
@@ -232,11 +240,12 @@ outl (unsigned int value, unsigned short port)
 #define	KERN_ERR
 #define printk(args...)	IOLog(args)
 
-#define	unlikely(s)	s
-#define	likely(s)	s
+#define	unlikely(s)	(s)
+#define	likely(s)	(s)
 #define	prefetch(x)
 #define	spin_lock_irqsave(a,b)
 #define	spin_unlock_irqrestore(a,b)
+#define	spin_lock_init(a)
 
 
 #define time_after(a,b)         \
@@ -253,5 +262,9 @@ outl (unsigned int value, unsigned short port)
 #endif
 
 static inline void BUG() {}
+
+#define	set_bit(b,a)	*(a)|=(1<<(b))
+#define clear_bit(b,a)		*(a)&=~(1<<(b))
+#define test_bit(b,a)	!!(*(a)&(1<<(b)))
 
 #endif /* _KCOMPAT_H_ */

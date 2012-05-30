@@ -23,13 +23,7 @@ extern "C" {
 
 
 
-static inline void RELEASE(OSObject* x)
-{
-	if(x != NULL) {
-		x->release();
-		x = NULL;
-	} 
-}
+#define	RELEASE(x)	(if(x)x->release();x=NULL;)
 
 
 static void* kzalloc(size_t size)

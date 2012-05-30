@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2008 Intel Corporation.
+  Copyright(c) 1999 - 2010 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -65,7 +65,7 @@ s32  e1000_id_led_init_generic(struct e1000_hw *hw);
 s32  e1000_led_on_generic(struct e1000_hw *hw);
 s32  e1000_led_off_generic(struct e1000_hw *hw);
 void e1000_update_mc_addr_list_generic(struct e1000_hw *hw,
-	                               u8 *mc_addr_list, u32 mc_addr_count);
+                                       u8 *mc_addr_list, u32 mc_addr_count);
 s32  e1000_set_default_fc_generic(struct e1000_hw *hw);
 s32  e1000_set_fc_watermarks_generic(struct e1000_hw *hw);
 s32  e1000_setup_fiber_serdes_link_generic(struct e1000_hw *hw);
