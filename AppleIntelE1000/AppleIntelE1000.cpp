@@ -4335,8 +4335,8 @@ static bool e1000_clean_rx_irq(struct e1000_adapter *adapter,
 
 next_desc:
 #ifdef	__APPLE__
-		//buffer_info->pool->complete();
-		//ßbuffer_info->dma = 0;
+		buffer_info->pool->complete();
+		buffer_info->dma = 0;
 #endif
 		rx_desc->status = 0;
 
