@@ -29,12 +29,12 @@
  *      (This section is omitted in the header of ".h" files)
  *
  * Revision History:
- *      mm-dd-yyyy Revisor's Name: Whenever you made some changes, 
+ *      mm-dd-yyyy Revisor's Name: Whenever you made some changes,
  *                                 leave a record here.
  *      (This section is omitted in the header of ".h" files)
  *
  */
- 
+
 #include "velocity_hw.h"
 #include "velocity_mac.h"
 #include "velocity_desc.h"
@@ -51,7 +51,7 @@ void velocity_shutdown(struct velocity_hw *hw) {
 }
 
 BOOL velocity_soft_reset(struct velocity_hw *hw) {
-    
+
     int i=0;
 
     CSR_WRITE_4(hw, CR0_SFRST, MAC_REG_CR0_SET);
@@ -124,7 +124,7 @@ U32 check_connectiontype(struct velocity_hw *hw)
         status |= VELOCITY_LINK_FAIL;
 	    return status;
     }
-    
+
     if(hw->sOpts.spd_dpx == SPD_DPX_AUTO){
         status |= VELOCITY_AUTONEG_ENABLE;
         if (byPHYSR0 & PHYSR0_FDPX)
@@ -132,8 +132,7 @@ U32 check_connectiontype(struct velocity_hw *hw)
 
         if (byPHYSR0 & PHYSR0_SPDG)
             status |= VELOCITY_SPEED_1000;
-
-        if (byPHYSR0 & PHYSR0_SPD10)
+        else if (byPHYSR0 & PHYSR0_SPD10)
             status |= VELOCITY_SPEED_10;
         else
             status |= VELOCITY_SPEED_100;
@@ -141,6 +140,9 @@ U32 check_connectiontype(struct velocity_hw *hw)
     else{
         switch(hw->sOpts.spd_dpx)
         {
+        case SPD_DPX_1000_FULL:
+            status |= VELOCITY_SPEED_1000|VELOCITY_DUPLEX_FULL;
+            break;
         case SPD_DPX_100_HALF:
             status |= VELOCITY_SPEED_100;
             break;
@@ -199,11 +201,33 @@ U32 mii_check_media_mode(struct velocity_hw *hw)
 }
 
 
+//david add
+BOOL mii_reset (struct velocity_hw *hw)
+{
+    WORD    ww;
+
+    // turn on reset only, do not write other bits
+    MII_REG_BITS_ON(BMCR_RESET, MII_REG_BMCR, hw);
+    // polling till MII reset complete
+    // W_MAX_TIMEOUT is the timeout period
+    for (ww = 0; ww < W_MAX_TIMEOUT; ww++) {
+        if (!MII_REG_BITS_IS_ON(BMCR_RESET, MII_REG_BMCR, hw))
+            break;
+    }
+    if (ww == W_MAX_TIMEOUT)
+        return FALSE;
+    return TRUE;
+}
+
+
+
+
+
 /************************************************************************
 * MII access , media link mode setting functions
 ************************************************************************/
 void mii_init(struct velocity_hw *hw, U32 mii_status) {
-    U16 wBMCR;
+    U16 wBMCR;	
 
     switch (PHYID_GET_PHY_ID(hw->dwPHYId)) {
     case PHYID_CICADA_CS8201:
@@ -286,7 +310,7 @@ U16 set_mii_flow_control(struct velocity_hw *hw)
         /*MII_REG_BITS_ON(ANAR_PAUSE, MII_REG_ANAR, hw);
         MII_REG_BITS_ON(ANAR_ASMDIR, MII_REG_ANAR, hw);*/
         return ANAR_PAUSE|ANAR_ASMDIR;
-        
+
         break;
 
     case FLOW_CNTL_TX_RX:
@@ -304,7 +328,7 @@ U16 set_mii_flow_control(struct velocity_hw *hw)
         return 0;
         break;
     }
-    
+
     return 0;
 }
 
@@ -330,6 +354,9 @@ U32 velocity_get_opt_media_mode(struct velocity_hw *hw)
         break;
     case SPD_DPX_10_HALF:
         status=VELOCITY_SPEED_10;
+        break;
+    case SPD_DPX_1000_FULL:
+        status=VELOCITY_SPEED_1000|VELOCITY_DUPLEX_FULL;
         break;
     }
     hw->mii_status=status;
@@ -517,7 +544,7 @@ void mac_get_cam(struct velocity_hw *hw, int idx, PU8 addr,
 }
 
 void mac_wol_reset(struct velocity_hw *hw) {
-	
+
     /* Turn off SWPTAG right after leaving power mode */
     BYTE_REG_BITS_OFF(hw, STICKHW_SWPTAG,MAC_REG_STICKHW);
     /* clear sticky bits */
@@ -571,22 +598,26 @@ void velocity_init_cam_filter(struct velocity_hw *hw)
 {
 
     /* turn on MCFG_PQEN, turn off MCFG_RTGOPT */
-    WORD_REG_BITS_SET(hw, MCFG_PQEN, MCFG_RTGOPT, MAC_REG_MCFG0);
-    WORD_REG_BITS_ON(hw, MCFG_VIDFR, MAC_REG_MCFG0);
+    if(hw->sOpts.tagging == 2)
+    {
+        WORD_REG_BITS_OFF(hw, MCFG_PQEN, MAC_REG_MCFG0);
+        WORD_REG_BITS_OFF(hw, MCFG_RTGOPT, MAC_REG_MCFG0);
+        WORD_REG_BITS_OFF(hw, MCFG_VIDFR, MAC_REG_MCFG0);
+    }
+    else
+    {
+        WORD_REG_BITS_SET(hw, MCFG_PQEN, MCFG_RTGOPT, MAC_REG_MCFG0);
+        WORD_REG_BITS_ON(hw, MCFG_VIDFR, MAC_REG_MCFG0);
+    }
 
     /* Disable all CAM */
-#ifdef	__APPLE__
-    bzero(hw->abyVCAMMask, sizeof(U8)*8);
-    bzero(hw->abyMCAMMask, sizeof(U8)*8);
-#else
     memset(hw->abyVCAMMask, 0, sizeof(U8)*8);
     memset(hw->abyMCAMMask, 0, sizeof(U8)*8);
-#endif
     mac_set_cam_mask(hw,hw->abyVCAMMask,VELOCITY_VLAN_ID_CAM);
     mac_set_cam_mask(hw,hw->abyMCAMMask,VELOCITY_MULTICAST_CAM);
 
     /* Enable first VCAM */
-    if (hw->flags & VELOCITY_FLAGS_TAGGING) {
+    if (hw->sOpts.tagging == 1) {
         /* if Tagging option is enabled and VLAN ID is not zero, then turn on MCFG_RTGOPT also */
         if (hw->sOpts.vid != 0)
             WORD_REG_BITS_ON(hw, MCFG_RTGOPT, MAC_REG_MCFG0);
@@ -597,9 +628,9 @@ void velocity_init_cam_filter(struct velocity_hw *hw)
     }
     else {
         U16	wTemp = 0;
-		mac_set_cam(hw, 0, (PU8)&wTemp, VELOCITY_VLAN_ID_CAM);
-	    wTemp = 1;
-		mac_set_cam_mask(hw, (PU8)&(wTemp), VELOCITY_VLAN_ID_CAM);
+        mac_set_cam(hw, 0, (PU8)&wTemp, VELOCITY_VLAN_ID_CAM);
+        wTemp = 1;
+        mac_set_cam_mask(hw, (PU8)&(wTemp), VELOCITY_VLAN_ID_CAM);
     }
 }
 
@@ -657,6 +688,9 @@ void velocity_print_link_status(struct velocity_hw *hw) {
     	else {
     		VELOCITY_HW_PRT(hw, MSG_LEVEL_INFO,	"Link forced");
             switch(hw->sOpts.spd_dpx) {
+                case SPD_DPX_1000_FULL:
+            		VELOCITY_PRT(hw->msglevel, MSG_LEVEL_INFO, " speed 1000M bps full duplex\n");
+            		break;
             	case SPD_DPX_100_HALF:
             		VELOCITY_PRT(hw->msglevel, MSG_LEVEL_INFO, " speed 100M bps half duplex\n");
             		break;
@@ -699,7 +733,7 @@ int velocity_set_media_mode(struct velocity_hw *hw, SPD_DPX_OPT spd_dpx)
     if (PHYID_GET_PHY_ID(hw->dwPHYId) == PHYID_CICADA_CS8201) {
         MII_REG_BITS_ON(AUXCR_MDPPS, MII_REG_AUXCR, hw);
     }
-    
+
     /* if connection type is AUTO */
     if (spd_dpx == SPD_DPX_AUTO) {
 
@@ -718,7 +752,7 @@ int velocity_set_media_mode(struct velocity_hw *hw, SPD_DPX_OPT spd_dpx)
             MII_REG_BITS_ON(G1000CR_1000FD|G1000CR_1000, MII_REG_G1000CR, hw);
             /* enable AUTO-NEGO mode */
             MII_REG_BITS_ON((BMCR_AUTO | BMCR_REAUTO), MII_REG_BMCR, hw);
-            
+
             /* Link changed */
             status = VELOCITY_LINK_CHANGE;
         }
@@ -736,9 +770,14 @@ int velocity_set_media_mode(struct velocity_hw *hw, SPD_DPX_OPT spd_dpx)
 
 
         byCHIPGCR = CSR_READ_1(hw, MAC_REG_CHIPGCR);
-        byCHIPGCR &= ~CHIPGCR_FCGMII;
 
-        if( spd_dpx == SPD_DPX_100_FULL || spd_dpx == SPD_DPX_10_FULL ){
+        if (spd_dpx == SPD_DPX_1000_FULL)
+            byCHIPGCR |= CHIPGCR_FCGMII;
+        else
+            byCHIPGCR &= ~CHIPGCR_FCGMII;
+
+
+        if( spd_dpx == SPD_DPX_1000_FULL || spd_dpx == SPD_DPX_100_FULL || spd_dpx == SPD_DPX_10_FULL ){
             byCHIPGCR |= CHIPGCR_FCFDX;
             CSR_WRITE_1(hw, byCHIPGCR, MAC_REG_CHIPGCR);
             /*VELOCITY_HW_PRT(hw, MSG_LEVEL_INFO, "Set Velocity to forced full mode\n");*/
@@ -758,6 +797,10 @@ int velocity_set_media_mode(struct velocity_hw *hw, SPD_DPX_OPT spd_dpx)
 
         switch(spd_dpx)
         {
+            case SPD_DPX_1000_FULL:
+                wANAR &= ~(ANLPAR_TX | ANLPAR_TXFD | ANLPAR_10 | ANLPAR_10FD);
+                wG1000CR |= G1000CR_1000FD;
+                break;
             case SPD_DPX_100_HALF:
                 wANAR |= ANLPAR_TX;
                 break;
@@ -773,15 +816,22 @@ int velocity_set_media_mode(struct velocity_hw *hw, SPD_DPX_OPT spd_dpx)
             default:
                 break;
         }
-        
+
         if(wANAR != wOrigANAR || wG1000CR != wOrigG1000CR)
         {
             wANAR |= wANARMask;
             velocity_mii_write(hw, MII_REG_ANAR, wANAR);
-            MII_REG_BITS_OFF(G1000CR_1000FD|G1000CR_1000, MII_REG_G1000CR, hw);
+
+            if (spd_dpx == SPD_DPX_1000_FULL) {
+                MII_REG_BITS_ON(G1000CR_1000FD, MII_REG_G1000CR, hw);
+                MII_REG_BITS_OFF(G1000CR_1000, MII_REG_G1000CR, hw);
+            }
+            else {
+                MII_REG_BITS_OFF(G1000CR_1000FD|G1000CR_1000, MII_REG_G1000CR, hw);
+            }
             /* enable AUTO-NEGO mode */
             MII_REG_BITS_ON((BMCR_AUTO | BMCR_REAUTO), MII_REG_BMCR, hw);
-           
+
             /* Link changed */
             status = VELOCITY_LINK_CHANGE;
         }
@@ -791,26 +841,27 @@ int velocity_set_media_mode(struct velocity_hw *hw, SPD_DPX_OPT spd_dpx)
 }
 
 
-void velocity_adaptive_init(struct velocity_hw *hw)
+void velocity_init_interrupt_mask(struct velocity_hw *hw)
 {
     hw->IntMask = INT_MASK_DEF;
-    
+
     // [1.18] Adaptive Interrupt
     // Set Tx Interrupt Suppression Threshold
     CSR_WRITE_1(hw, CAMCR_PS0, MAC_REG_CAMCR);
-    CSR_WRITE_2(hw, hw->sOpts.txque_timer, MAC_REG_ISR_CTL);
+    CSR_WRITE_2(hw, hw->sOpts.tx_intsup, MAC_REG_ISR_CTL);
     //pInfo->IntMask &= ~(ISR_PTXI | ISR_PTX0I | ISR_PTX1I | ISR_PTX2I | ISR_PTX3I);
 
     // Set Rx Interrupt Suppression Threshold
     CSR_WRITE_1(hw, CAMCR_PS1, MAC_REG_CAMCR);
-    CSR_WRITE_2(hw, hw->sOpts.rxque_timer, MAC_REG_ISR_CTL);
+    CSR_WRITE_2(hw, hw->sOpts.rx_intsup, MAC_REG_ISR_CTL);
     //pInfo->IntMask &= ~ISR_PRXI;
 
     /* Select page to interrupt hold timer */
     CSR_WRITE_1(hw, 0x00, MAC_REG_CAMCR);
 
-    /* Modify IMR */
-    hw->IntMask &= ~(ISR_PTXI | ISR_PTX0I | ISR_PTX1I | ISR_PTX2I | ISR_PTX3I | ISR_PRXI);    
+    /* Modify IMR if adaptive interrupt is enabled */
+    if (hw->flags & VELOCITY_FLAGS_AI)
+        hw->IntMask &= ~(ISR_PTXI | ISR_PTX0I | ISR_PTX1I | ISR_PTX2I | ISR_PTX3I | ISR_PRXI);
 }
 
 void velocity_init_register_reset( struct velocity_hw *hw)
@@ -840,7 +891,7 @@ void velocity_init_register_cold(struct velocity_hw *hw, struct pci_dev* pcid)
     int i;
     U32 mii_status;
     U8  byCommand;
-    
+
     mac_set_rx_thresh(hw, hw->sOpts.rx_thresh);
     mac_set_dma_length(hw, hw->sOpts.DMA_length);
 
@@ -855,17 +906,17 @@ void velocity_init_register_cold(struct velocity_hw *hw, struct pci_dev* pcid)
     /* enable MII auto-polling */
     EnableMiiAutoPoll(hw);
     
-    velocity_adaptive_init(hw);
-    
+    velocity_init_interrupt_mask(hw);
+
     // Enable Memory-Read-Line, both VT3119 and VT3216
     // ==> DCFG1_XMRL = 0
     BYTE_REG_BITS_OFF(hw, DCFG1_XMRL, MAC_REG_DCFG1);
-    
+
     // Enable Memory-Read-Multiple
-    if ((hw->byRevId >= REV_ID_VT3284_A0) || (hw->sOpts.flags & VELOCITY_FLAGS_MRDPL)) {
+    if ((hw->byRevId >= REV_ID_VT3284_A0) || (hw->flags & VELOCITY_FLAGS_MRDPL)) {
         // (1)Enable Memory-Read-Multiple ==> DCFG1_MRDPL = 1
         BYTE_REG_BITS_ON(hw, DCFG1_MRDPL, MAC_REG_DCFG1);
-        
+
         if (hw->byRevId < REV_ID_VT3284_A0) {
             // (2)Disable DAC capability ==> CFGD_CFGDACEN = 0
             // Turn on CR3_DIAG
@@ -906,7 +957,7 @@ void velocity_init_register_cold(struct velocity_hw *hw, struct pci_dev* pcid)
 
     mii_init(hw, mii_status);
 
-#ifdef LINUX    
+#ifdef LINUX
     if (velocity_set_media_mode(hw,hw->sOpts.spd_dpx) != VELOCITY_LINK_CHANGE) {
         hw->mii_status = check_connectiontype(hw);
         velocity_print_link_status(hw);

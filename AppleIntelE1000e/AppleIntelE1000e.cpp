@@ -39,7 +39,7 @@ extern "C" {
 
 static int cards_found = 0;
 
-#define	RELEASE(x)	(if(x)x->release();x=NULL;)
+#define	RELEASE(x)	if(x){x->release();x=NULL;}
 
 static void init_mutex(){
 	nvm_mutex = IOLockAlloc();

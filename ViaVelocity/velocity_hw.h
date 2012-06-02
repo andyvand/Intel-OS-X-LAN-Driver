@@ -26,7 +26,7 @@
  *
  *
  */
- 
+
 #ifndef __VELOCITY_HW_H
 #define __VELOCITY_HW_H
 
@@ -65,6 +65,7 @@
 #define VELOCITY_FLAGS_IP_ALIGN     0x00000008UL
 #define VELOCITY_FLAGS_VAL_PKT_LEN  0x00000010UL
 #define VELOCITY_FLAGS_MRDPL        0x00000020UL
+#define VELOCITY_FLAGS_AI           0x00000040UL
 //#define VELOCITY_FLAGS_FLOW_CTRL    0x01000000UL
 
 
@@ -103,7 +104,8 @@ typedef enum _speed_opt {
     SPD_DPX_100_HALF    =   1,
     SPD_DPX_100_FULL    =   2,
     SPD_DPX_10_HALF     =   3,
-    SPD_DPX_10_FULL     =   4
+    SPD_DPX_10_FULL     =   4,
+    SPD_DPX_1000_FULL   =   5
 } SPD_DPX_OPT, *PSPD_DPX_OPT;
 
 
@@ -112,6 +114,7 @@ typedef struct __velocity_opt {
     int         nTxDescs;           // Number of TX descriptors
     SPD_DPX_OPT spd_dpx;            // Media link mode
     int         vid;                // VLAN Id
+    int         tagging;                    //Tagging
     int         DMA_length;         // DMA length
     int         rx_thresh;          // Rx threshold
     int         flow_cntl;          // flow control
@@ -121,12 +124,12 @@ typedef struct __velocity_opt {
     int         rxque_timer;        // Rx queue empty defer delay timer
     int         tx_intsup;          // Tx interrupt suppression threshold
     int         rx_intsup;          // Rx interrupt suppression threshold
-    U32         flags;              // Boolean type options: 
+    //U32         flags;              // Boolean type options: 
                                     // 1.enable_tagging 
                                     // 2.IP_byte_align
                                     // 3.txcsum_offload
                                     // 4.ValPktLen
-                                    // 5.EnableMRDPL                                                                        
+                                    // 5.EnableMRDPL
 } OPTIONS, *POPTIONS;
 
 struct velocity_hw {
@@ -196,6 +199,7 @@ void mii_init(struct velocity_hw *hw, U32 mii_status);
 void init_flow_control_register(struct velocity_hw *hw);
 void enable_flow_control_ability(struct velocity_hw *hw);
 BOOL velocity_soft_reset(struct velocity_hw* hw);
+BOOL mii_reset (struct velocity_hw *hw);
 void velocity_shutdown(struct velocity_hw *hw);
 U32 velocity_get_opt_media_mode(struct velocity_hw *hw);
 BOOL velocity_mii_read(struct velocity_hw* hw, U8 byIdx, PU16 pdata);
@@ -215,6 +219,6 @@ int velocity_set_media_mode(struct velocity_hw *hw, SPD_DPX_OPT spd_dpx);
 
 void velocity_init_register_cold(struct velocity_hw *hw, struct pci_dev* pcid);
 void velocity_init_register_reset(struct velocity_hw *hw);
-void velocity_adaptive_init(struct velocity_hw *hw);
+void velocity_init_interrupt_mask(struct velocity_hw *hw);
 
 #endif /* __VELOCITY_HW_H */

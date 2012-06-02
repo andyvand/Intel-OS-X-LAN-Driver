@@ -716,7 +716,7 @@ typedef struct __chip_info_tbl{
 }
 
 #define mac_set_rx_thresh(hw, n) {\
-    BYTE_REG_BITS_SET(hw, (n),(MCFG_RFT0|MCFG_RFT1), MAC_REG_MCFG0);\
+    BYTE_REG_BITS_SET(hw, ((n)<<4), (MCFG_RFT0|MCFG_RFT1), MAC_REG_MCFG0);\
 }
 
 #define mac_rx_queue_run(hw) {\

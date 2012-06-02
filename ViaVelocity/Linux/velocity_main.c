@@ -1,4 +1,4 @@
-/*
+ /*
  * Copyright (c) 1996, 2003 VIA Networking Technologies, Inc.
  * All rights reserved.
  *
@@ -35,7 +35,11 @@ static PVELOCITY_INFO   pVelocity3_Infos = NULL;
 static int              msglevel         = MSG_LEVEL_INFO;
 
 #ifdef VELOCITY_ETHTOOL_IOCTL_SUPPORT
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,4,25)
 static int velocity_ethtool_ioctl(struct net_device* dev, struct ifreq* ifr);
+#else
+static struct ethtool_ops velocity_ethtool_ops;
+#endif
 #endif
 
 #ifdef SIOCGMIIPHY
@@ -64,7 +68,7 @@ MODULE_DESCRIPTION("VIA Networking Velocity Family Gigabit Ethernet Adapter Driv
         MODULE_PARM_DESC(N, D);
 #endif
 
-
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,4,18)
 #define RX_DESC_MIN         64
 #define RX_DESC_MAX         255
 #define RX_DESC_DEF         252
@@ -74,6 +78,17 @@ VELOCITY_PARAM(RxDescriptors, "Number of receive descriptors");
 #define TX_DESC_MAX         256
 #define TX_DESC_DEF         256
 VELOCITY_PARAM(TxDescriptors, "Number of transmit descriptors");
+#else
+#define RX_DESC_MIN         64
+#define RX_DESC_MAX         64
+#define RX_DESC_DEF         64
+VELOCITY_PARAM(RxDescriptors, "Number of receive descriptors");
+
+#define TX_DESC_MIN         16
+#define TX_DESC_MAX         64
+#define TX_DESC_DEF         64
+VELOCITY_PARAM(TxDescriptors, "Number of transmit descriptors");
+#endif
 
 #define VLAN_ID_MIN         0
 #define VLAN_ID_MAX         4094
@@ -111,6 +126,8 @@ VELOCITY_PARAM(rx_thresh, "Receive fifo threshold");
 */
 VELOCITY_PARAM(DMA_length, "DMA length");
 
+#define TAGGING_MIN         0
+#define TAGGING_MAX         2
 #define TAGGING_DEF         0
 /* enable_tagging[] is used for enabling 802.1Q VID tagging.
    0: disable VID seeting(default).
@@ -129,7 +146,7 @@ VELOCITY_PARAM(IP_byte_align, "Enable IP header dword aligned");
 
 #ifdef VELOCITY_TX_CSUM_SUPPORT
 #define TX_CSUM_DEF         1
-/* txcsum_offload[] is used for setting the Tx checksum offload ability of NIC.   
+/* txcsum_offload[] is used for setting the Tx checksum offload ability of NIC.
    Rx checksum offload ability is default supported and no option for it.
    0: disable Tx checksum offload
    1: enable Tx checksum offload (Default)
@@ -151,13 +168,14 @@ VELOCITY_PARAM(flow_control, "Enable flow control ability");
 
 #define MED_LNK_DEF         0
 #define MED_LNK_MIN         0
-#define MED_LNK_MAX         4
+#define MED_LNK_MAX         5
 /* speed_duplex[] is used for setting the speed and duplex mode of NIC.
    0: indicate autonegotiation for both speed and duplex mode
    1: indicate 100Mbps half duplex mode
    2: indicate 100Mbps full duplex mode
    3: indicate 10Mbps half duplex mode
    4: indicate 10Mbps full duplex mode
+   5: indicate 1000Mbps full duplex mode
 
    Note:
         if EEPROM have been set to the force mode, this option is ignored
@@ -195,6 +213,12 @@ VELOCITY_PARAM(int_works, "Number of packets per interrupt services");
 #define MRDPL_DEF           0
 VELOCITY_PARAM(EnableMRDPL, "Memory-Read-Multiple ability");
 
+// EnableAI[] is used for setting the Adaptive-Interrupt ability of NIC
+// 0: Disable
+// 1: Enable (default)
+#define AI_DEF              1
+VELOCITY_PARAM(EnableAI, "Adaptive-Interrupt ability");
+
 #define TXQUE_TIMER_DEF     0x59
 #define TXQUE_TIMER_MIN     0x00
 #define TXQUE_TIMER_MAX     0xFF
@@ -231,6 +255,19 @@ static BOOL velocity_alloc_rx_buf(PVELOCITY_INFO, int idx);
 static void velocity_init_adapter(PVELOCITY_INFO pInfo, VELOCITY_INIT_TYPE);
 static void velocity_init_pci(PVELOCITY_INFO pInfo);
 static void velocity_free_tx_buf(PVELOCITY_INFO pInfo, PVELOCITY_TD_INFO, PTX_DESC pTD);
+
+#ifdef VELOCITY_ETHTOOL_IOCTL_SUPPORT
+static int velocity_ethtool_gset(struct net_device*  dev, struct ethtool_cmd *ecmd);
+static int velocity_ethtool_sset(struct net_device*  dev, struct ethtool_cmd *ecmd);
+static u32 velocity_ethtool_glink(struct net_device*  dev);
+static void velocity_ethtool_gdrvinfo(struct net_device*  dev, struct ethtool_drvinfo  *info);
+static void velocity_ethtool_gwol(struct net_device*  dev, struct ethtool_wolinfo *wol);
+static int velocity_ethtool_swol(struct net_device*  dev, struct ethtool_wolinfo *wol);
+static u32 velocity_ethtool_gmsglvl(struct net_device*  dev);
+static void velocity_ethtool_smsglvl(struct net_device*  dev, u32 value);
+#endif
+
+
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,4,9)
 #ifdef CONFIG_PM
@@ -299,11 +336,6 @@ static void __devexit velocity_remove1(struct pci_dev *pcid)
         return;
     }
 
-#ifdef CONFIG_PROC_FS
-    velocity_free_proc_entry(pInfo);
-    velocity_free_proc_fs(pInfo);
-#endif
-
     if (dev)
         unregister_netdev(dev);
 
@@ -366,7 +398,7 @@ velocity_set_bool_opt(PU32 opt, int val, BOOL def, U32 flag, char* name)
 }
 
 static void
-velocity_get_options (POPTIONS pOpts, int index)
+velocity_get_options (POPTIONS pOpts, PU32 flags, int index)
 {
     velocity_set_int_opt(&pOpts->rx_thresh,rx_thresh[index],
         RX_THRESH_MIN, RX_THRESH_MAX, RX_THRESH_DEF,"rx_thresh");
@@ -383,46 +415,49 @@ velocity_get_options (POPTIONS pOpts, int index)
     velocity_set_int_opt(&pOpts->vid,VID_setting[index],
         VLAN_ID_MIN, VLAN_ID_MAX, VLAN_ID_DEF,"VID_setting");
 
-    velocity_set_bool_opt(&pOpts->flags,enable_tagging[index],
-        TAGGING_DEF,VELOCITY_FLAGS_TAGGING, "enable_tagging");
+    velocity_set_int_opt(&pOpts->tagging,enable_tagging[index],
+        TAGGING_MIN, TAGGING_MAX, TAGGING_DEF, "enable_tagging");
 
 #ifdef VELOCITY_TX_CSUM_SUPPORT
-    velocity_set_bool_opt(&pOpts->flags, txcsum_offload[index],
+    velocity_set_bool_opt(flags, txcsum_offload[index],
         TX_CSUM_DEF, VELOCITY_FLAGS_TX_CSUM, "txcsum_offload");
 #endif
 
-    velocity_set_int_opt(&pOpts->flow_cntl,flow_control[index],
+    velocity_set_int_opt(&pOpts->flow_cntl, flow_control[index],
         FLOW_CNTL_MIN,FLOW_CNTL_MAX, FLOW_CNTL_DEF, "flow_control");
 
-    velocity_set_bool_opt(&pOpts->flags,IP_byte_align[index],
+    velocity_set_bool_opt(flags, IP_byte_align[index],
         IP_ALIG_DEF, VELOCITY_FLAGS_IP_ALIGN, "IP_byte_align");
 
-    velocity_set_bool_opt(&pOpts->flags,ValPktLen[index],
+    velocity_set_bool_opt(flags, ValPktLen[index],
         VAL_PKT_LEN_DEF, VELOCITY_FLAGS_VAL_PKT_LEN, "ValPktLen");
 
-    velocity_set_int_opt((int*) &pOpts->spd_dpx,speed_duplex[index],
+    velocity_set_int_opt((int*) &pOpts->spd_dpx, speed_duplex[index],
         MED_LNK_MIN, MED_LNK_MAX, MED_LNK_DEF,"Media link mode");
 
-    velocity_set_int_opt((int*) &pOpts->wol_opts,wol_opts[index],
+    velocity_set_int_opt((int*) &pOpts->wol_opts, wol_opts[index],
         WOL_OPT_MIN, WOL_OPT_MAX, WOL_OPT_DEF,"Wake On Lan options");
 
-    velocity_set_int_opt((int*) &pOpts->int_works,int_works[index],
+    velocity_set_int_opt((int*) &pOpts->int_works, int_works[index],
         INT_WORKS_MIN, INT_WORKS_MAX, INT_WORKS_DEF,"Interrupt service works");
 
-    velocity_set_bool_opt(&pOpts->flags,EnableMRDPL[index],
+    velocity_set_bool_opt(flags, EnableMRDPL[index],
         MRDPL_DEF, VELOCITY_FLAGS_MRDPL, "EnableMRDPL");
-        
+
+    velocity_set_bool_opt(flags, EnableAI[index],
+        AI_DEF, VELOCITY_FLAGS_AI, "EnableAI");
+
     velocity_set_int_opt((int*) &pOpts->txque_timer, txque_timer[index],
         TXQUE_TIMER_MIN, TXQUE_TIMER_MAX, TXQUE_TIMER_DEF,"Tx Queue Empty defer timer");
 
     velocity_set_int_opt((int*) &pOpts->rxque_timer, rxque_timer[index],
         RXQUE_TIMER_MIN, RXQUE_TIMER_MAX, RXQUE_TIMER_DEF,"Rx Queue Empty defer timer");
-        
+
     velocity_set_int_opt((int*) &pOpts->tx_intsup, tx_intsup[index],
         TX_INTSUP_MIN, TX_INTSUP_MAX, TX_INTSUP_DEF,"Tx Interrupt Suppression Threshold");
-        
+
     velocity_set_int_opt((int*) &pOpts->rx_intsup, rx_intsup[index],
-        RX_INTSUP_MIN, RX_INTSUP_MAX, RX_INTSUP_DEF,"Rx Interrupt Suppression Threshold");        
+        RX_INTSUP_MIN, RX_INTSUP_MAX, RX_INTSUP_DEF,"Rx Interrupt Suppression Threshold");
 
     pOpts->nRxDescs = (pOpts->nRxDescs & ~3);
 }
@@ -439,6 +474,9 @@ velocity_init_adapter (
     struct net_device   *dev = pInfo->dev;
     int                 i;
 
+    printk("%s: %s ver %s\n", pInfo->dev->name, VELOCITY_NAME, VELOCITY_VERSION);
+
+
     mac_wol_reset(&pInfo->hw);
 
     switch (InitType) {
@@ -446,9 +484,9 @@ velocity_init_adapter (
     case VELOCITY_INIT_WOL:
 
         netif_stop_queue(dev);
-        
+
         velocity_init_register_reset(&pInfo->hw);
-        
+
         if (!(pInfo->hw.mii_status & VELOCITY_LINK_FAIL))
             netif_wake_queue(dev);
 
@@ -470,7 +508,7 @@ velocity_init_adapter (
         netif_stop_queue(dev);
 
         velocity_init_register_cold(&pInfo->hw, pInfo->pcid);
-        
+
         if (!(pInfo->hw.mii_status & VELOCITY_LINK_FAIL))
             netif_wake_queue(dev);
         break;
@@ -489,6 +527,21 @@ velocity_init_pci(PVELOCITY_INFO pInfo) {
     PCI_BYTE_REG_BITS_ON(MODE3_MIION, PCI_REG_MODE3, pInfo->pcid);
 }
 
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,31)
+static const struct net_device_ops velocity_netdev_ops = {
+	.ndo_open				= velocity_open,
+	.ndo_stop				= velocity_close,
+	.ndo_get_stats			= velocity_get_stats,
+	.ndo_start_xmit			= velocity_xmit,
+	.ndo_set_multicast_list = velocity_set_multi,
+	.ndo_do_ioctl			= velocity_ioctl,
+	.ndo_change_mtu			= velocity_change_mtu,
+};
+#endif
+
+
+
 static int
 velocity_found1(
     struct pci_dev              *pcid,
@@ -502,6 +555,7 @@ velocity_found1(
     PVELOCITY_INFO      pInfo, p;
     long                ioaddr, memaddr;
     PU8                 hw_addr;
+    U32                 flags;
 
 
     if (velocity_nics++ >= MAX_UINTS) {
@@ -538,7 +592,7 @@ velocity_found1(
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,0)
     /* Chain it all together */
-    SET_MODULE_OWNER(dev);
+    //SET_MODULE_OWNER(dev);
     SET_NETDEV_DEV(dev, &pcid->dev);
 #endif
     pInfo = netdev_priv(dev);
@@ -577,10 +631,6 @@ velocity_found1(
     pInfo->hw.ioaddr = ioaddr;
     pInfo->hw.memaddr = memaddr;
 
-#ifdef CONFIG_PROC_FS
-    velocity_init_proc_fs(pInfo);
-#endif
-
     /* assign message level */
     pInfo->hw.msglevel = msglevel;
 
@@ -612,9 +662,7 @@ velocity_found1(
 
     pInfo->hw.hw_addr = hw_addr;
 
-    velocity_create_proc_entry(pInfo);
-
-    mac_wol_reset(&pInfo->hw);
+    mac_wol_reset(&pInfo->hw);	
 
     // get MII PHY Id
     velocity_mii_read(&pInfo->hw, MII_REG_PHYID2, (PU16)&pInfo->hw.dwPHYId);
@@ -624,6 +672,10 @@ velocity_found1(
     velocity_soft_reset(&pInfo->hw);
     mdelay(5);
 
+	//david add
+	mii_reset(&pInfo->hw);
+	mdelay(5);
+
     // EEPROM reload
     mac_eeprom_reload(&pInfo->hw);
 
@@ -631,7 +683,10 @@ velocity_found1(
     dev->base_addr = pInfo->hw.ioaddr;
     for (i=0; i<6; i++)
         dev->dev_addr[i] = CSR_READ_1(&pInfo->hw, MAC_REG_PAR+i);
-    dev->irq                = pcid->irq;
+    dev->irq                = pcid->irq;	
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,31)
+	dev->netdev_ops 		= &velocity_netdev_ops;
+#else
     dev->open               = velocity_open;
     dev->hard_start_xmit    = velocity_xmit;
     dev->stop               = velocity_close;
@@ -639,14 +694,21 @@ velocity_found1(
     dev->set_multicast_list = velocity_set_multi;
     dev->do_ioctl           = velocity_ioctl;
     dev->change_mtu         = velocity_change_mtu;
+#endif
 
-    velocity_get_options(&pInfo->hw.sOpts, velocity_nics-1);
+#ifdef VELOCITY_ETHTOOL_IOCTL_SUPPORT
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,4,25)
+    dev->ethtool_ops = &velocity_ethtool_ops;
+#endif
+#endif
+
+    velocity_get_options(&pInfo->hw.sOpts, &flags, velocity_nics-1);
 
     // Mask out the options cannot be set to the chip
-    pInfo->hw.sOpts.flags &= pChip_info->flags;
+    flags &= pChip_info->flags;
 
     // Enable the chip specified capbilities
-    pInfo->hw.flags = pInfo->hw.sOpts.flags | (pChip_info->flags & 0xFF000000L);
+    pInfo->hw.flags = flags | (pChip_info->flags & 0xFF000000L);
 
     pInfo->wol_opts = pInfo->hw.sOpts.wol_opts;
 
@@ -654,7 +716,7 @@ velocity_found1(
 
 #ifdef  VELOCITY_TX_CSUM_SUPPORT
     if (pInfo->hw.flags & VELOCITY_FLAGS_TX_CSUM) {
-        dev->features |= NETIF_F_HW_CSUM;
+        dev->features |= NETIF_F_IP_CSUM;
 
 #ifdef  VELOCITY_ZERO_COPY_SUPPORT
         // Checksum function must be enabled, or SG will be dropped
@@ -742,7 +804,7 @@ static BOOL velocity_init_rings(PVELOCITY_INFO pInfo)
     if (pInfo->tx_bufs == NULL) {
         printk(KERN_ERR "%s: allocate dma memory failed\n", dev->name);
         pci_free_consistent(pInfo->pcid,
-            pInfo->hw.sOpts.nRxDes`cs * sizeof(RX_DESC) + 64 +
+            pInfo->hw.sOpts.nRxDescs * sizeof(RX_DESC) + 64 +
             pInfo->hw.sOpts.nTxDescs * sizeof(TX_DESC)*pInfo->hw.nTxQueues,
             pInfo->pool, pInfo->hw.pool_dma);
         return FALSE;
@@ -900,7 +962,12 @@ static int velocity_rx_srv(PVELOCITY_INFO pInfo, int status)
     int                         iCurrRDIdx = pInfo->hw.iCurrRDIdx;
     int                         works = 0;
     U16                         wRSR;
+    BOOL			bVIDM = FALSE;\
+    WORD                        wRBRDU;
+    WORD                        wCurrDeltaRBRDU;
 
+    if(pInfo->hw.sOpts.tagging == 2)
+ 		bVIDM = TRUE;
 
     while (TRUE) {
         pRD = &(pInfo->hw.aRDRing[iCurrRDIdx]);
@@ -921,7 +988,7 @@ static int velocity_rx_srv(PVELOCITY_INFO pInfo, int status)
         wRSR = (U16)(cpu_to_le32(pRD->rdesc0));
 
         // don't drop CE or RL error frame although RXOK is off
-        if( (wRSR & RSR_RXOK) || (!(wRSR & RSR_RXOK) && (wRSR & (RSR_CE | RSR_RL)))) {
+        if( (wRSR & RSR_RXOK) || (!(wRSR & RSR_RXOK) && (wRSR & (RSR_CE | RSR_RL)))||(bVIDM && (wRSR & RSR_VIDM))) {
             if (velocity_receive_frame(pInfo, iCurrRDIdx)) {
                 if (!velocity_alloc_rx_buf(pInfo, iCurrRDIdx)) {
                     VELOCITY_PRT(msglevel, MSG_LEVEL_ERR, KERN_ERR
@@ -949,7 +1016,20 @@ static int velocity_rx_srv(PVELOCITY_INFO pInfo, int status)
                 pRD->rdesc0 |= cpu_to_le32(RDESC0_OWN);
                 SUB_ONE_WITH_WRAP_AROUND(iPrevRDIdx, pInfo->hw.sOpts.nRxDescs);
             }
-            CSR_WRITE_2(&pInfo->hw, 4, MAC_REG_RBRDU);
+
+            if (pInfo->hw.byRevId >= REV_ID_VT3286_A0) {
+                wRBRDU = CSR_READ_2(&pInfo->hw, MAC_REG_RBRDU);
+                wCurrDeltaRBRDU = pInfo->hw.sOpts.nRxDescs - wRBRDU;
+                if(4 <= wCurrDeltaRBRDU) {
+                    CSR_WRITE_2(&pInfo->hw, 4, MAC_REG_RBRDU);
+                }
+                else {
+                    CSR_WRITE_2(&pInfo->hw, wCurrDeltaRBRDU, MAC_REG_RBRDU);
+                }
+            }
+            else {
+                CSR_WRITE_2(&pInfo->hw, 4, MAC_REG_RBRDU);
+            }
         }
 
         pInfo->dev->last_rx = jiffies;
@@ -1047,13 +1127,20 @@ static BOOL velocity_alloc_rx_buf(PVELOCITY_INFO pInfo, int idx) {
         return FALSE;
 
     ASSERT(pRDInfo->skb);
-    skb_reserve(pRDInfo->skb, 64 - ((unsigned long)pRDInfo->skb->tail & 63));
     pRDInfo->skb->dev = pInfo->dev;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,22)
+    skb_reserve(pRDInfo->skb, 64 - ((unsigned long)skb_tail_pointer(pRDInfo->skb) & 63));
+    pRDInfo->skb_dma=
+        pci_map_single(pInfo->pcid, skb_tail_pointer(pRDInfo->skb), pInfo->hw.rx_buf_sz,
+            PCI_DMA_FROMDEVICE);
+#else
+    skb_reserve(pRDInfo->skb, 64 - ((unsigned long)pRDInfo->skb->tail & 63));
     pRDInfo->skb_dma=
         pci_map_single(pInfo->pcid, pRDInfo->skb->tail, pInfo->hw.rx_buf_sz,
             PCI_DMA_FROMDEVICE);
+#endif
     *((PU32)&(pRD->rdesc0)) = 0;
-    
+
     VELOCITY_SET_RD_BUFFER_SIZE(pRD, pInfo->hw.rx_buf_sz);
     pRD->rdesc3 |= cpu_to_le32(RDESC3_INTCTL);
     pRD->dwBufAddrLo = cpu_to_le32(pRDInfo->skb_dma);
@@ -1154,27 +1241,33 @@ static void velocity_error(PVELOCITY_INFO pInfo, int status) {
             // enable it in fullduplex mode
             if (pInfo->hw.byRevId < REV_ID_VT3216_A0) {
             	if (pInfo->hw.mii_status | VELOCITY_DUPLEX_FULL)
-            		BYTE_REG_BITS_ON(&pInfo->hw, TCR_TB2BDIS, MAC_REG_TCR);
-				else
-					BYTE_REG_BITS_OFF(&pInfo->hw, TCR_TB2BDIS, MAC_REG_TCR);
-			}
-
-			// only enable CD heart beat counter in 10HD mode
-            if (!(pInfo->hw.mii_status & VELOCITY_DUPLEX_FULL) && (pInfo->hw.mii_status & VELOCITY_SPEED_10)) {
-                BYTE_REG_BITS_OFF(&pInfo->hw, TESTCFG_HBDIS, MAC_REG_TESTCFG);
-            }
-            else {
-                BYTE_REG_BITS_ON(&pInfo->hw, TESTCFG_HBDIS, MAC_REG_TESTCFG);
+                    BYTE_REG_BITS_ON(&pInfo->hw, TCR_TB2BDIS, MAC_REG_TCR);
+                else
+                    BYTE_REG_BITS_OFF(&pInfo->hw, TCR_TB2BDIS, MAC_REG_TCR);
             }
 
+            /*
+             * only enable CD heart beat counter in 10HD mode
+             * This PATCH is for VT3119/VT3216
+             */
+            if (pInfo->hw.byRevId < REV_ID_VT3284_A0) {
+                if (!(pInfo->hw.mii_status & VELOCITY_DUPLEX_FULL) && (pInfo->hw.mii_status & VELOCITY_SPEED_10))
+                    BYTE_REG_BITS_OFF(&pInfo->hw, TESTCFG_HBDIS, MAC_REG_TESTCFG);
+                else
+                    BYTE_REG_BITS_ON(&pInfo->hw, TESTCFG_HBDIS, MAC_REG_TESTCFG);
+            }
             //--------------------------------------------------------
             // [1.18] Adaptive Interrupt
             if (pInfo->hw.byRevId >= REV_ID_VT3216_A0) {
-                if ( (pInfo->hw.mii_status & VELOCITY_SPEED_1000) ||
-                     (pInfo->hw.mii_status & VELOCITY_SPEED_100) )
-                {
-                    CSR_WRITE_1(&pInfo->hw, pInfo->hw.sOpts.txque_timer, MAC_REG_TQETMR);
-                    CSR_WRITE_1(&pInfo->hw, pInfo->hw.sOpts.rxque_timer, MAC_REG_RQETMR);
+                if (pInfo->hw.mii_status & VELOCITY_SPEED_1000) {
+                    if (pInfo->hw.flags & VELOCITY_FLAGS_AI) {
+                        CSR_WRITE_1(&pInfo->hw, pInfo->hw.sOpts.txque_timer, MAC_REG_TQETMR);
+                        CSR_WRITE_1(&pInfo->hw, pInfo->hw.sOpts.rxque_timer, MAC_REG_RQETMR);
+                    }
+                    else {
+                        CSR_WRITE_1(&pInfo->hw, 0x00, MAC_REG_TQETMR);
+                        CSR_WRITE_1(&pInfo->hw, 0x00, MAC_REG_RQETMR);
+                    }
                 }
                 else {
                     CSR_WRITE_1(&pInfo->hw, 0x00, MAC_REG_TQETMR);
@@ -1245,7 +1338,8 @@ static void velocity_free_tx_buf(PVELOCITY_INFO pInfo, PVELOCITY_TD_INFO pTDInfo
 }
 
 static int  velocity_open(struct net_device *dev) {
-    PVELOCITY_INFO pInfo=(PVELOCITY_INFO) dev->priv;
+    //PVELOCITY_INFO pInfo=(PVELOCITY_INFO) dev->priv;
+    PVELOCITY_INFO pInfo=netdev_priv(dev);
     int i;
 
     pInfo->hw.rx_buf_sz=(dev->mtu <= 1504 ? PKT_BUF_SZ : dev->mtu + 32);
@@ -1263,7 +1357,11 @@ static int  velocity_open(struct net_device *dev) {
 
     velocity_init_adapter(pInfo, VELOCITY_INIT_COLD);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,19)
+    i=request_irq(pInfo->pcid->irq, (irq_handler_t)velocity_intr, IRQF_SHARED, dev->name, dev);
+#else
     i=request_irq(pInfo->pcid->irq, &velocity_intr, SA_SHIRQ, dev->name, dev);
+#endif
 
     if (i)
         return i;
@@ -1278,11 +1376,15 @@ static int  velocity_open(struct net_device *dev) {
     MOD_INC_USE_COUNT;
 #endif
 
+#ifdef CONFIG_PROC_FS
+    velocity_create_proc_entry(pInfo);
+#endif
     return 0;
 }
 
 static int  velocity_change_mtu(struct net_device *dev,int new_mtu) {
-    PVELOCITY_INFO pInfo = (PVELOCITY_INFO)dev->priv;
+    //PVELOCITY_INFO pInfo = (PVELOCITY_INFO)dev->priv;
+    PVELOCITY_INFO pInfo = netdev_priv(dev);
     unsigned long    flags;
     int     oldmtu = dev->mtu;
 
@@ -1327,6 +1429,10 @@ static int  velocity_change_mtu(struct net_device *dev,int new_mtu) {
 
 static int  velocity_close(struct net_device *dev) {
     PVELOCITY_INFO pInfo= netdev_priv(dev);
+
+#ifdef CONFIG_PROC_FS
+    velocity_free_proc_entry(pInfo);
+    #endif
 
     netif_stop_queue(dev);
 
@@ -1387,12 +1493,16 @@ static int velocity_xmit(struct sk_buff *skb, struct net_device *dev)
     if (skb->len < ETH_ZLEN) {
         // packet size is less than 60 bytes
 
+#ifndef SUSE_10_2
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,18)
         skb_linearize(skb);
 #else
         skb_linearize(skb, GFP_ATOMIC);
 #endif
-        
+#else
+	skb_linearize(skb);
+#endif
+
         memcpy(pTDInfo->buf, skb->data, skb->len);
         VELOCITY_SET_TD_PACKET_SIZE(pTD, ETH_ZLEN);
 
@@ -1484,28 +1594,40 @@ static int velocity_xmit(struct sk_buff *skb, struct net_device *dev)
         VELOCITY_SET_TD_CMDZ(pTD, 2);
     }
 
-    if (pInfo->hw.flags & VELOCITY_FLAGS_TAGGING) {
+    if (pInfo->hw.sOpts.tagging == 1) {
         // clear CFI and priority
         pTD->tdesc1 &= cpu_to_le32(0xffff0000L);
         VELOCITY_SET_TD_VLANID(pTD, pInfo->hw.sOpts.vid & 0xfff);
         pTD->tdesc1 |= cpu_to_le32(TCR_VETAG);
     }
 
+
 #ifdef VELOCITY_TX_CSUM_SUPPORT
-    if ( (pInfo->hw.flags & VELOCITY_FLAGS_TX_CSUM) && (skb->ip_summed == CHECKSUM_HW) ) {
-        struct iphdr* ip = skb->nh.iph;
+    if (pInfo->hw.flags & VELOCITY_FLAGS_TX_CSUM) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,19)
+        if (skb->ip_summed == CHECKSUM_PARTIAL) {
+#else
+        if (skb->ip_summed == CHECKSUM_HW) {
+#endif
 
-        if (ip->protocol == IPPROTO_TCP) {
-            // request TCP checksum calculation
-            pTD->tdesc1 |= cpu_to_le32(TCR_TCPCK);
-        }
-        else if (ip->protocol == IPPROTO_UDP) {
-            // request UDP checksum calculation
-            pTD->tdesc1 |= cpu_to_le32(TCR_UDPCK);
-        }
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,22)
+            struct iphdr* ip = (struct iphdr*)skb_network_header(skb);
+#else
+            struct iphdr* ip = skb->nh.iph;
+#endif
 
-        // request IP checksum calculation
-        pTD->tdesc1 |= cpu_to_le32(TCR_IPCK);
+            if (ip->protocol == IPPROTO_TCP) {
+                // request TCP checksum calculation
+               pTD->tdesc1 |= cpu_to_le32(TCR_TCPCK);
+            }
+            else if (ip->protocol == IPPROTO_UDP) {
+                // request UDP checksum calculation
+                pTD->tdesc1 |= cpu_to_le32(TCR_UDPCK);
+            }
+
+            // request IP checksum calculation
+            pTD->tdesc1 |= cpu_to_le32(TCR_IPCK);
+        }
     }
 #endif
 
@@ -1598,7 +1720,11 @@ static void velocity_set_multi(struct net_device *dev)
     PVELOCITY_INFO      pInfo       =   netdev_priv(dev);
     U8                  rx_mode;
     int                 i;
-    struct dev_mc_list  *mclist;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,34)
+    struct netdev_hw_addr *ha;
+#else
+	struct dev_mc_list  *mclist;
+#endif
 
     if (dev->flags & IFF_PROMISC) {         // Set promiscuous.
         // Unconditionally log net taps.
@@ -1606,7 +1732,11 @@ static void velocity_set_multi(struct net_device *dev)
         velocity_set_all_multi(&pInfo->hw);
         rx_mode = (RCR_AM|RCR_AB|RCR_PROM);
     }
-    else if ((dev->mc_count > pInfo->hw.multicast_limit) ||  (dev->flags & IFF_ALLMULTI)) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,34)
+    else if ((netdev_mc_count(dev) > pInfo->hw.multicast_limit) ||  (dev->flags & IFF_ALLMULTI)) {
+#else
+	else if ((dev->mc_count > pInfo->hw.multicast_limit) ||  (dev->flags & IFF_ALLMULTI)) {
+#endif
         velocity_set_all_multi(&pInfo->hw);
         rx_mode = (RCR_AM|RCR_AB);
     }
@@ -1618,10 +1748,19 @@ static void velocity_set_multi(struct net_device *dev)
 
         mac_get_cam_mask(&pInfo->hw,pInfo->hw.abyMCAMMask,VELOCITY_MULTICAST_CAM);
 
-        for (i = 0, mclist = dev->mc_list; mclist && i < dev->mc_count; i++, mclist = mclist->next) {
-            mac_set_cam(&pInfo->hw,i+offset,mclist->dmi_addr,VELOCITY_MULTICAST_CAM);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,34)
+		i = 0;
+        netdev_for_each_mc_addr(ha, dev) {
+            mac_set_cam(&pInfo->hw,i+offset,ha->addr,VELOCITY_MULTICAST_CAM);
             pInfo->hw.abyMCAMMask[(offset+i)/8]|=1<<((offset+i) & 7);
+			i++;
         }
+#else
+		for (i = 0, mclist = dev->mc_list; mclist && i < dev->mc_count; i++, mclist = mclist->next) {
+			mac_set_cam(&pInfo->hw,i+offset,mclist->dmi_addr,VELOCITY_MULTICAST_CAM);
+			pInfo->hw.abyMCAMMask[(offset+i)/8]|=1<<((offset+i) & 7);
+}
+#endif
 
         mac_set_cam_mask(&pInfo->hw,pInfo->hw.abyMCAMMask,VELOCITY_MULTICAST_CAM);
 
@@ -1662,9 +1801,11 @@ static int velocity_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
     switch(cmd) {
 
 #ifdef VELOCITY_ETHTOOL_IOCTL_SUPPORT
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,4,25)
     case SIOCETHTOOL:
         return velocity_ethtool_ioctl(dev, rq);
         break;
+#endif
 #endif
 
 #ifdef VELOCITY_MII_IOCTL_SUPPORT
@@ -1703,7 +1844,11 @@ static struct pci_driver velocity_driver = {
 static int __init velocity_init_module(void)
 {
     int ret;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,22)
+    ret=pci_register_driver(&velocity_driver);
+#else
     ret=pci_module_init(&velocity_driver);
+#endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,4,9)
 #ifdef CONFIG_PM
@@ -1714,6 +1859,9 @@ static int __init velocity_init_module(void)
 #endif
 #endif
 
+#ifdef CONFIG_PROC_FS
+    velocity_init_proc_fs();
+#endif
     return ret;
 }
 
@@ -1726,6 +1874,10 @@ static void __exit velocity_cleanup_module(void)
 #endif
 #endif
     pci_unregister_driver(&velocity_driver);
+
+#ifdef CONFIG_PROC_FS
+    velocity_free_proc_fs();
+#endif
 }
 
 module_init(velocity_init_module);
@@ -1736,95 +1888,25 @@ module_exit(velocity_cleanup_module);
 *    ETHTOOL ioctl support routine
 ****************************************************************************/
 #ifdef VELOCITY_ETHTOOL_IOCTL_SUPPORT
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,4,25)
 static int velocity_ethtool_ioctl(struct net_device* dev, struct ifreq* ifr)
 {
     struct ethtool_cmd  ecmd;
     PVELOCITY_INFO      pInfo = netdev_priv(dev);
-    //PMAC_REGS           pMacRegs = pInfo->pMacRegs;
 
     if (copy_from_user(&ecmd, ifr->ifr_data, sizeof(ecmd.cmd)))
         return -EFAULT;
 
     switch (ecmd.cmd) {
     case ETHTOOL_GSET: {
-        U32 status=check_connectiontype(&pInfo->hw);
-        ecmd.supported=
-            SUPPORTED_TP|SUPPORTED_Autoneg|SUPPORTED_10baseT_Half|SUPPORTED_10baseT_Full
-            |SUPPORTED_100baseT_Half|SUPPORTED_100baseT_Full|SUPPORTED_1000baseT_Half|SUPPORTED_1000baseT_Full;
-
-        if (status & VELOCITY_SPEED_100)
-            ecmd.speed=SPEED_100;
-        else
-            ecmd.speed=SPEED_10;
-
-        ecmd.autoneg=(status & VELOCITY_AUTONEG_ENABLE) ? AUTONEG_ENABLE : AUTONEG_DISABLE;
-        ecmd.port=PORT_TP;
-        ecmd.transceiver=XCVR_INTERNAL;
-        ecmd.phy_address=CSR_READ_1(&pInfo->hw, MAC_REG_MIIADR) & 0x1F;
-
-        if (status & VELOCITY_DUPLEX_FULL)
-            ecmd.duplex=DUPLEX_FULL;
-        else
-            ecmd.duplex=DUPLEX_HALF;
-
+        velocity_ethtool_gset(dev, &ecmd);
         if(copy_to_user(ifr->ifr_data, &ecmd, sizeof(ecmd)))
-               return -EFAULT;
-
+            return -EFAULT;
         }
         break;
 
     case ETHTOOL_SSET: {
-        U32 curr_status;
-        U32 new_status=0;
-        if (!capable(CAP_NET_ADMIN)){
-                return -EPERM;
-        }
-
-        if (copy_from_user(&ecmd, ifr->ifr_data, sizeof(ecmd)))
-               return -EFAULT;
-
-        curr_status=check_connectiontype(&pInfo->hw);
-        curr_status&=(~VELOCITY_LINK_FAIL);
-
-        new_status|=((ecmd.autoneg) ? VELOCITY_AUTONEG_ENABLE : 0);
-        new_status|=((ecmd.speed==SPEED_100) ? VELOCITY_SPEED_100 : 0);
-        new_status|=((ecmd.speed==SPEED_10) ? VELOCITY_SPEED_10 : 0);
-        new_status|=((ecmd.duplex==DUPLEX_FULL) ? VELOCITY_DUPLEX_FULL : 0);
-
-        if ((new_status & VELOCITY_AUTONEG_ENABLE) &&
-            (new_status!=(curr_status| VELOCITY_AUTONEG_ENABLE)))
-            return -EINVAL;
-
-        //------------------------------------------------------------
-        // [1.18] Save ConnectionType Info when via Ethertool
-        if (new_status & VELOCITY_AUTONEG_ENABLE) {
-            pInfo->hw.sOpts.spd_dpx = SPD_DPX_AUTO; // 0
-        }
-        else {
-            if (new_status & VELOCITY_SPEED_100) {
-                if (new_status & VELOCITY_DUPLEX_FULL) {
-                    // 100-Full
-                    pInfo->hw.sOpts.spd_dpx = SPD_DPX_100_FULL; // 2
-                }
-                else {
-                    // 100-Half
-                    pInfo->hw.sOpts.spd_dpx = SPD_DPX_100_HALF; // 1
-                }
-            }
-            else {
-                if (new_status & VELOCITY_DUPLEX_FULL) {
-                    // 10-Full
-                    pInfo->hw.sOpts.spd_dpx = SPD_DPX_10_FULL; // 4
-                }
-                else {
-                    // 10-Half
-                    pInfo->hw.sOpts.spd_dpx = SPD_DPX_10_HALF; // 3
-                }
-            }
-        }
-        //------------------------------------------------------------
-
-        velocity_set_media_mode(&pInfo->hw,pInfo->hw.sOpts.spd_dpx);
+	velocity_ethtool_sset(dev, &ecmd);
         }
         break;
 
@@ -1833,7 +1915,7 @@ static int velocity_ethtool_ioctl(struct net_device* dev, struct ifreq* ifr)
         struct ethtool_value    info;
         memset((void *)&info, 0, sizeof(info));
         info.cmd = ETHTOOL_GLINK;
-        info.data = BYTE_REG_BITS_IS_ON(&pInfo->hw, PHYSR0_LINKGD, MAC_REG_PHYSR0) ? FALSE : TRUE;
+        info.data = velocity_ethtool_glink(dev);
 
         if (copy_to_user(ifr->ifr_data, &info, sizeof(info)))
             return -EFAULT;
@@ -1844,13 +1926,8 @@ static int velocity_ethtool_ioctl(struct net_device* dev, struct ifreq* ifr)
 #ifdef ETHTOOL_GDRVINFO
     case ETHTOOL_GDRVINFO: {
         struct ethtool_drvinfo  info = {ETHTOOL_GDRVINFO};
-        strcpy(info.driver, VELOCITY_NAME);
-        strcpy(info.version, VELOCITY_VERSION);
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,11)
-        strcpy(info.bus_info, pci_name(pInfo->pcid));
-#else
-        strcpy(info.bus_info,pInfo->pcid->slot_name);
-#endif
+	memset(&info, 0, sizeof(info));
+	velocity_ethtool_gdrvinfo(dev, &info);
         if (copy_to_user(ifr->ifr_data, &info, sizeof(info)))
             return -EFAULT;
         }
@@ -1860,19 +1937,8 @@ static int velocity_ethtool_ioctl(struct net_device* dev, struct ifreq* ifr)
 #ifdef ETHTOOL_GWOL
     case ETHTOOL_GWOL: {
         struct ethtool_wolinfo  wol = {ETHTOOL_GWOL};
-
         memset(&wol, 0, sizeof(wol));
-
-        wol.supported = WAKE_PHY | WAKE_MAGIC | WAKE_UCAST | WAKE_ARP;
-        wol.wolopts |= WAKE_MAGIC;
-
-        if (pInfo->wol_opts & VELOCITY_WOL_UCAST)
-            wol.wolopts |= WAKE_UCAST;
-        if (pInfo->wol_opts & VELOCITY_WOL_ARP)
-            wol.wolopts |= WAKE_ARP;
-
-        memcpy(&wol.sopass, pInfo->wol_passwd, 6);
-
+	velocity_ethtool_gwol(dev, &wol);
         if (copy_to_user(ifr->ifr_data, &wol, sizeof(wol)))
             return -EFAULT;
     }
@@ -1882,31 +1948,12 @@ static int velocity_ethtool_ioctl(struct net_device* dev, struct ifreq* ifr)
 #ifdef ETHTOOL_SWOL
     case ETHTOOL_SWOL: {
         struct ethtool_wolinfo  wol;
-
+        memset(&wol, 0, sizeof(wol));
         if (copy_from_user(&wol, ifr->ifr_data, sizeof(wol)))
             return -EFAULT;
 
-        if (!(wol.wolopts & (WAKE_PHY|WAKE_MAGIC|WAKE_UCAST|WAKE_ARP)))
+	if(velocity_ethtool_swol(dev, &wol) != 0)
             return -EFAULT;
-
-        pInfo->wol_opts = VELOCITY_WOL_MAGIC;
-
-        if (wol.wolopts & WAKE_MAGIC) {
-            pInfo->wol_opts |= VELOCITY_WOL_MAGIC;
-            pInfo->hw.flags |= VELOCITY_FLAGS_WOL_ENABLED;
-        }
-
-        if (wol.wolopts & WAKE_UCAST) {
-            pInfo->wol_opts |= VELOCITY_WOL_UCAST;
-            pInfo->hw.flags |= VELOCITY_FLAGS_WOL_ENABLED;
-        }
-
-        if (wol.wolopts & WAKE_ARP) {
-            pInfo->wol_opts |= VELOCITY_WOL_ARP;
-            pInfo->hw.flags |= VELOCITY_FLAGS_WOL_ENABLED;
-        }
-
-        memcpy(pInfo->wol_passwd,wol.sopass,6);
 
         if (copy_to_user(ifr->ifr_data, &wol, sizeof(wol)))
             return -EFAULT;
@@ -1917,8 +1964,8 @@ static int velocity_ethtool_ioctl(struct net_device* dev, struct ifreq* ifr)
 #ifdef ETHTOOL_GMSGLVL
     case ETHTOOL_GMSGLVL: {
         struct ethtool_value    edata = {ETHTOOL_GMSGLVL};
+        edata.data = velocity_ethtool_gmsglvl(dev);
 
-        edata.data = msglevel;
         if (copy_to_user(ifr->ifr_data, &edata, sizeof(edata)))
             return -EFAULT;
     }
@@ -1931,7 +1978,7 @@ static int velocity_ethtool_ioctl(struct net_device* dev, struct ifreq* ifr)
 
         if (copy_from_user(&edata, ifr->ifr_data, sizeof(edata)))
             return -EFAULT;
-        msglevel = edata.data;
+	velocity_ethtool_smsglvl(dev, edata.data);
     }
     break;
 #endif
@@ -1942,6 +1989,225 @@ static int velocity_ethtool_ioctl(struct net_device* dev, struct ifreq* ifr)
 
     return 0;
 }
+#else
+static struct ethtool_ops velocity_ethtool_ops = {
+    .get_drvinfo    =   velocity_ethtool_gdrvinfo,
+    .get_settings    =   velocity_ethtool_gset,
+    .set_settings    =   velocity_ethtool_sset,
+    .get_link       =   velocity_ethtool_glink,
+    .get_msglevel   =   velocity_ethtool_gmsglvl,
+    .set_msglevel   =   velocity_ethtool_smsglvl,
+    .get_wol        =   velocity_ethtool_gwol,
+    .set_wol        =   velocity_ethtool_swol,
+};
+#endif
+
+static int velocity_ethtool_gset(struct net_device*  dev, struct ethtool_cmd *ecmd)
+{
+    PVELOCITY_INFO pInfo = netdev_priv(dev);
+    U32 status=check_connectiontype(&pInfo->hw);
+
+    ecmd->supported = SUPPORTED_TP  |
+                    SUPPORTED_Autoneg   |
+                    SUPPORTED_10baseT_Half  |
+                    SUPPORTED_10baseT_Full  |
+                    SUPPORTED_100baseT_Half  |
+                    SUPPORTED_100baseT_Full |
+                    SUPPORTED_1000baseT_Full;
+
+    ecmd->autoneg = AUTONEG_ENABLE;
+    ecmd->advertising |= ADVERTISED_Autoneg;
+    ecmd->advertising |= ADVERTISED_TP;
+
+    if (pInfo->hw.sOpts.spd_dpx == SPD_DPX_AUTO) {
+        ecmd->advertising |= (ADVERTISED_10baseT_Half | ADVERTISED_10baseT_Full |
+                              ADVERTISED_100baseT_Half | ADVERTISED_100baseT_Full |
+                              ADVERTISED_1000baseT_Full);
+    }
+    else {
+        switch(pInfo->hw.sOpts.spd_dpx) {
+        case SPD_DPX_1000_FULL:
+            ecmd->advertising |= ADVERTISED_1000baseT_Full;
+            break;
+        case SPD_DPX_100_HALF:
+            ecmd->advertising |= ADVERTISED_100baseT_Half;
+            break;
+        case SPD_DPX_100_FULL:
+            ecmd->advertising |= ADVERTISED_100baseT_Full;
+            break;
+        case SPD_DPX_10_HALF:
+            ecmd->advertising |= ADVERTISED_10baseT_Half;
+            break;
+        case SPD_DPX_10_FULL:
+            ecmd->advertising |= ADVERTISED_10baseT_Full;
+            break;
+        default:
+            break;
+        }
+    }
+
+    if(status & VELOCITY_LINK_FAIL) {
+        ecmd->speed = -1;
+        ecmd->duplex = -1;
+    }
+    else {
+        if(status & VELOCITY_SPEED_1000)
+           ecmd->speed = SPEED_1000;
+        else
+           ecmd->speed = (status & VELOCITY_SPEED_100) ? SPEED_100 : SPEED_10;
+
+        ecmd->duplex = (status & VELOCITY_DUPLEX_FULL) ? DUPLEX_FULL : DUPLEX_HALF;
+    }
+
+    ecmd->port = PORT_TP;
+    ecmd->transceiver = XCVR_INTERNAL;
+    ecmd->phy_address = CSR_READ_1(&pInfo->hw, MAC_REG_MIIADR) & 0x1F;
+
+    return 0;
+}
+
+static int velocity_ethtool_sset(struct net_device*  dev, struct ethtool_cmd *ecmd)
+{
+    PVELOCITY_INFO pInfo = netdev_priv(dev);
+    U32 advertising;
+    U32 diff_status;
+    U32 curr_status;
+    U32 new_status=0;
+
+    if (!capable(CAP_NET_ADMIN)) {
+        return -EPERM;
+    }
+
+    curr_status=check_connectiontype(&pInfo->hw);
+    curr_status&=(~VELOCITY_LINK_FAIL);
+
+    new_status|=((ecmd->autoneg) ? VELOCITY_AUTONEG_ENABLE : 0);
+    new_status|=((ecmd->speed==SPEED_1000) ? VELOCITY_SPEED_1000 : 0);
+    new_status|=((ecmd->speed==SPEED_100) ? VELOCITY_SPEED_100 : 0);
+    new_status|=((ecmd->speed==SPEED_10) ? VELOCITY_SPEED_10 : 0);
+    new_status|=((ecmd->duplex==DUPLEX_FULL) ? VELOCITY_DUPLEX_FULL : 0);
+
+    if (!(new_status & VELOCITY_AUTONEG_ENABLE))
+        return -EOPNOTSUPP;
+
+    /* preserve the difference from the status */
+    diff_status = new_status ^ curr_status;
+
+    /* filter un-supported mode */
+    if (ecmd->advertising & ~(ADVERTISED_10baseT_Half | ADVERTISED_10baseT_Full |
+                              ADVERTISED_100baseT_Half | ADVERTISED_100baseT_Full |
+                              ADVERTISED_1000baseT_Full |
+                              ADVERTISED_Autoneg | ADVERTISED_TP))
+        return -EOPNOTSUPP;
+
+    advertising = ecmd->advertising & (ADVERTISED_10baseT_Half | ADVERTISED_10baseT_Full |
+                                  ADVERTISED_100baseT_Half | ADVERTISED_100baseT_Full |
+                                  ADVERTISED_1000baseT_Full);
+
+    if (advertising == (ADVERTISED_10baseT_Half | ADVERTISED_10baseT_Full |
+                        ADVERTISED_100baseT_Half | ADVERTISED_100baseT_Full |
+                                                    ADVERTISED_1000baseT_Full)) {
+
+        /* we don't provide changing speed or duplex mode with auto negotiation */
+        if (diff_status & (VELOCITY_SPEED_1000 | VELOCITY_SPEED_100 | VELOCITY_SPEED_10))
+            return -EINVAL;
+
+        pInfo->hw.sOpts.spd_dpx = SPD_DPX_AUTO;
+    }
+    else{
+        if ((new_status & VELOCITY_SPEED_1000) && (new_status & VELOCITY_DUPLEX_FULL)) {
+            pInfo->hw.sOpts.spd_dpx = SPD_DPX_1000_FULL;
+        }
+        else if (new_status & VELOCITY_SPEED_100) {
+            pInfo->hw.sOpts.spd_dpx = (new_status & VELOCITY_DUPLEX_FULL) ? SPD_DPX_100_FULL : SPD_DPX_100_HALF;
+        }
+        else if (new_status & VELOCITY_SPEED_10){
+            pInfo->hw.sOpts.spd_dpx = (new_status & VELOCITY_DUPLEX_FULL) ? SPD_DPX_10_FULL : SPD_DPX_10_HALF;
+        }
+        else {
+            return -EOPNOTSUPP;
+        }
+    }
+
+    velocity_set_media_mode(&pInfo->hw, pInfo->hw.sOpts.spd_dpx);
+
+    return 0;
+}
+
+static u32 velocity_ethtool_glink(struct net_device*  dev)
+{
+    PVELOCITY_INFO pInfo = netdev_priv(dev);
+    int    link_ok = BYTE_REG_BITS_IS_ON(&pInfo->hw, PHYSR0_LINKGD,MAC_REG_PHYSR0) ? 1 : 0;
+    return link_ok;
+}
+
+static void velocity_ethtool_gdrvinfo(struct net_device*  dev, struct ethtool_drvinfo  *info)
+{
+    PVELOCITY_INFO pInfo = netdev_priv(dev);
+    strcpy(info->driver, VELOCITY_NAME);
+    strcpy(info->version, VELOCITY_VERSION);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,11)
+    strcpy(info->bus_info, pci_name(pInfo->pcid));
+#else
+    strcpy(info->bus_info, pInfo->pcid->slot_name);
+#endif
+}
+
+static void velocity_ethtool_gwol(struct net_device*  dev, struct ethtool_wolinfo *wol)
+{
+    PVELOCITY_INFO pInfo = netdev_priv(dev);
+
+    wol->supported=WAKE_PHY | WAKE_MAGIC | WAKE_UCAST | WAKE_ARP;
+    wol->wolopts|=WAKE_MAGIC;
+    if (pInfo->wol_opts & VELOCITY_WOL_PHY)
+        wol->wolopts|=WAKE_PHY;
+    if (pInfo->wol_opts & VELOCITY_WOL_UCAST)
+        wol->wolopts|=WAKE_UCAST;
+    if (pInfo->wol_opts & VELOCITY_WOL_ARP)
+        wol->wolopts|=WAKE_ARP;
+    memcpy(&wol->sopass,pInfo->wol_passwd,6);
+}
+
+static int velocity_ethtool_swol(struct net_device*  dev, struct ethtool_wolinfo *wol)
+{
+    PVELOCITY_INFO pInfo = netdev_priv(dev);
+
+    if (!(wol->wolopts & (WAKE_PHY|WAKE_MAGIC|WAKE_UCAST|WAKE_ARP)))
+        return -EFAULT;
+
+    pInfo->wol_opts=VELOCITY_WOL_MAGIC;
+    if (wol->wolopts & WAKE_PHY) {
+        pInfo->wol_opts|=VELOCITY_WOL_PHY;
+        pInfo->hw.flags |=VELOCITY_FLAGS_WOL_ENABLED;
+    }
+    if (wol->wolopts & WAKE_MAGIC) {
+        pInfo->wol_opts|=VELOCITY_WOL_MAGIC;
+        pInfo->hw.flags |=VELOCITY_FLAGS_WOL_ENABLED;
+    }
+    if (wol->wolopts & WAKE_UCAST) {
+        pInfo->wol_opts|=VELOCITY_WOL_UCAST;
+        pInfo->hw.flags |=VELOCITY_FLAGS_WOL_ENABLED;
+    }
+    if (wol->wolopts & WAKE_ARP) {
+        pInfo->wol_opts|=VELOCITY_WOL_ARP;
+        pInfo->hw.flags |=VELOCITY_FLAGS_WOL_ENABLED;
+    }
+    memcpy(pInfo->wol_passwd,wol->sopass,6);
+
+    return 0;
+}
+
+static u32 velocity_ethtool_gmsglvl(struct net_device*  dev)
+{
+    return msglevel;
+}
+
+static void velocity_ethtool_smsglvl(struct net_device*  dev, u32 value)
+{
+    msglevel = value;
+}
+
+
 #endif // VELOCITY_ETHTOOL_IOCTL_SUPPORT
 
 
@@ -2055,9 +2321,9 @@ velocity_suspend(struct pci_dev *pcid, u32 state)
         power_status = pci_set_power_state(pcid, pci_choose_state(pcid, state));
 #else
         power_status = pci_set_power_state(pcid, state);
-#endif        
+#endif
     }
-    
+
 #else  // !ETHTOOL_GWOL
     pci_disable_device(pcid);
 
@@ -2066,7 +2332,7 @@ velocity_suspend(struct pci_dev *pcid, u32 state)
 #else
     power_status = pci_set_power_state(pcid, state);
 #endif
-    
+
 #endif
 
     spin_unlock_irqrestore(&pInfo->lock, flags);

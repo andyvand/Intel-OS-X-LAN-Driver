@@ -58,6 +58,7 @@
 #include <linux/wait.h>
 #include <asm/io.h>
 #include <linux/if.h>
+#include <linux/utsname.h>
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,18)
 #include <linux/config.h>
@@ -100,7 +101,6 @@
 #undef VELOCITY_TX_CSUM_SUPPORT
 #endif
 
-
 #if 0
 #ifdef NETIF_F_TSO
 #include <net/checksum.h>
@@ -125,6 +125,7 @@
 #include "velocity_wol.h"
 #include "velocity_mii.h"
 #include "velocity_dbg.h"
+
 
 // flags for driver status
 #define VELOCITY_FLAGS_OPENED       0x00010000UL
@@ -236,6 +237,7 @@ typedef struct __velocity_info {
 #else
     struct __velocity_info*     next;
     struct __velocity_info*     prev;
+
     struct pci_dev*             pcid;
     struct net_device*          dev;
     struct net_device_stats     stats;

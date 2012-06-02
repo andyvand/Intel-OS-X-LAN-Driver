@@ -77,8 +77,8 @@ typedef struct __velocity_proc_entry {
 } VELOCITY_PROC_ENTRY, *PVELOCITY_PROC_ENTRY;
 
 
-BOOL velocity_init_proc_fs(struct __velocity_info* pInfo);
-void velocity_free_proc_fs(struct __velocity_info* pInfo);
+BOOL velocity_init_proc_fs(void);
+void velocity_free_proc_fs(void);
 
 BOOL velocity_create_proc_entry(struct __velocity_info* pInfo);
 void velocity_free_proc_entry(struct __velocity_info* pInfo);

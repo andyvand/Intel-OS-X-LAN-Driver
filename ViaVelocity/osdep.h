@@ -177,8 +177,7 @@ uint8_t OSReadInt8(const volatile void* base, uintptr_t byteOffset)
 
 #define TX_QUEUE_NO         4
 
-//#define PKT_BUF_SZ          1540
-#define PKT_BUF_SZ          2048
+#define PKT_BUF_SZ          1540
 
 #ifndef	__cplusplus
 #define	IOBufferMemoryDescriptor	void

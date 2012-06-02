@@ -154,9 +154,7 @@ struct em_osdep
 
 #define MALLOC(x,y)         kmalloc((x),(y))
 
-#define PKT_BUF_SZ          2048	//
-//#define PKT_BUF_SZ          1540
-
+#define PKT_BUF_SZ          1540
 
 #endif
 

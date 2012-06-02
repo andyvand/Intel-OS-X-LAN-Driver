@@ -19,9 +19,9 @@
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>1.30.0</string>
+	<string>1.43.0</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.30.0</string>
+	<string>1.43.0</string>
 	<key>IOKitPersonalities</key>
 	<dict>
 		<key>ViaVelocity</key>
@@ -44,6 +44,8 @@
 			<integer>252</integer>
 			<key>TX_DESC</key>
 			<integer>256</integer>
+			<key>TAGGING</key>
+			<integer>1</integer>
 			<key>FLOW_CNTL</key>
 			<integer>1</integer>
 			<key>WOL</key>

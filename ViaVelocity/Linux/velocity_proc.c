@@ -47,7 +47,8 @@ enum _proc_conf_type {
     CONF_ENABLE_TAG,  // 7
     CONF_VID_SETTING, // 8
     CONF_VAL_PKT,     // 9
-    CONF_ENABLE_MRDPL // 10
+    CONF_ENABLE_MRDPL,// 10
+    CONF_ENABLE_AI    // 11
 } PROC_CONF_TYPE, *PPROC_CONF_TYPE;
 
 static const VELOCITY_PROC_ENTRY velocity_proc_tab_conf[] = {
@@ -60,6 +61,7 @@ static const VELOCITY_PROC_ENTRY velocity_proc_tab_conf[] = {
 {"ValPktLen",      VELOCITY_PROC_FILE, FunConfRead, FunConfWrite, CONF_VAL_PKT,      NULL, 0},
 {"wol_opts",       VELOCITY_PROC_FILE, FunConfRead, FunConfWrite, CONF_WOL_OPTS,     NULL, 0},
 {"EnableMRDPL",    VELOCITY_PROC_FILE, FunConfRead, FunConfWrite, CONF_ENABLE_MRDPL, NULL, 0},
+{"EnableAI",       VELOCITY_PROC_FILE, FunConfRead, FunConfWrite, CONF_ENABLE_AI,    NULL, 0},
 {"enable_tagging", VELOCITY_PROC_FILE, FunConfRead, FunConfWrite, CONF_ENABLE_TAG,   NULL, 0},
 {"VID_setting",    VELOCITY_PROC_FILE, FunConfRead, FunConfWrite, CONF_VID_SETTING,  NULL, 0},
 {"",               VELOCITY_PROC_EOT,  NULL,        NULL,         0,                 NULL}
@@ -126,7 +128,7 @@ static int velocity_proc_read(char *page, char **start, off_t off, int count,
         *eof = 1;
 
     *start = page + off;
-    len -= off;
+   len -= off;
 
     if (len > count)
         len = count;
@@ -199,16 +201,18 @@ static void velocity_delete_proc_tab(PVELOCITY_INFO pInfo,
     if (pEntry==NULL)
         return;
 
+    if (pEntry->siblings)
+        velocity_delete_proc_tab(pInfo, (PVELOCITY_PROC_ENTRY)pEntry->siblings);
+
     if (pEntry->type & VELOCITY_PROC_DIR)
-        velocity_delete_proc_tab(pInfo,(PVELOCITY_PROC_ENTRY) pEntry->childs);
-    else
-        velocity_delete_proc_tab(pInfo,(PVELOCITY_PROC_ENTRY) pEntry->siblings);
+        velocity_delete_proc_tab(pInfo, (PVELOCITY_PROC_ENTRY) pEntry->childs);
+
 
     remove_proc_entry(pEntry->name,pEntry->pOsParent);
     kfree(pEntry);
 }
 
-BOOL velocity_create_proc_entry(PVELOCITY_INFO pInfo) 
+BOOL velocity_create_proc_entry(PVELOCITY_INFO pInfo)
 {
     struct net_device *dev = pInfo->dev;
 
@@ -225,16 +229,16 @@ BOOL velocity_create_proc_entry(PVELOCITY_INFO pInfo)
     return TRUE;
 }
 
-void velocity_free_proc_entry(PVELOCITY_INFO pInfo) 
+void velocity_free_proc_entry(PVELOCITY_INFO pInfo)
 {
     struct net_device *dev = pInfo->dev;
-    
+
     velocity_delete_proc_tab(pInfo, (PVELOCITY_PROC_ENTRY) pInfo->pProcDir->childs);
     remove_proc_entry(dev->name, velocity_dir);
     kfree(pInfo->pProcDir);
 }
 
-BOOL    velocity_init_proc_fs(PVELOCITY_INFO pInfo) {
+BOOL    velocity_init_proc_fs(void) {
     struct proc_dir_entry* ptr;
     int len=strlen(VELOCITY_PROC_DIR_NAME);
 
@@ -260,7 +264,7 @@ BOOL    velocity_init_proc_fs(PVELOCITY_INFO pInfo) {
     return TRUE;
 }
 
-void    velocity_free_proc_fs(PVELOCITY_INFO pInfo) {
+void    velocity_free_proc_fs(void) {
     struct proc_dir_entry*  ptr;
 
 //  remove_proc_entry(pInfo->pProcDir, velocity_dir);
@@ -402,6 +406,8 @@ static int FunConfRead(PVELOCITY_PROC_ENTRY pEntry,char* buf) {
             r=1;
         else if (mii_status & (VELOCITY_SPEED_10))
             r=3;
+        else if (mii_status & (VELOCITY_SPEED_1000|VELOCITY_DUPLEX_FULL))
+            r=5;
         len=sprintf(buf,"%d",r);
         }
         break;
@@ -422,9 +428,12 @@ static int FunConfRead(PVELOCITY_PROC_ENTRY pEntry,char* buf) {
         len=sprintf(buf,"%d",
             (pInfo->hw.flags & VELOCITY_FLAGS_MRDPL) ? 1 : 0);
         break;
-    case CONF_ENABLE_TAG:
+    case CONF_ENABLE_AI:
         len=sprintf(buf,"%d",
-            (pInfo->hw.flags & VELOCITY_FLAGS_TAGGING) ? 1 : 0);
+            (pInfo->hw.flags & VELOCITY_FLAGS_AI) ? 1 : 0);
+        break;
+    case CONF_ENABLE_TAG:
+        len=sprintf(buf,"%d",pInfo->hw.sOpts.tagging);
         break;
     case CONF_VID_SETTING:
         len=sprintf(buf,"%d",pInfo->hw.sOpts.vid);
@@ -485,9 +494,13 @@ static int FunConfWrite(PVELOCITY_PROC_ENTRY pEntry, const char* buf,
         case 4:
             new_status=VELOCITY_SPEED_10|VELOCITY_DUPLEX_FULL;
             break;
+        case 5:
+            new_status=VELOCITY_SPEED_1000|VELOCITY_DUPLEX_FULL;
+            break;
         }
 
-        velocity_set_media_mode(&pInfo->hw,pInfo->hw.sOpts.spd_dpx);
+        pInfo->hw.sOpts.spd_dpx = new_status;
+        velocity_set_media_mode(&pInfo->hw, pInfo->hw.sOpts.spd_dpx);
         }
         break;
 
@@ -519,11 +532,11 @@ static int FunConfWrite(PVELOCITY_PROC_ENTRY pEntry, const char* buf,
     case CONF_VAL_PKT:
         if (l==0) {
             pInfo->hw.flags &=~VELOCITY_FLAGS_VAL_PKT_LEN;
-            pInfo->hw.sOpts.flags &=~VELOCITY_FLAGS_VAL_PKT_LEN;
+            //pInfo->hw.sOpts.flags &=~VELOCITY_FLAGS_VAL_PKT_LEN;
         }
         else if (l==1) {
             pInfo->hw.flags |=VELOCITY_FLAGS_VAL_PKT_LEN;
-            pInfo->hw.sOpts.flags |=VELOCITY_FLAGS_VAL_PKT_LEN;
+            //pInfo->hw.sOpts.flags |=VELOCITY_FLAGS_VAL_PKT_LEN;
         }
         else
             return -EINVAL;
@@ -532,19 +545,28 @@ static int FunConfWrite(PVELOCITY_PROC_ENTRY pEntry, const char* buf,
     case CONF_ENABLE_MRDPL:
         if (l==0) {
             pInfo->hw.flags &= ~VELOCITY_FLAGS_MRDPL;
-            pInfo->hw.sOpts.flags &= ~VELOCITY_FLAGS_VAL_PKT_LEN;
+            //pInfo->hw.sOpts.flags &= ~VELOCITY_FLAGS_VAL_PKT_LEN;
         }
         else if (l==1) {
             pInfo->hw.flags |= VELOCITY_FLAGS_MRDPL;
-            pInfo->hw.sOpts.flags |= VELOCITY_FLAGS_MRDPL;
+            //pInfo->hw.sOpts.flags |= VELOCITY_FLAGS_MRDPL;
         }
         else
             return -EINVAL;
         break;
+    case CONF_ENABLE_AI:
+        if (l == 0)
+            pInfo->hw.flags &= ~VELOCITY_FLAGS_AI;
+        else if (l == 1)
+            pInfo->hw.flags |= VELOCITY_FLAGS_AI;
+        else
+            return -EINVAL;
+        break;
     case CONF_ENABLE_TAG:
+        /*
         if (l==0) {
             pInfo->hw.flags &=~VELOCITY_FLAGS_TAGGING;
-            pInfo->hw.sOpts.flags &=~VELOCITY_FLAGS_TAGGING;
+           pInfo->hw.sOpts.flags &=~VELOCITY_FLAGS_TAGGING;
         }
         else if (l==1) {
             pInfo->hw.flags |=VELOCITY_FLAGS_TAGGING;
@@ -552,15 +574,18 @@ static int FunConfWrite(PVELOCITY_PROC_ENTRY pEntry, const char* buf,
         }
         else
             return -EINVAL;
-        break;
+        */
+        if ((l<0) || (l>2))
+            return -EINVAL;
+        pInfo->hw.sOpts.tagging = l;
+		break;
     case CONF_VID_SETTING:
         if ((l<0) || (l>4094))
             return -EINVAL;
         pInfo->hw.sOpts.vid=l;
-        pInfo->hw.flags |=VELOCITY_FLAGS_TAGGING;
-        pInfo->hw.sOpts.flags |=VELOCITY_FLAGS_TAGGING;
+        pInfo->hw.sOpts.tagging = 1;
+        //pInfo->hw.sOpts.flags |=VELOCITY_FLAGS_TAGGING;
         velocity_init_cam_filter(&pInfo->hw);
-
         break;
     }
     return 0;

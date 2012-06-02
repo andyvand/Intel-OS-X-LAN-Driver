@@ -50,15 +50,15 @@ struct _version {
 #define VELOCITY_FULL_DRV_NAM  "VIA Networking Velocity Family Gigabit Ethernet Adapter Driver"
 
 #ifndef MAJOR_VERSION
-#define MAJOR_VERSION       1
+#define MAJOR_VERSION       "1"
 #endif
 
 #ifndef MINOR_VERSION
-#define MINOR_VERSION       30
+#define MINOR_VERSION       "43"
 #endif
 
 #ifndef VELOCITY_VERSION
-#define VELOCITY_VERSION    "1.30"
+#define VELOCITY_VERSION    MAJOR_VERSION"."MINOR_VERSION
 #endif
 
 

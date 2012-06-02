@@ -133,10 +133,8 @@ BOOL velocity_set_wol(PVELOCITY_INFO pInfo) {
     CSR_WRITE_1(&pInfo->hw, WOLCFG_SAB|WOLCFG_SAM, MAC_REG_WOLCFG_SET);
     CSR_WRITE_2(&pInfo->hw, WOLCR_MAGIC_EN, MAC_REG_WOLCR0_SET);
 
-    /*
     if (pInfo->wol_opts & VELOCITY_WOL_PHY)
-        writew((WOLCR_LINKON_EN|WOLCR_LINKOFF_EN), &pMacRegs->wWOLCRSet);
-    */
+		CSR_WRITE_2(&pInfo->hw, WOLCR_LINKON_EN|WOLCR_LINKOFF_EN, MAC_REG_WOLCR0_SET);
 
     if (pInfo->wol_opts & VELOCITY_WOL_UCAST) {
         CSR_WRITE_2(&pInfo->hw, WOLCR_UNICAST_EN, MAC_REG_WOLCR0_SET);
@@ -173,29 +171,39 @@ BOOL velocity_set_wol(PVELOCITY_INFO pInfo) {
 
     CSR_WRITE_2(&pInfo->hw, 0x0FFF, MAC_REG_WOLSR0_CLR);
 
-    if (pInfo->hw.mii_status & VELOCITY_AUTONEG_ENABLE) {
-        if (PHYID_GET_PHY_ID(pInfo->hw.dwPHYId)==PHYID_CICADA_CS8201)
-            MII_REG_BITS_ON(AUXCR_MDPPS,MII_REG_AUXCR,&pInfo->hw);
-
-        MII_REG_BITS_OFF(G1000CR_1000FD|G1000CR_1000,
-            MII_REG_G1000CR,&pInfo->hw);
-    }
-
-    if (pInfo->hw.mii_status & VELOCITY_SPEED_1000)
-        MII_REG_BITS_ON(BMCR_REAUTO,MII_REG_BMCR,&pInfo->hw);
-
-    BYTE_REG_BITS_ON(&pInfo->hw, CHIPGCR_FCMODE, MAC_REG_CHIPGCR);
-
-    {
-        U8  byGCR;
-        byGCR=CSR_READ_1(&pInfo->hw, MAC_REG_CHIPGCR);
-        byGCR=(byGCR & ~CHIPGCR_FCGMII) |CHIPGCR_FCFDX;
-        CSR_WRITE_1(&pInfo->hw, byGCR, MAC_REG_CHIPGCR);
-    }
-
+	//david modify
+	if(SPD_DPX_1000_FULL != pInfo->hw.sOpts.spd_dpx)
+	{
+		if(SPD_DPX_AUTO == pInfo->hw.sOpts.spd_dpx)
+		{
+			if (pInfo->hw.mii_status & VELOCITY_AUTONEG_ENABLE) {
+		        if (PHYID_GET_PHY_ID(pInfo->hw.dwPHYId)==PHYID_CICADA_CS8201)
+		            MII_REG_BITS_ON(AUXCR_MDPPS,MII_REG_AUXCR,&pInfo->hw);
+				
+		        MII_REG_BITS_OFF(G1000CR_1000FD|G1000CR_1000,
+								 MII_REG_G1000CR,&pInfo->hw);
+		    }
+			
+			if (pInfo->hw.mii_status & VELOCITY_SPEED_1000 || pInfo->hw.mii_status & VELOCITY_LINK_FAIL)
+	        	MII_REG_BITS_ON(BMCR_REAUTO,MII_REG_BMCR,&pInfo->hw);
+		}	    
+		
+	    BYTE_REG_BITS_ON(&pInfo->hw, CHIPGCR_FCMODE, MAC_REG_CHIPGCR);
+		
+	    {
+	        U8  byGCR;
+	        byGCR=CSR_READ_1(&pInfo->hw, MAC_REG_CHIPGCR);
+	        byGCR=(byGCR & ~CHIPGCR_FCGMII) |CHIPGCR_FCFDX;
+	        CSR_WRITE_1(&pInfo->hw, byGCR, MAC_REG_CHIPGCR);
+	    }
+	}
+	
     BYTE_REG_BITS_OFF(&pInfo->hw, ISR_PWEI, MAC_REG_ISR);
     // Turn on SWPTAG just before entering power mode
     BYTE_REG_BITS_ON(&pInfo->hw, STICKHW_SWPTAG, MAC_REG_STICKHW);
+	
+	CSR_WRITE_1(&pInfo->hw, WOLCFG_PMEOVR, MAC_REG_WOLCFG_SET);
+	
     //Go to bed .....
     BYTE_REG_BITS_ON(&pInfo->hw, (STICKHW_DS1|STICKHW_DS0),
             MAC_REG_STICKHW);

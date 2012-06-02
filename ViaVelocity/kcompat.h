@@ -46,6 +46,9 @@
 #define NETIF_F_FCOE_MTU        (1 << 26) /* Supports max FCoE MTU, 2158 bytes*/
 #define NETIF_F_NTUPLE          (1 << 27) /* N-tuple filters supported */
 
+#define IFF_PROMISC     0x100           /* receive all packets          */
+#define IFF_ALLMULTI    0x200           /* receive all multicast packets*/
+#define IFF_MULTICAST   0x1000
 
 #ifdef	__cplusplus
 extern "C" {

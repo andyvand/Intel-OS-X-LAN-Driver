@@ -76,6 +76,8 @@ typedef enum {
  7: SF(flush till emply)
  */
 
+#define TAGGING_MIN         0
+#define TAGGING_MAX         2
 #define TAGGING_DEF         0
 /* enable_tagging[] is used for enabling 802.1Q VID tagging.
  0: disable VID seeting(default).
@@ -92,8 +94,7 @@ typedef enum {
 
 #ifdef VELOCITY_TX_CSUM_SUPPORT
 #define TX_CSUM_DEF     1
-/* txcsum_offload[] is used for setting the checksum offload ability of NIC.
- (We only support RX checksum offload now)
+/* txcsum_offload[] is used for setting the Tx checksum offload ability of NIC.
  0: disable csum_offload[checksum offload
  1: enable checksum offload. (Default)
  */
@@ -113,14 +114,15 @@ typedef enum {
 
 #define MED_LNK_DEF 0
 #define MED_LNK_MIN 0
-#define MED_LNK_MAX 4
+#define MED_LNK_MAX	5
 /* speed_duplex[] is used for setting the speed and duplex mode of NIC.
  0: indicate autonegotiation for both speed and duplex mode
  1: indicate 100Mbps half duplex mode
  2: indicate 100Mbps full duplex mode
  3: indicate 10Mbps half duplex mode
  4: indicate 10Mbps full duplex mode
- 
+ 5: indicate 1000Mbps full duplex mode
+
  Note:
  if EEPROM have been set to the force mode, this option is ignored
  by driver.
@@ -151,6 +153,11 @@ typedef enum {
 // 0: Disable (default)
 // 1: Enable
 #define MRDPL_DEF           0
+
+// EnableAI[] is used for setting the Adaptive-Interrupt ability of NIC
+// 0: Disable
+// 1: Enable (default)
+#define AI_DEF              1
 
 #define TXQUE_TIMER_DEF     0x59
 #define TXQUE_TIMER_MIN     0x00
@@ -193,8 +200,8 @@ public:
 	
     IOMbufLittleMemoryCursor *     rxMbufCursor;
 	
-    bool                           promiscuousEnabled;
     bool                           multicastEnabled;
+	UInt32						flags;
     bool                           verbose;
     mediumType_t                   currentMediumType;
 	
@@ -226,7 +233,8 @@ public:
 	virtual IOReturn getMaxPacketSize (UInt32 *maxSize) const;
 	virtual IOReturn getMinPacketSize (UInt32 *minSize) const;
 	virtual IOReturn setMaxPacketSize (UInt32 maxSize);
-	
+    virtual UInt32 getFeatures() const;
+
 	virtual void getPacketBufferConstraints(IOPacketBufferConstraints * constraints) const;
 	virtual IOReturn getChecksumSupport(UInt32 *checksumMask, UInt32 checksumFamily, bool isOutput);
 	

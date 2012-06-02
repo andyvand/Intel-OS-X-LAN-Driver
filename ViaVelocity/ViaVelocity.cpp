@@ -38,7 +38,7 @@ bool ViaVelocity::init(OSDictionary *properties)
 	suspend = FALSE;
 
 	bzero(mediumTable, sizeof(mediumTable));
-	
+
 	return true;
 }
 
@@ -286,10 +286,9 @@ void ViaVelocity::getDefaultSettings()
 	velocity.hw.sOpts.nTxDescs = velocity_get_int_opt( TX_DESC_MIN, TX_DESC_MAX, TX_DESC_DEF, "TX_DESC");
 
 	velocity.hw.sOpts.vid = velocity_get_int_opt( VLAN_ID_MIN, VLAN_ID_MAX, VLAN_ID_DEF, "VID");
-	if(velocity_get_bool_opt("ENABLE_TAGGING", 0))
-		velocity.hw.sOpts.flags |= VELOCITY_FLAGS_TAGGING;
+	velocity.hw.sOpts.tagging = velocity_get_int_opt( TAGGING_MIN, TAGGING_MAX, TAGGING_DEF, "TAGGING");
 	if(velocity_get_bool_opt("TX_CSUM_OFFLOAD", 1))
-		velocity.hw.sOpts.flags |= VELOCITY_FLAGS_TX_CSUM;	
+		velocity.hw.flags |= VELOCITY_FLAGS_TX_CSUM;	
 
 	velocity.hw.sOpts.flow_cntl = velocity_get_int_opt( FLOW_CNTL_MIN, FLOW_CNTL_MAX, FLOW_CNTL_DEF, "FLOW_CNTL");
 	velocity.hw.sOpts.spd_dpx = SPD_DPX_AUTO; // auto
@@ -297,8 +296,11 @@ void ViaVelocity::getDefaultSettings()
 	velocity.hw.sOpts.int_works = velocity_get_int_opt( INT_WORKS_MIN, INT_WORKS_MAX, INT_WORKS_DEF, "INT_WORKS");
 
 	if(velocity_get_bool_opt("ENABLE_MRDPL", MRDPL_DEF))
-		velocity.hw.sOpts.flags |= VELOCITY_FLAGS_MRDPL;	
-	
+		velocity.hw.flags |= VELOCITY_FLAGS_MRDPL;	
+
+	if(velocity_get_bool_opt("ENABLE_AI", AI_DEF))
+		velocity.hw.flags |= VELOCITY_FLAGS_AI;	
+
 	velocity.hw.sOpts.txque_timer = velocity_get_int_opt( TXQUE_TIMER_MIN, TXQUE_TIMER_MAX, TXQUE_TIMER_DEF, "Tx Queue Empty defer timer");
 	velocity.hw.sOpts.rxque_timer = velocity_get_int_opt( RXQUE_TIMER_MIN, RXQUE_TIMER_MAX, RXQUE_TIMER_DEF, "Rx Queue Empty defer timer");
 
@@ -402,22 +404,24 @@ bool ViaVelocity::start( IOService * provider )
 		velocity_soft_reset(&velocity.hw);
 		mdelay(5);
 
+		//david add
+		mii_reset(&velocity.hw);
+		mdelay(5);
+
 		// EEPROM reload
 		mac_eeprom_reload(&velocity.hw);
 
 		// copy MAC
 		for (int i = 0; i < 6; i++)
 			myAddress.bytes[i] = CSR_READ_1(&velocity.hw, MAC_REG_PAR+i);
-		
-		
-        // Get default driver settings (stored in property table).
+
+		// Get default driver settings (stored in property table).
 		getDefaultSettings();
 		
 		/*
 		 *	Enable the chip specified capbilities
 		 */
 		
-		velocity.hw.flags = velocity.hw.sOpts.flags;
 		velocity.wol_opts = velocity.hw.sOpts.wol_opts;
 #if		0
 		velocity.hw.flags |= VELOCITY_FLAGS_WOL_ENABLED;
@@ -844,7 +848,7 @@ BOOL ViaVelocity::velocity_alloc_rx_buf(int idx)
 #endif
 
     *((PU32)&(pRD->rdesc0)) = 0;
-    
+
     VELOCITY_SET_RD_BUFFER_SIZE(pRD, velocity.hw.rx_buf_sz);
     pRD->rdesc3 |= cpu_to_le32(RDESC3_INTCTL);
     pRD->dwBufAddrLo = cpu_to_le32(vector.location);
@@ -939,7 +943,11 @@ bool ViaVelocity::_phySetMedium(mediumType_t medium)
 
 IOReturn ViaVelocity::setPromiscuousMode( bool active )
 {
-	promiscuousEnabled = active;
+	if(active)
+		flags |= IFF_PROMISC;
+	else
+		flags &= ~IFF_PROMISC;
+
 	velocity_set_multi();
 	return kIOReturnSuccess;
 }
@@ -949,7 +957,10 @@ IOReturn ViaVelocity::setPromiscuousMode( bool active )
 
 IOReturn ViaVelocity::setMulticastMode( bool active )
 {
-	multicastEnabled = active;
+	if(active)
+		flags |= IFF_MULTICAST;
+	else
+		flags &= ~IFF_MULTICAST;
 	velocity_set_multi();
 	return kIOReturnSuccess;
 }
@@ -996,7 +1007,7 @@ IOReturn ViaVelocity::getChecksumSupport(UInt32 *checksumMask, UInt32 checksumFa
 	
 	*checksumMask = kChecksumIP | kChecksumTCP | kChecksumUDP;
 	if( isOutput ) {
-		if((velocity.hw.sOpts.flags & VELOCITY_FLAGS_TX_CSUM) == 0)
+		if((velocity.hw.flags & VELOCITY_FLAGS_TX_CSUM) == 0)
 			*checksumMask = 0;
 	}
 	return kIOReturnSuccess;
@@ -1053,6 +1064,12 @@ IOReturn ViaVelocity::setMaxPacketSize (UInt32 maxSize){
 	return kIOReturnSuccess;
 }
 
+UInt32 ViaVelocity::getFeatures() const {
+	UInt32 features = kIONetworkFeatureMultiPages;
+	if(velocity.hw.sOpts.tagging)
+		features |= kIONetworkFeatureHardwareVlan;
+	return features;
+}
 
 //---------------------------------------------------------------------------
 // Function: createOutputQueue <IONetworkController>
@@ -1134,11 +1151,15 @@ void ViaVelocity::velocity_set_multi()
 {
 	U8 rx_mode;
 	
-	if (promiscuousEnabled) {	/* Set promiscuous. */
+	if (flags & IFF_PROMISC) {	/* Set promiscuous. */
 		velocity_set_all_multi(&velocity.hw);
-		rx_mode = (RCR_AM | RCR_AB | RCR_PROM);
+		rx_mode = (RCR_AM|RCR_AB|RCR_PROM);
+	} else if (flags & IFF_ALLMULTI) {
+		velocity_set_all_multi(&velocity.hw);
+		rx_mode = (RCR_AM|RCR_AB);
 	} else {
-		rx_mode = RCR_AM | RCR_AB | RCR_AP;
+		velocity_clear_all_multi(&velocity.hw);
+		rx_mode = (RCR_AP|RCR_AM|RCR_AB);
 	}
 	if (mtu > 1500)
 		rx_mode |= RCR_AL;
@@ -1209,6 +1230,9 @@ UInt32 ViaVelocity::outputPacket(mbuf_t skb, void * param)
 #ifdef VELOCITY_TSO_SUPPORT
     unsigned int        mss = tcp_skb_mss(skb);
 #endif
+	UInt32 vlanTag;
+	if(!getVlanTagDemand(skb, &vlanTag))
+		vlanTag = 0;
 	UInt32 checksumDemanded;
 	getChecksumDemand(skb, kChecksumFamilyTCPIP, &checksumDemanded);
 
@@ -1269,6 +1293,13 @@ UInt32 ViaVelocity::outputPacket(mbuf_t skb, void * param)
 	// pTDInfo->nskb_dma = 1;
 	VELOCITY_SET_TD_CMDZ(pTD, 2);
 
+	if(vlanTag) {
+        // clear CFI and priority
+        pTD->tdesc1 &= cpu_to_le32(0xffff0000L);
+        VELOCITY_SET_TD_VLANID(pTD, vlanTag & 0xfff);
+        pTD->tdesc1 |= cpu_to_le32(TCR_VETAG);
+    }
+
     if ( checksumDemanded & (kChecksumIP|kChecksumTCP|kChecksumUDP) ) {
 		
         if (checksumDemanded & kChecksumTCP) {
@@ -1328,45 +1359,54 @@ void ViaVelocity::velocity_error(int status)
 		transmitQueue->stop();
 	}
 	
-    // (2) SRCI
-    if (status & ISR_SRCI) {
+	// (2) SRCI
+	if (status & ISR_SRCI) {
 		
-        if (velocity.hw.sOpts.spd_dpx == SPD_DPX_AUTO) {
-            velocity.hw.mii_status = check_connectiontype(&velocity.hw);
+		if (velocity.hw.sOpts.spd_dpx == SPD_DPX_AUTO) {
+			velocity.hw.mii_status = check_connectiontype(&velocity.hw);
 			
-            // if it's 3119, disable frame bursting in halfduplex mode and
-            // enable it in fullduplex mode
-            if (velocity.hw.byRevId < REV_ID_VT3216_A0) {
-            	if (velocity.hw.mii_status | VELOCITY_DUPLEX_FULL)
+			// if it's 3119, disable frame bursting in halfduplex mode and
+			// enable it in fullduplex mode
+			if (velocity.hw.byRevId < REV_ID_VT3216_A0) {
+				if (velocity.hw.mii_status | VELOCITY_DUPLEX_FULL)
             		BYTE_REG_BITS_ON(&velocity.hw, TCR_TB2BDIS, MAC_REG_TCR);
 				else
 					BYTE_REG_BITS_OFF(&velocity.hw, TCR_TB2BDIS, MAC_REG_TCR);
 			}
 			
-			// only enable CD heart beat counter in 10HD mode
-            if (!(velocity.hw.mii_status & VELOCITY_DUPLEX_FULL) && (velocity.hw.mii_status & VELOCITY_SPEED_10)) {
-                BYTE_REG_BITS_OFF(&velocity.hw, TESTCFG_HBDIS, MAC_REG_TESTCFG);
-            }
-            else {
-                BYTE_REG_BITS_ON(&velocity.hw, TESTCFG_HBDIS, MAC_REG_TESTCFG);
-            }
+			/*
+			 * only enable CD heart beat counter in 10HD mode
+			 * This PATCH is for VT3119/VT3216
+			 */
+			if (velocity.hw.byRevId < REV_ID_VT3284_A0) {
+				if (!(velocity.hw.mii_status & VELOCITY_DUPLEX_FULL) && (velocity.hw.mii_status & VELOCITY_SPEED_10)) {
+					BYTE_REG_BITS_OFF(&velocity.hw, TESTCFG_HBDIS, MAC_REG_TESTCFG);
+				}
+				else {
+					BYTE_REG_BITS_ON(&velocity.hw, TESTCFG_HBDIS, MAC_REG_TESTCFG);
+				}
+			}
 			
-            //--------------------------------------------------------
-            // [1.18] Adaptive Interrupt
-            if (velocity.hw.byRevId >= REV_ID_VT3216_A0) {
-                if ( (velocity.hw.mii_status & VELOCITY_SPEED_1000) ||
-					(velocity.hw.mii_status & VELOCITY_SPEED_100) )
-                {
-                    CSR_WRITE_1(&velocity.hw, velocity.hw.sOpts.txque_timer, MAC_REG_TQETMR);
-                    CSR_WRITE_1(&velocity.hw, velocity.hw.sOpts.rxque_timer, MAC_REG_RQETMR);
-                }
-                else {
-                    CSR_WRITE_1(&velocity.hw, 0x00, MAC_REG_TQETMR);
-                    CSR_WRITE_1(&velocity.hw, 0x00, MAC_REG_RQETMR);
-                }
-            }
-            //--------------------------------------------------------
-        }
+			//--------------------------------------------------------
+			// [1.18] Adaptive Interrupt
+			if (velocity.hw.byRevId >= REV_ID_VT3216_A0) {
+				if (velocity.hw.mii_status & VELOCITY_SPEED_1000) {
+					if (velocity.hw.flags & VELOCITY_FLAGS_AI) {
+						CSR_WRITE_1(&velocity.hw, velocity.hw.sOpts.txque_timer, MAC_REG_TQETMR);
+						CSR_WRITE_1(&velocity.hw, velocity.hw.sOpts.rxque_timer, MAC_REG_RQETMR);
+					}
+					else {
+						CSR_WRITE_1(&velocity.hw, 0x00, MAC_REG_TQETMR);
+						CSR_WRITE_1(&velocity.hw, 0x00, MAC_REG_RQETMR);
+					}
+				}
+				else {
+					CSR_WRITE_1(&velocity.hw, 0x00, MAC_REG_TQETMR);
+					CSR_WRITE_1(&velocity.hw, 0x00, MAC_REG_RQETMR);
+				}
+			}
+			//--------------------------------------------------------
+		}
 		
 		// get link status from PHYSR0
 		
@@ -1496,12 +1536,17 @@ BOOL ViaVelocity::velocity_receive_frame(int idx)
 
 int ViaVelocity::velocity_rx_srv( int status)
 {
-    PRX_DESC                    pRD;
-    int                         iCurrRDIdx = velocity.hw.iCurrRDIdx;
-    int                         works = 0;
-    U16                         wRSR;
-	
-	
+	PRX_DESC	pRD;
+	int			iCurrRDIdx = velocity.hw.iCurrRDIdx;
+	int			works = 0;
+	U16			wRSR;
+	BOOL		bVIDM = FALSE;
+	WORD		wRBRDU;
+	WORD		wCurrDeltaRBRDU;
+
+    if(velocity.hw.sOpts.tagging == 2)
+ 		bVIDM = TRUE;
+
     while (TRUE) {
         pRD = &(velocity.hw.aRDRing[iCurrRDIdx]);
 
@@ -1525,7 +1570,7 @@ int ViaVelocity::velocity_rx_srv( int status)
         wRSR = (U16)(cpu_to_le32(pRD->rdesc0));
 		
         // don't drop CE or RL error frame although RXOK is off
-        if( (wRSR & RSR_RXOK) || (!(wRSR & RSR_RXOK) && (wRSR & (RSR_CE | RSR_RL)))) {
+        if( (wRSR & RSR_RXOK) || (!(wRSR & RSR_RXOK) && (wRSR & (RSR_CE | RSR_RL)))||(bVIDM && (wRSR & RSR_VIDM))) {
             if (velocity_receive_frame(iCurrRDIdx)) {
 				netStats->inputPackets += 1;
 #if	USE_RX_BUFFER
@@ -1556,7 +1601,19 @@ int ViaVelocity::velocity_rx_srv( int status)
                 pRD->rdesc0 |= cpu_to_le32(RDESC0_OWN);
                 SUB_ONE_WITH_WRAP_AROUND(iPrevRDIdx, velocity.hw.sOpts.nRxDescs);
             }
-            CSR_WRITE_2(&velocity.hw, 4, MAC_REG_RBRDU);
+            if (velocity.hw.byRevId >= REV_ID_VT3286_A0) {
+                wRBRDU = CSR_READ_2(&velocity.hw, MAC_REG_RBRDU);
+                wCurrDeltaRBRDU = velocity.hw.sOpts.nRxDescs - wRBRDU;
+                if(4 <= wCurrDeltaRBRDU) {
+                    CSR_WRITE_2(&velocity.hw, 4, MAC_REG_RBRDU);
+                }
+                else {
+                    CSR_WRITE_2(&velocity.hw, wCurrDeltaRBRDU, MAC_REG_RBRDU);
+                }
+            }
+            else {
+                CSR_WRITE_2(&velocity.hw, 4, MAC_REG_RBRDU);
+            }
         }
 		
         //velocity.dev->last_rx = jiffies;
