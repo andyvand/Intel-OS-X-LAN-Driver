@@ -625,6 +625,11 @@ IOReturn AgereET131x::setMaxPacketSize (UInt32 maxSize){
 	return kIOReturnSuccess;
 }
 
+UInt32 AgereET131x::getFeatures() const
+{
+	return kIONetworkFeatureMultiPages | kIONetworkFeatureSoftwareVlan;
+}
+
 IOReturn AgereET131x::getChecksumSupport(UInt32 *checksumMask, UInt32 checksumFamily, bool isOutput) 
 {
 	if( checksumFamily == kChecksumFamilyTCPIP ) {

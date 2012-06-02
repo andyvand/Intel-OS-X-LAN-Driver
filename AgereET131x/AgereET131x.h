@@ -18,7 +18,7 @@ enum
 #define TBDS_PER_TCB 12
 #define USE_TX_CSUM	0
 
-#define	RELEASE(x)	(if(x)x->release();x=NULL;)
+#define	RELEASE(x)	if(x)x->release();x=NULL;
 
 #define super IOEthernetController
 
@@ -77,6 +77,7 @@ public:
 	virtual IOReturn setMaxPacketSize (UInt32 maxSize);
 	virtual IOReturn getMaxPacketSize (UInt32 *maxSize) const;
 	virtual IOReturn getMinPacketSize (UInt32 *minSize) const;
+	virtual UInt32 getFeatures() const;
 
 public:
 	void interruptOccurred(IOInterruptEventSource * src);
