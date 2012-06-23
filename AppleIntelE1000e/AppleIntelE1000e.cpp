@@ -1451,11 +1451,7 @@ bool AppleIntelE1000e::start(IOService* provider)
 			adapter->hw.phy.ms_type = e1000_ms_hw_default;
 		}
 		
-		if (adapter->hw.phy.ops.check_reset_block &&
-			adapter->hw.phy.ops.check_reset_block(&adapter->hw))
-			e_info("PHY reset is blocked due to SOL/IDER session.\n");
-		
-		if (hw->phy.ops.check_reset_block(hw))
+		if (hw->phy.ops.check_reset_block && hw->phy.ops.check_reset_block(hw))
 			e_info("PHY reset is blocked due to SOL/IDER session.\n");
 
 		if (e1000e_enable_mng_pass_thru(&adapter->hw))
@@ -3111,7 +3107,7 @@ bool AppleIntelE1000e::e1000_clean_tx_irq()
 				total_tx_packets++;
 				total_tx_bytes += buffer_info->bytecount;
 				if (buffer_info->skb) {
-					//bytes_compl += buffer_info->skb->len;
+					bytes_compl += mbuf_pkthdr_len(buffer_info->skb);
 					pkts_compl++;
 				}
 				netStats->outputPackets++;

@@ -3069,7 +3069,9 @@ PMP_RFD AgereET131x::nic_rx_pkts( )
          *********************************************************************/
         if( Word0.value & ALCATEL_BAD_STATUS )
         {
+#if	0
             IOLog("NICRxPkts >> Alcatel Status Word error. Value 0x%08x\n", pPSREntry->word0.value );
+#endif
         }
 		
         /**********************************************************************

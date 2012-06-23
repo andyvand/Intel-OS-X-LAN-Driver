@@ -593,7 +593,6 @@ extern void e1000e_update_adaptive(struct e1000_hw *hw);
 
 extern s32 e1000e_setup_copper_link(struct e1000_hw *hw);
 extern void e1000e_put_hw_semaphore(struct e1000_hw *hw);
-extern s32 e1000e_check_reset_block_generic(struct e1000_hw *hw);
 extern s32 e1000e_phy_force_speed_duplex_igp(struct e1000_hw *hw);
 extern s32 e1000e_get_cable_length_igp_2(struct e1000_hw *hw);
 extern s32 e1000e_get_phy_info_igp(struct e1000_hw *hw);

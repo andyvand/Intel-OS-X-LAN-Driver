@@ -61,7 +61,7 @@
 #define DRV_EXTRAVERSION ""
 #endif
 
-#define DRV_VERSION "2.0.0" DRV_EXTRAVERSION
+#define DRV_VERSION "2.0.0.1" DRV_EXTRAVERSION
 char e1000e_driver_name[] = "e1000e";
 const char e1000e_driver_version[] = DRV_VERSION;
 
@@ -7222,7 +7222,7 @@ static int __devinit e1000_probe(struct pci_dev *pdev,
 		adapter->hw.phy.ms_type = e1000_ms_hw_default;
 	}
 
-	if (hw->phy.ops.check_reset_block(hw))
+	if (hw->phy.ops.check_reset_block && hw->phy.ops.check_reset_block(hw))
 		e_info("PHY reset is blocked due to SOL/IDER session.\n");
 
 	/* Set initial default active device features */
@@ -7429,7 +7429,7 @@ err_register:
 	if (!(adapter->flags & FLAG_HAS_AMT))
 		e1000e_release_hw_control(adapter);
 err_eeprom:
-	if (!hw->phy.ops.check_reset_block(hw))
+	if (hw->phy.ops.check_reset_block && !hw->phy.ops.check_reset_block(hw))
 		e1000_phy_hw_reset(&adapter->hw);
 err_hw_init:
 	kfree(adapter->tx_ring);
