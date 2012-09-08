@@ -26,13 +26,13 @@
 *******************************************************************************/
 
 
-#ifndef	__APPLE__
+#ifndef __APPLE__
 #include <linux/tcp.h>
 #endif
 
 #include "igb.h"
 #include "igb_vmdq.h"
-#ifndef	__APPLE__
+#ifndef __APPLE__
 #include <linux/if_vlan.h>
 #endif
 
