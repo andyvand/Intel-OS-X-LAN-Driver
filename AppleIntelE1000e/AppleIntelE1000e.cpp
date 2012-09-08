@@ -2070,7 +2070,7 @@ IOReturn AppleIntelE1000e::getChecksumSupport(UInt32 *checksumMask, UInt32 check
 		return kIOReturnUnsupported;
 	} else {
 		if( !isOutput ) {
-			*checksumMask = kChecksumIP | kChecksumTCP | kChecksumUDP;
+			*checksumMask = kChecksumTCP;
 		} else {
 			*checksumMask = kChecksumTCP | kChecksumUDP;
 		}
@@ -3668,35 +3668,59 @@ void AppleIntelE1000e::e1000_configure()
  **/
 void AppleIntelE1000e::e1000_receive_skb(mbuf_t skb, u32 length, u8 status, __le16 vlan)
 {
-#ifndef HAVE_VLAN_RX_REGISTER
-	u16 tag = le16_to_cpu(vlan);
-	if(tag){
-		//IOLog("receive: vlan = %d\n",(int)tag);
-		setVlanTag(skb, tag);
-	}
-#endif
+    if(status & E1000_RXD_STAT_VP){
+        u16 tag = le16_to_cpu(vlan);
+        if(tag){
+            setVlanTag(skb, tag);
+        }
+    }
 	
-#ifdef NETIF_F_HW_VLAN_TX
-	if (adapter->vlgrp && (status & E1000_RXD_STAT_VP))
-		ret = vlan_hwaccel_rx(skb, adapter->vlgrp, le16_to_cpu(vlan));
-	else
-#endif
-		netStats->inputPackets += netif->inputPacket(skb, length, IONetworkInterface::kInputOptionQueuePacket);
+	netStats->inputPackets += netif->inputPacket(skb, length, IONetworkInterface::kInputOptionQueuePacket);
 }
 
-void AppleIntelE1000e::e1000_rx_checksum(mbuf_t skb, u32 status)
+void AppleIntelE1000e::e1000_rx_checksum(mbuf_t skb, u32 status_err)
 {
+	struct e1000_adapter *adapter = &priv_adapter;
+	u16 status = (u16)status_err;
+	u8 errors = (u8)(status_err >> 24);
+
+	/* Rx checksum disabled */
+#ifdef HAVE_NDO_SET_FEATURES
+	if (!(adapter->netdev->features & NETIF_F_RXCSUM))
+#else
+        if (!(adapter->flags & FLAG_RX_CSUM_ENABLED))
+#endif
+            return;
+
+	/* Ignore Checksum bit is set */
+	if (status & E1000_RXD_STAT_IXSM)
+		return;
+
+    /* TCP/UDP checksum error bit is set */
+	if (errors & E1000_RXD_ERR_TCPE) {
+		/* let the stack verify checksum errors */
+		adapter->hw_csum_err++;
+		return;
+	}
+
+	/* TCP/UDP Checksum has not been calculated */
+	if (!(status & (E1000_RXD_STAT_TCPCS | E1000_RXD_STAT_UDPCS)))
+		return;
+
+	UInt32 ckMask = kChecksumTCP;
 	UInt32 ckResult = 0;
+#if 0
 	if (status & E1000_RXD_STAT_IPCS) {
 		ckResult |= kChecksumIP;
 	}
 	if (status & E1000_RXD_STAT_UDPCS) {
 		ckResult |= kChecksumUDP;
 	}
+#endif
 	if (status & E1000_RXD_STAT_TCPCS) {
 		ckResult |= kChecksumTCP;
-	} 
-	setChecksumResult(skb, kChecksumFamilyTCPIP, kChecksumIP | kChecksumTCP | kChecksumUDP, ckResult);
+	}
+	setChecksumResult(skb, kChecksumFamilyTCPIP, ckMask, ckResult);
 }
 
 
@@ -3878,8 +3902,8 @@ void AppleIntelE1000e::e1000_change_mtu(UInt32 new_mtu){
 
 	RELEASE(rxMbufCursor);
 	RELEASE(txMbufCursor);
-	rxMbufCursor = IOMbufNaturalMemoryCursor::withSpecification(max_frame, 1);
-	txMbufCursor = IOMbufNaturalMemoryCursor::withSpecification(max_frame, TBDS_PER_TCB);
+	rxMbufCursor = IOMbufNaturalMemoryCursor::withSpecification(adapter->rx_buffer_len, 1);
+	txMbufCursor = IOMbufNaturalMemoryCursor::withSpecification(adapter->rx_buffer_len, TBDS_PER_TCB);
 }
 
 IOReturn AppleIntelE1000e::setMaxPacketSize (UInt32 maxSize){
