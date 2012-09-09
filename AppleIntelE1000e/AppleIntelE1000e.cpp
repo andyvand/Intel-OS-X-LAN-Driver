@@ -21,6 +21,8 @@ extern "C" {
 
 #include "AppleIntelE1000e.h"
 
+#define USE_RX_IP_CHECKSUM	0
+#define USE_RX_UDP_CHECKSUM	0
 
 #define TBDS_PER_TCB 12
 #define super IOEthernetController
@@ -2071,6 +2073,12 @@ IOReturn AppleIntelE1000e::getChecksumSupport(UInt32 *checksumMask, UInt32 check
 	} else {
 		if( !isOutput ) {
 			*checksumMask = kChecksumTCP;
+#if USE_RX_UDP_CHECKSUM
+			*checksumMask |= kChecksumUDP;
+#endif
+#if USE_RX_IP_CHECKSUM
+			*checksumMask |= kChecksumIP;
+#endif
 		} else {
 			*checksumMask = kChecksumTCP | kChecksumUDP;
 		}
@@ -2856,7 +2864,7 @@ bool AppleIntelE1000e::e1000_clean_rx_irq()
 			/* end copybreak code */
 			
 			/* Receive Checksum Offload */
-			e1000_rx_checksum(skb, staterr);
+			e1000_rx_checksum(skb, staterr, rx_desc->wb.lower.hi_dword.csum_ip.csum);
 
 			e1000_receive_skb(skb, length, staterr, rx_desc->wb.upper.vlan);
 		}
@@ -2960,7 +2968,7 @@ bool AppleIntelE1000e::e1000_clean_jumbo_rx_irq()
 		total_rx_bytes += length;
 		total_rx_packets++;
 		
-		e1000_rx_checksum(skb, staterr);
+		e1000_rx_checksum(skb, staterr, rx_desc->wb.lower.hi_dword.csum_ip.csum);
 		
 		e1000_receive_skb(skb, length, staterr, rx_desc->wb.upper.vlan);
 		
@@ -3678,7 +3686,7 @@ void AppleIntelE1000e::e1000_receive_skb(mbuf_t skb, u32 length, u8 status, __le
 	netStats->inputPackets += netif->inputPacket(skb, length, IONetworkInterface::kInputOptionQueuePacket);
 }
 
-void AppleIntelE1000e::e1000_rx_checksum(mbuf_t skb, u32 status_err)
+void AppleIntelE1000e::e1000_rx_checksum(mbuf_t skb, u32 status_err, __le16 csum)
 {
 	struct e1000_adapter *adapter = &priv_adapter;
 	u16 status = (u16)status_err;
@@ -3709,15 +3717,30 @@ void AppleIntelE1000e::e1000_rx_checksum(mbuf_t skb, u32 status_err)
 
 	UInt32 ckMask = kChecksumTCP;
 	UInt32 ckResult = 0;
-#if 0
+#if USE_RX_IP_CHECKSUM
+	ckMask |= kChecksumIP;
 	if (status & E1000_RXD_STAT_IPCS) {
 		ckResult |= kChecksumIP;
 	}
+#endif
+#if USE_RX_UDP_CHECKSUM
+	ckMask |= kChecksumUDP;
 	if (status & E1000_RXD_STAT_UDPCS) {
+		/*
+		 * IP fragment with UDP payload
+		 * Hardware complements the payload checksum, so we undo it
+		 * and then put the value in host order for further stack use.
+		 */
+	#if 0
+		// how to implement the linux code below ?
+		__sum16 sum = (__force __sum16)swab16((__force u16)csum);
+		skb->csum = csum_unfold(~sum);
+	#endif
 		ckResult |= kChecksumUDP;
 	}
 #endif
 	if (status & E1000_RXD_STAT_TCPCS) {
+		/* TCP checksum is good */
 		ckResult |= kChecksumTCP;
 	}
 	setChecksumResult(skb, kChecksumFamilyTCPIP, ckMask, ckResult);
@@ -3762,19 +3785,8 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 		context_desc->lower_setup.ip_fields.ipcse = cpu_to_le16(ehdrlen + ip_hlen);
 		context_desc->lower_setup.ip_fields.ipcso = ehdrlen + offsetof(struct ip, ip_sum);
 		cmd |= E1000_TXD_CMD_IP;
-#if	0
-		*txd_upper |= E1000_TXD_POPTS_IXSM << 8;
-#endif
 	}
 	if(	checksumDemanded & kChecksumTCP ){
-#if	0
-		*txd_lower = E1000_TXD_CMD_DEXT | E1000_TXD_DTYP_D;
-		*txd_upper |= E1000_TXD_POPTS_TXSM << 8;
-		/* no need for context if already set */
-		if (adapter->last_hw_offload == CSUM_TCP)
-			return;
-		adapter->last_hw_offload = CSUM_TCP;
-#endif
 		/*
 		 * Start offset for payload checksum calculation.
 		 * End offset for payload checksum calculation.
@@ -3786,14 +3798,6 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 		cmd |= E1000_TXD_CMD_TCP;
 	}
 	if(	checksumDemanded & kChecksumUDP ){
-#if	0
-		*txd_lower = E1000_TXD_CMD_DEXT | E1000_TXD_DTYP_D;
-		*txd_upper |= E1000_TXD_POPTS_TXSM << 8;
-		/* no need for context if already set */
-		if (adapter->last_hw_offload == CSUM_UDP)
-			return;
-		adapter->last_hw_offload = CSUM_UDP;
-#endif
 		/*
 		 * Start offset for header checksum calculation.
 		 * End offset for header checksum calculation.

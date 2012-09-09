@@ -50,6 +50,7 @@ extern "C" {
 
 #include "AppleIntelE1000.h"
 
+#define	USE_RX_UDP_CHECKSUM	0
 
 #define super IOEthernetController
 
@@ -3904,15 +3905,17 @@ static void e1000_rx_checksum(struct e1000_adapter *adapter, u32 status_err,
 		/* TCP checksum is good */
 #ifdef __APPLE__
 		UInt32 ckResult = 0;
+#if	USE_RX_UDP_CHECKSUM
 		if (status & E1000_RXD_STAT_IPCS)
 			ckResult |= IONetworkController::kChecksumIP;
 		if (status & E1000_RXD_STAT_UDPCS)
 			ckResult |= IONetworkController::kChecksumUDP;
+#endif
 		if (status & E1000_RXD_STAT_TCPCS)
 			ckResult |= IONetworkController::kChecksumTCP;
 		adapter->netdev->setChecksumResult(skb, IONetworkController::kChecksumFamilyTCPIP,
 											   ckResult,
-											   IONetworkController::kChecksumIP|IONetworkController::kChecksumUDP|IONetworkController::kChecksumTCP);
+											   ckResult);
 #else
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
 #endif
@@ -5947,7 +5950,11 @@ IOReturn AppleIntelE1000::getChecksumSupport(UInt32 *checksumMask, UInt32 checks
 	if( checksumFamily == kChecksumFamilyTCPIP ) {
 		*checksumMask = 0;
 		if( ! isOutput ) {
+#if	USE_RX_UDP_CHECKSUM
+			*checksumMask = kChecksumTCP;
+#else
 			*checksumMask = kChecksumIP | kChecksumTCP | kChecksumUDP;
+#endif
 		} else {
 			*checksumMask = kChecksumTCP | kChecksumUDP;
 		}
