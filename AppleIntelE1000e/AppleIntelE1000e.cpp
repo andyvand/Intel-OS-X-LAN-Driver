@@ -1151,7 +1151,7 @@ static int e1000_transfer_dhcp_info(struct e1000_adapter *adapter,
 	if (mbuf_pkthdr_len(skb) <= MINIMUM_DHCP_PACKET_SIZE)
 		return 0;
 	
-	ether_header * ehdr = (ether_header *)mbuf_datastart(skb);
+	ether_header * ehdr = (ether_header *)mbuf_data(skb);
 	if (ehdr->ether_type != htons(ETHERTYPE_IP))
 		return 0;
 	
@@ -3895,7 +3895,7 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 	
 	// from FreeBSD
 	ehdrlen = ETHER_HDR_LEN;
-	ip = (struct ip *)((u8*)mbuf_datastart(skb) + ehdrlen);
+	ip = (struct ip *)((u8*)mbuf_data(skb) + ehdrlen);
 	ip_hlen = ip->ip_hl << 2;
 	hdr_len = ehdrlen + ip_hlen;
 

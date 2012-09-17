@@ -3562,31 +3562,22 @@ static void igb_tx_csum(struct igb_ring *tx_ring, struct igb_tx_buffer *first)
           (checksumDemanded&IONetworkController::kChecksumTCP)?"TCP ":"",
           (checksumDemanded&IONetworkController::kChecksumUDP)?"UDP ":""
           );
-#endif    
-	if(checksumDemanded){
-		int  ehdrlen, ip_hlen;
-		u16	vtag;
+#endif
+	int  ehdrlen = ETHER_HDR_LEN;
+	if(checksumDemanded == 0){
+		if (!(first->tx_flags & IGB_TX_FLAGS_VLAN))
+			return;
+	} else {
+		int  ip_hlen;
 		u8* packet;
 		
 		vlan_macip_lens = type_tucmd = mss_l4len_idx = 0;
 		
-		/*
-		 ** In advanced descriptors the vlan tag must 
-		 ** be placed into the context descriptor, thus
-		 ** we need to be here just for that setup.
-		 */
-		if (mbuf_get_vlan_tag(skb, &vtag)==0) {
-			ehdrlen = ETHER_HDR_LEN + VLAN_HLEN;
-		} else{
-			ehdrlen = ETHER_HDR_LEN;
-		}
-		
 		/* Set the ether header length */
-		vlan_macip_lens |= ehdrlen << E1000_ADVTXD_MACLEN_SHIFT;
 		packet = (u8*)mbuf_data(skb) + ehdrlen;
 		
-		if(0){		// IPv6
-			//struct ip6_hdr *ip6 = (struct ip6_hdr *)((u8*)mbuf_data(skb) + ehdrlen);
+		if(checksumDemanded & (IONetworkController::kChecksumTCPIPv6|IONetworkController::kChecksumUDPIPv6)){
+			// IPv6
 			ip_hlen = sizeof(struct ip6_hdr);
 			type_tucmd |= E1000_ADVTXD_TUCMD_IPV6;
 		} else {
@@ -3594,6 +3585,7 @@ static void igb_tx_csum(struct igb_ring *tx_ring, struct igb_tx_buffer *first)
 			ip_hlen = ip->ip_hl << 2;
 			type_tucmd |= E1000_ADVTXD_TUCMD_IPV4;
 		}
+		vlan_macip_lens |= ip_hlen;
 		
 		if(checksumDemanded & IONetworkController::kChecksumTCP){
 			type_tucmd |= E1000_ADVTXD_TUCMD_L4T_TCP;
@@ -3604,9 +3596,10 @@ static void igb_tx_csum(struct igb_ring *tx_ring, struct igb_tx_buffer *first)
 			mss_l4len_idx = sizeof(struct udphdr) << E1000_ADVTXD_L4LEN_SHIFT;
 		}
 		
-		vlan_macip_lens |= ip_hlen;
 		first->tx_flags |= IGB_TX_FLAGS_CSUM;
 	}
+	vlan_macip_lens |= ehdrlen << E1000_ADVTXD_MACLEN_SHIFT;
+
 
 #else	// __APPLE__
 	
@@ -5680,8 +5673,10 @@ static inline void igb_rx_checksum(struct igb_ring *ring,
 	}
 	/* It must be a TCP or UDP packet with a valid checksum */
 #ifdef	__APPLE__
+	if (igb_test_staterr(rx_desc, E1000_RXD_STAT_IPCS))
+		ring->netdev->rxChecksumOK(skb, IONetworkController::kChecksumIP);
 	if (igb_test_staterr(rx_desc, E1000_RXD_STAT_TCPCS))
-		ring->netdev->rxChecksumOK(skb);
+		ring->netdev->rxChecksumOK(skb, IONetworkController::kChecksumTCP|IONetworkController::kChecksumUDP);
 #else
 	if (igb_test_staterr(rx_desc, E1000_RXD_STAT_TCPCS |
 						 E1000_RXD_STAT_UDPCS))
@@ -8213,14 +8208,14 @@ IOReturn AppleIGB::getChecksumSupport(UInt32 *checksumMask, UInt32 checksumFamil
 	if( checksumFamily != kChecksumFamilyTCPIP ) {
 		IOLog("AppleIGB: Operating system wants information for unknown checksum family.\n");
 		return kIOReturnUnsupported;
-	} else {
-		if( !isOutput ) {
-			*checksumMask = kChecksumTCP;
-		} else {
-			*checksumMask = kChecksumTCP | kChecksumUDP;
-		}
-		return kIOReturnSuccess;
 	}
+	
+	if( !isOutput ) {
+		*checksumMask = kChecksumTCP | kChecksumUDP | kChecksumIP;
+	} else {
+		*checksumMask = kChecksumTCP | kChecksumUDP;
+	}
+	return kIOReturnSuccess;
 }
 
 //-----------------------------------------------------------------------
@@ -8546,11 +8541,9 @@ void AppleIGB::stopTxQueue()
 	transmitQueue->flush();
 }
 
-void AppleIGB::rxChecksumOK( mbuf_t skb )
+void AppleIGB::rxChecksumOK( mbuf_t skb, UInt32 flag )
 {
-	UInt32 mask = kChecksumTCP;
-	UInt32 valid = kChecksumTCP;
-	setChecksumResult(skb, kChecksumFamilyTCPIP, mask, valid );
+	setChecksumResult(skb, kChecksumFamilyTCPIP, flag, flag );
 }
 
 dma_addr_t AppleIGB::mapSingle(mbuf_t skb)

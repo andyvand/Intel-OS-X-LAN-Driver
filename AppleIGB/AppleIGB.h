@@ -133,7 +133,7 @@ public:
 	void receiveError(mbuf_t skb);
 	IOMbufNaturalMemoryCursor * txCursor(){ return txMbufCursor; }
 	IOMbufNaturalMemoryCursor * rxCursor(){ return rxMbufCursor; }
-	void rxChecksumOK( mbuf_t );
+	void rxChecksumOK( mbuf_t, UInt32 flag );
 	bool running(){return enabledForNetif;}
 	bool carrier();
 	void setCarrier(bool);
