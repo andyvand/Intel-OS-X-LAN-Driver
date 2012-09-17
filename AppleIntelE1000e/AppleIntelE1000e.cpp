@@ -21,8 +21,10 @@ extern "C" {
 
 #include "AppleIntelE1000e.h"
 
-#define USE_RX_IP_CHECKSUM	0
-#define USE_RX_UDP_CHECKSUM	0
+#define USE_RX_IP_CHECKSUM	1
+#define USE_RX_UDP_CHECKSUM	1
+#define USE_TX_IP_CHECKSUM	0
+#define USE_TX_UDP_CHECKSUM	1
 
 #define TBDS_PER_TCB 12
 #define super IOEthernetController
@@ -34,10 +36,6 @@ extern "C" {
 #define E1000_TX_FLAGS_NO_FCS		0x00000010
 #define E1000_TX_FLAGS_VLAN_MASK	0xffff0000
 #define E1000_TX_FLAGS_VLAN_SHIFT	16
-
-#define E1000_MAX_PER_TXD	8192
-#define E1000_MAX_TXD_PWR	12
-#define TXD_USE_COUNT(S, X) (((S) >> (X)) + 1)
 
 static int cards_found = 0;
 
@@ -559,7 +557,7 @@ void e1000e_reset(struct e1000_adapter *adapter)
 			
 			/*
 			 * if short on Rx space, Rx wins and must trump Tx
-			 * adjustment or use Early Receive if available
+			 * adjustment
 			 */
 			if (pba < min_rx_space)
 				pba = min_rx_space;
@@ -631,6 +629,15 @@ void e1000e_reset(struct e1000_adapter *adapter)
 	}
 
 	/*
+	 * Alignment of Tx data is on an arbitrary byte boundary with the
+	 * maximum size per Tx descriptor limited only to the transmit
+	 * allocation of the packet buffer minus 96 bytes with an upper
+	 * limit of 24KB due to receive synchronization limitations.
+	 */
+	adapter->tx_fifo_limit = min_t(u32, ((er32(PBA) >> 16) << 10) - 96,
+								   24 << 10);
+
+	/*
 	 * Disable Adaptive Interrupt Moderation if 2 full packets cannot
 	 * fit in receive buffer.
 	 */
@@ -639,13 +646,13 @@ void e1000e_reset(struct e1000_adapter *adapter)
 			if (!(adapter->flags2 & FLAG2_DISABLE_AIM)) {
 				IOLog("Interrupt Throttle Rate turned off\n");
 				adapter->flags2 |= FLAG2_DISABLE_AIM;
-				ew32(ITR, 0);
+				e1000e_write_itr(adapter, 0);
 			}
 		} else if (adapter->flags2 & FLAG2_DISABLE_AIM) {
 			IOLog( "Interrupt Throttle Rate turned on\n");
 			adapter->flags2 &= ~FLAG2_DISABLE_AIM;
 			adapter->itr = 20000;
-			ew32(ITR, 1000000000 / (adapter->itr * 256));
+			e1000e_write_itr(adapter, adapter->itr);
 		}
 	}
 
@@ -759,9 +766,9 @@ static int e1000e_write_uc_addr_list(struct net_device *netdev)
 			if (!rar_entries)
 				break;
 #ifdef NETDEV_HW_ADDR_T_UNICAST
-			e1000e_rar_set(hw, ha->addr, rar_entries--);
+			hw->mac.ops.rar_set(hw, ha->addr, rar_entries--);
 #else
-			e1000e_rar_set(hw, ha->da_addr, rar_entries--);
+			hw->mac.ops.rar_set(hw, ha->da_addr, rar_entries--);
 #endif
 			count++;
 		}
@@ -975,6 +982,30 @@ set_itr_now:
 	}
 }
 
+/**
+ * e1000e_write_itr - write the ITR value to the appropriate registers
+ * @adapter: address of board private structure
+ * @itr: new ITR value to program
+ *
+ * e1000e_write_itr determines if the adapter is in MSI-X mode
+ * and, if so, writes the EITR registers with the ITR value.
+ * Otherwise, it writes the ITR value into the ITR register.
+ **/
+void e1000e_write_itr(struct e1000_adapter *adapter, u32 itr)
+{
+	struct e1000_hw *hw = &adapter->hw;
+	u32 new_itr = itr ? 1000000000 / (itr * 256) : 0;
+	
+	if (adapter->msix_entries) {
+		int vector;
+		
+		for (vector = 0; vector < adapter->num_vectors; vector++)
+			writel(new_itr, (u8*)hw->hw_addr + E1000_EITR_82574(vector));
+	} else {
+		ew32(ITR, new_itr);
+	}
+}
+
 static int e1000_tx_map(struct e1000_adapter *adapter, mbuf_t skb, unsigned int first, IOMbufNaturalMemoryCursor * txMbufCursor )
 {
 	struct e1000_ring *tx_ring = adapter->tx_ring;
@@ -1102,6 +1133,47 @@ static void e1000_tx_queue(struct e1000_ring *tx_ring, int tx_flags, int count)
 	mmiowb();
 }
 
+#define MINIMUM_DHCP_PACKET_SIZE 282
+static int e1000_transfer_dhcp_info(struct e1000_adapter *adapter,
+									struct sk_buff *skb)
+{
+	struct e1000_hw *hw = &adapter->hw;
+	u16 length, offset;
+	
+#ifdef NETIF_F_HW_VLAN_TX
+	if (vlan_tx_tag_present(skb) &&
+	    !((vlan_tx_tag_get(skb) == adapter->hw.mng_cookie.vlan_id) &&
+	      (adapter->hw.mng_cookie.status &
+	       E1000_MNG_DHCP_COOKIE_STATUS_VLAN)))
+		return 0;
+	
+#endif
+	if (mbuf_pkthdr_len(skb) <= MINIMUM_DHCP_PACKET_SIZE)
+		return 0;
+	
+	ether_header * ehdr = (ether_header *)mbuf_datastart(skb);
+	if (ehdr->ether_type != htons(ETHERTYPE_IP))
+		return 0;
+	
+	{
+		const struct ip *ip = (struct ip *)((u8 *)ehdr + 14);
+		struct udphdr *udp;
+		
+		if (ip->ip_p != IPPROTO_UDP)
+			return 0;
+		
+		udp = (struct udphdr *)((u8 *)ip + (ip->ip_hl << 2));
+		if (ntohs(udp->uh_dport) != 67)
+			return 0;
+		
+		offset = (u8 *)udp + 8 - (u8*)ehdr;
+		length = mbuf_pkthdr_len(skb) - offset;
+		return e1000e_mng_write_dhcp_info(hw, (u8 *)udp + 8, length);
+	}
+	
+	return 0;
+}
+
 static void e1000e_check_82574_phy_workaround(struct e1000_adapter *adapter)
 {
 	struct e1000_hw *hw = &adapter->hw;
@@ -1117,7 +1189,7 @@ static void e1000e_check_82574_phy_workaround(struct e1000_adapter *adapter)
 	
 	if (adapter->phy_hang_count > 1) {
 		adapter->phy_hang_count = 0;
-		//schedule_work(&adapter->reset_task);
+		schedule_work(&adapter->reset_task);
 	}
 }
 
@@ -1496,8 +1568,8 @@ bool AppleIntelE1000e::start(IOService* provider)
 		adapter->hw.phy.autoneg_advertised = 0x2f;
 		
 		/* ring size defaults */
-		adapter->rx_ring->count = NUM_RING_FRAME;
-		adapter->tx_ring->count = NUM_RING_FRAME;
+		adapter->rx_ring->count = E1000_DEFAULT_RXD;
+		adapter->tx_ring->count = E1000_DEFAULT_TXD;
 		
 		/*
 		 * Initial Wake on LAN setting - If APM wake is enabled in
@@ -1855,6 +1927,9 @@ UInt32 AppleIntelE1000e::outputPacket(mbuf_t skb, void * param)
 		return kIOReturnOutputStall;
 	}
 
+	if (adapter->hw.mac.tx_pkt_filtering)
+		e1000_transfer_dhcp_info(adapter, skb);
+
 	if (e1000_desc_unused(adapter->tx_ring) < TBDS_PER_TCB+2){
 		return kIOReturnOutputStall;
 	}
@@ -2018,12 +2093,13 @@ IOReturn AppleIntelE1000e::getHardwareAddress(IOEthernetAddress * addr)
 IOReturn AppleIntelE1000e::setHardwareAddress(const IOEthernetAddress * addr)
 {
 	e1000_adapter *adapter = &priv_adapter;
+	struct e1000_hw *hw = &adapter->hw;
 	e_info("setHardwareAddress %02x:%02x:%02x:%02x:%02x:%02x.\n",
 		addr->bytes[0],addr->bytes[1],addr->bytes[2],
 		addr->bytes[3],addr->bytes[4],addr->bytes[5] );
 	memcpy(adapter->hw.mac.addr, addr->bytes, kIOEthernetAddressSize);
 	
-	e1000e_rar_set(&adapter->hw, adapter->hw.mac.addr, 0);
+	hw->mac.ops.rar_set(&adapter->hw, adapter->hw.mac.addr, 0);
 	
 	if (adapter->flags & FLAG_RESET_OVERWRITES_LAA) {
 		/* activate the work around */
@@ -2037,7 +2113,7 @@ IOReturn AppleIntelE1000e::setHardwareAddress(const IOEthernetAddress * addr)
 		 * are dropped. Eventually the LAA will be in RAR[0] and
 		 * RAR[14]
 		 */
-		e1000e_rar_set(&adapter->hw,
+		hw->mac.ops.rar_set(&adapter->hw,
 					   adapter->hw.mac.addr,
 					   adapter->hw.mac.rar_entry_count - 1);
 	}
@@ -2071,17 +2147,25 @@ IOReturn AppleIntelE1000e::getChecksumSupport(UInt32 *checksumMask, UInt32 check
 		IOLog("AppleIntelE1000e: Operating system wants information for unknown checksum family.\n");
 		return kIOReturnUnsupported;
 	} else {
+		UInt32 mask = 0;
 		if( !isOutput ) {
-			*checksumMask = kChecksumTCP;
+			mask |= kChecksumTCP;
 #if USE_RX_UDP_CHECKSUM
-			*checksumMask |= kChecksumUDP;
+			mask |= kChecksumUDP;
 #endif
 #if USE_RX_IP_CHECKSUM
-			*checksumMask |= kChecksumIP;
+			mask |= kChecksumIP;
 #endif
 		} else {
-			*checksumMask = kChecksumTCP | kChecksumUDP;
+			mask |= kChecksumTCP;
+#if USE_TX_UDP_CHECKSUM
+			mask |= kChecksumUDP;
+#endif
+#if USE_TX_IP_CHECKSUM
+			mask |= kChecksumIP;
+#endif
 		}
+		*checksumMask = mask;
 		return kIOReturnSuccess;
 	}
 }
@@ -2550,7 +2634,7 @@ void AppleIntelE1000e::e1000_configure_rx()
 	/* irq moderation */
 	ew32(RADV, adapter->rx_abs_int_delay);
 	if ((adapter->itr_setting != 0) && (adapter->itr != 0))
-		ew32(ITR, 1000000000 / (adapter->itr * 256));
+		e1000e_write_itr(adapter, adapter->itr);
 	
 	ctrl_ext = er32(CTRL_EXT);
 	ew32(CTRL_EXT, ctrl_ext);
@@ -2572,22 +2656,13 @@ void AppleIntelE1000e::e1000_configure_rx()
 	/* Enable Receive Checksum Offload for TCP and UDP */
 	rxcsum = er32(RXCSUM);
 #ifdef HAVE_NDO_SET_FEATURES
-	if (adapter->netdev->features & NETIF_F_RXCSUM) {
+	if (adapter->netdev->features & NETIF_F_RXCSUM)
 #else
-    if (adapter->flags & FLAG_RX_CSUM_ENABLED) {
+	if (adapter->flags & FLAG_RX_CSUM_ENABLED)
 #endif
 		rxcsum |= E1000_RXCSUM_TUOFL;
-		
-		/*
-		 * IPv4 payload checksum for UDP fragments must be
-		 * used in conjunction with packet-split.
-		 */
-		if (adapter->rx_ps_pages)
-			rxcsum |= E1000_RXCSUM_IPPCSE;
-	} else {
+	else
 		rxcsum &= ~E1000_RXCSUM_TUOFL;
-		/* no need to clear IPPCSE as it defaults to 0 */
-	}
 	ew32(RXCSUM, rxcsum);
 	
 	if (adapter->hw.mac.type == e1000_pch2lan) {
@@ -2864,7 +2939,7 @@ bool AppleIntelE1000e::e1000_clean_rx_irq()
 			/* end copybreak code */
 			
 			/* Receive Checksum Offload */
-			e1000_rx_checksum(skb, staterr, rx_desc->wb.lower.hi_dword.csum_ip.csum);
+			e1000_rx_checksum(skb, staterr);
 
 			e1000_receive_skb(skb, length, staterr, rx_desc->wb.upper.vlan);
 		}
@@ -2968,7 +3043,7 @@ bool AppleIntelE1000e::e1000_clean_jumbo_rx_irq()
 		total_rx_bytes += length;
 		total_rx_packets++;
 		
-		e1000_rx_checksum(skb, staterr, rx_desc->wb.lower.hi_dword.csum_ip.csum);
+		e1000_rx_checksum(skb, staterr);
 		
 		e1000_receive_skb(skb, length, staterr, rx_desc->wb.upper.vlan);
 		
@@ -3538,7 +3613,7 @@ link_up:
 				   adapter->gorc - adapter->gotc) / 10000;
 		u32 itr = goc > 0 ? (dif * 6000 / goc + 2000) : 8000;
 		
-		ew32(ITR, 1000000000 / (itr * 256));
+		e1000e_write_itr(adapter, itr);
 	}
 	
 	/* Cause software interrupt to ensure Rx ring is cleaned */
@@ -3558,7 +3633,7 @@ link_up:
 	 * reset from the other port. Set the appropriate LAA in RAR[0]
 	 */
 	if (e1000e_get_laa_state_82571(hw))
-		e1000e_rar_set(hw, adapter->hw.mac.addr, 0);
+		hw->mac.ops.rar_set(hw, adapter->hw.mac.addr, 0);
 	
 	if (adapter->flags2 & FLAG2_CHECK_PHY_HANG)
 		e1000e_check_82574_phy_workaround(adapter);
@@ -3686,7 +3761,7 @@ void AppleIntelE1000e::e1000_receive_skb(mbuf_t skb, u32 length, u8 status, __le
 	netStats->inputPackets += netif->inputPacket(skb, length, IONetworkInterface::kInputOptionQueuePacket);
 }
 
-void AppleIntelE1000e::e1000_rx_checksum(mbuf_t skb, u32 status_err, __le16 csum)
+void AppleIntelE1000e::e1000_rx_checksum(mbuf_t skb, u32 status_err)
 {
 	struct e1000_adapter *adapter = &priv_adapter;
 	u16 status = (u16)status_err;
@@ -3704,8 +3779,8 @@ void AppleIntelE1000e::e1000_rx_checksum(mbuf_t skb, u32 status_err, __le16 csum
 	if (status & E1000_RXD_STAT_IXSM)
 		return;
 
-    /* TCP/UDP checksum error bit is set */
-	if (errors & E1000_RXD_ERR_TCPE) {
+	/* TCP/UDP checksum error bit or IP checksum error bit is set */
+	if (errors & (E1000_RXD_ERR_TCPE | E1000_RXD_ERR_IPE)) {
 		/* let the stack verify checksum errors */
 		adapter->hw_csum_err++;
 		return;
@@ -3726,16 +3801,6 @@ void AppleIntelE1000e::e1000_rx_checksum(mbuf_t skb, u32 status_err, __le16 csum
 #if USE_RX_UDP_CHECKSUM
 	ckMask |= kChecksumUDP;
 	if (status & E1000_RXD_STAT_UDPCS) {
-		/*
-		 * IP fragment with UDP payload
-		 * Hardware complements the payload checksum, so we undo it
-		 * and then put the value in host order for further stack use.
-		 */
-	#if 0
-		// how to implement the linux code below ?
-		__sum16 sum = (__force __sum16)swab16((__force u16)csum);
-		skb->csum = csum_unfold(~sum);
-	#endif
 		ckResult |= kChecksumUDP;
 	}
 #endif
@@ -3749,6 +3814,65 @@ void AppleIntelE1000e::e1000_rx_checksum(mbuf_t skb, u32 status_err, __le16 csum
 
 bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 {
+#if 1
+	struct e1000_adapter *adapter = &priv_adapter;
+	struct e1000_ring *tx_ring = adapter->tx_ring;
+	struct e1000_context_desc *context_desc;
+	struct e1000_buffer *buffer_info;
+	unsigned int i;
+	u32 txd_cmd = 0;
+
+	i = tx_ring->next_to_use;
+	buffer_info = &tx_ring->buffer_info[i];
+	context_desc = E1000_CONTEXT_DESC(*tx_ring, i);
+
+	
+	UInt32 checksumDemanded;
+	getChecksumDemand(skb, kChecksumFamilyTCPIP, &checksumDemanded);
+	if(checksumDemanded & kChecksumTCP){
+		context_desc->lower_setup.ip_config = E1000_TXD_CMD_DEXT | E1000_TXD_DTYP_D;
+		context_desc->upper_setup.tcp_config = E1000_TXD_POPTS_TXSM << 8;
+	} else if(checksumDemanded & kChecksumUDP){
+		context_desc->lower_setup.ip_config = E1000_TXD_CMD_DEXT | E1000_TXD_DTYP_D;
+		context_desc->upper_setup.tcp_config = E1000_TXD_POPTS_TXSM << 8;
+	} else {
+		return false;
+	}
+
+	/* If we reach this point, the checksum offload context
+	 * needs to be reset.
+	 */
+	context_desc->lower_setup.ip_fields.ipcss = ETHER_HDR_LEN;
+	context_desc->lower_setup.ip_fields.ipcso =
+	ETHER_HDR_LEN + offsetof(struct ip, ip_sum);
+	context_desc->lower_setup.ip_fields.ipcse =
+		cpu_to_le16(ETHER_HDR_LEN + sizeof(struct ip) - 1);
+	
+	context_desc->upper_setup.tcp_fields.tucss =
+	ETHER_HDR_LEN + sizeof(struct ip);
+	context_desc->upper_setup.tcp_fields.tucse = cpu_to_le16(0);
+	
+	if (checksumDemanded & kChecksumTCP) {
+		context_desc->upper_setup.tcp_fields.tucso =
+		ETHER_HDR_LEN + sizeof(struct ip) +
+		offsetof(struct tcphdr, th_sum);
+		txd_cmd |= E1000_TXD_CMD_TCP;
+	} else {
+		context_desc->upper_setup.tcp_fields.tucso =
+		ETHER_HDR_LEN + sizeof(struct ip) +
+		offsetof(struct udphdr, uh_sum);
+	}
+	
+	context_desc->tcp_seg_setup.data = cpu_to_le32(0);
+	context_desc->cmd_and_length = cpu_to_le32(adapter->txd_cmd | E1000_TXD_CMD_DEXT);
+
+	buffer_info->next_to_watch = i;
+	
+	i++;
+	if (i >= tx_ring->count)
+		i = 0;
+	tx_ring->next_to_use = i;
+#else
 	struct e1000_adapter *adapter = &priv_adapter;
 	struct e1000_ring *tx_ring = adapter->tx_ring;
 	struct e1000_context_desc *context_desc;
@@ -3758,7 +3882,7 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 	struct ip *ip = NULL;
 	u32 ip_hlen, hdr_len;
 	int ehdrlen;
-	u32 cmd = 0;
+	u32 cmd = E1000_TXD_CMD_DEXT;
 	
 	UInt32 checksumDemanded;
 	getChecksumDemand(skb, kChecksumFamilyTCPIP, &checksumDemanded);
@@ -3771,10 +3895,12 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 	
 	// from FreeBSD
 	ehdrlen = ETHER_HDR_LEN;
-	ip = (struct ip *)((u8*)mbuf_data(skb) + ehdrlen);
+	ip = (struct ip *)((u8*)mbuf_datastart(skb) + ehdrlen);
 	ip_hlen = ip->ip_hl << 2;
 	hdr_len = ehdrlen + ip_hlen;
 
+	context_desc->lower_setup.ip_config = 0;
+#if USE_TX_IP_CHECKSUM
 	if(	checksumDemanded & kChecksumIP ){
 		/*
 		 * Start offset for header checksum calculation.
@@ -3786,6 +3912,8 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 		context_desc->lower_setup.ip_fields.ipcso = ehdrlen + offsetof(struct ip, ip_sum);
 		cmd |= E1000_TXD_CMD_IP;
 	}
+#endif
+	//context_desc->upper_setup.tcp_config = 0;
 	if(	checksumDemanded & kChecksumTCP ){
 		/*
 		 * Start offset for payload checksum calculation.
@@ -3793,10 +3921,10 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 		 * Offset of place to put the checksum.
 		 */
 		context_desc->upper_setup.tcp_fields.tucss = hdr_len;
-		context_desc->upper_setup.tcp_fields.tucse = cpu_to_le16(0);
 		context_desc->upper_setup.tcp_fields.tucso = hdr_len + offsetof(struct tcphdr, th_sum);
 		cmd |= E1000_TXD_CMD_TCP;
 	}
+#if USE_TX_UDP_CHECKSUM
 	if(	checksumDemanded & kChecksumUDP ){
 		/*
 		 * Start offset for header checksum calculation.
@@ -3804,12 +3932,13 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 		 * Offset of place to put the checksum.
 		 */
 		context_desc->upper_setup.tcp_fields.tucss = hdr_len;
-		context_desc->upper_setup.tcp_fields.tucse = cpu_to_le16(0);
 		context_desc->upper_setup.tcp_fields.tucso = hdr_len + offsetof(struct udphdr, uh_sum);
 	}
-	
-	context_desc->tcp_seg_setup.data = cpu_to_le32(0);
-	context_desc->cmd_and_length = cpu_to_le32(adapter->txd_cmd | E1000_TXD_CMD_DEXT | cmd);
+#endif
+
+	context_desc->upper_setup.tcp_fields.tucse = 0;
+	context_desc->tcp_seg_setup.data = 0;
+	context_desc->cmd_and_length = cpu_to_le32(cmd);
 	
 	buffer_info->next_to_watch = i;
 	
@@ -3818,6 +3947,7 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 		i = 0;
 	tx_ring->next_to_use = i;
 	
+#endif
 	return true;
 }
 

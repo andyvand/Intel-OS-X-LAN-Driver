@@ -47,6 +47,9 @@
 #define true 1
 #define false 0
 
+#define min_t(type,x,y) \
+	({ type __x = (x); type __y = (y); __x < __y ? __x: __y; })
+
 #define cpu_to_le16(x)	OSSwapHostToLittleConstInt16(x)
 #define cpu_to_le32(x)	OSSwapHostToLittleConstInt32(x)
 #define	cpu_to_le64(x)	OSSwapHostToLittleConstInt64(x)
@@ -235,8 +238,8 @@ typedef void IOBufferMemoryDescriptor;
 #define	unlikely(x)	(x)
 #define	likely(x)	(x)
 #define	BUG()
-#define	wmb()
-#define	mmiowb()
+#define	wmb()	OSSynchronizeIO()
+#define	mmiowb()	OSSynchronizeIO()
 
 #define	__MODULE_STRING(s)	"x"
 #define synchronize_irq(x) 

@@ -63,12 +63,16 @@ IOLog("AppleIntelE1000e(Debug): " format, ## arg)
 #define netdev_dbg(netdev, format, arg...)
 #endif
 #define netdev_err(netdev, format, arg...) \
-IOLog("AppleIntelE1000e(Err): " format, ## arg)
+	IOLog("AppleIntelE1000e(Err): " format, ## arg)
 #define netdev_info(netdev, format, arg...) \
+	IOLog("AppleIntelE1000e(Info): " format, ## arg)
+#define dev_info(netdev, format, arg...) \
 IOLog("AppleIntelE1000e(Info): " format, ## arg)
 #define netdev_warn(netdev, format, arg...) \
-IOLog("AppleIntelE1000e(Warn): " format, ## arg)
+	IOLog("AppleIntelE1000e(Warn): " format, ## arg)
 #define netdev_notice(netdev, format, arg...) \
+	IOLog("AppleIntelE1000e(Notice): " format, ## arg)
+#define dev_notice(netdev, format, arg...) \
 IOLog("AppleIntelE1000e(Notice): " format, ## arg)
 #endif  // __APPLE__
 #define e_dbg(format, arg...) \
@@ -286,6 +290,7 @@ struct e1000_adapter {
 	 */
 	struct e1000_ring *tx_ring	/* One per active queue */
 	 ____cacheline_aligned_in_smp;
+	u32 tx_fifo_limit;
 
 #ifdef CONFIG_E1000E_NAPI
 	struct napi_struct napi;
@@ -363,7 +368,7 @@ struct e1000_adapter {
 	struct e1000_hw hw;
 
 #ifdef HAVE_NDO_GET_STATS64
-	spinlock_t stats64_lock;
+	spinlock_t stats64_lock;	/* protects statistics counters */
 #endif
 	struct e1000_hw_stats stats;
 	struct e1000_phy_info phy_info;
@@ -528,6 +533,7 @@ extern void e1000e_set_interrupt_capability(struct e1000_adapter *adapter);
 extern void e1000e_reset_interrupt_capability(struct e1000_adapter *adapter);
 extern void e1000e_get_hw_control(struct e1000_adapter *adapter);
 extern void e1000e_release_hw_control(struct e1000_adapter *adapter);
+extern void e1000e_write_itr(struct e1000_adapter *adapter, u32 itr);
 
 extern unsigned int copybreak;
 
@@ -578,7 +584,6 @@ extern void e1000e_init_rx_addrs(struct e1000_hw *hw, u16 rar_count);
 extern void e1000e_update_mc_addr_list_generic(struct e1000_hw *hw,
 					       u8 *mc_addr_list,
 					       u32 mc_addr_count);
-extern void e1000e_rar_set(struct e1000_hw *hw, u8 *addr, u32 index);
 extern s32 e1000e_set_fc_watermarks(struct e1000_hw *hw);
 extern void e1000e_set_pcie_no_snoop(struct e1000_hw *hw, u32 no_snoop);
 extern s32 e1000e_get_hw_semaphore(struct e1000_hw *hw);
@@ -639,12 +644,22 @@ static inline s32 e1e_rphy(struct e1000_hw *hw, u32 offset, u16 *data)
 	return 0;
 }
 
+static inline s32 e1e_rphy_locked(struct e1000_hw *hw, u32 offset, u16 *data)
+{
+	return hw->phy.ops.read_reg_locked(hw, offset, data);
+}
+
 static inline s32 e1e_wphy(struct e1000_hw *hw, u32 offset, u16 data)
 {
 	if (hw->phy.ops.write_reg)
 		return hw->phy.ops.write_reg(hw, offset, data);
 
 	return 0;
+}
+
+static inline s32 e1e_wphy_locked(struct e1000_hw *hw, u32 offset, u16 data)
+{
+	return hw->phy.ops.write_reg_locked(hw, offset, data);
 }
 
 static inline s32 e1000_get_cable_length(struct e1000_hw *hw)
