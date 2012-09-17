@@ -3575,9 +3575,14 @@ static void igb_tx_csum(struct igb_ring *tx_ring, struct igb_tx_buffer *first)
 		
 		/* Set the ether header length */
 		packet = (u8*)mbuf_data(skb) + ehdrlen;
-		
-		if(checksumDemanded & (IONetworkController::kChecksumTCPIPv6|IONetworkController::kChecksumUDPIPv6)){
+
+#if defined(MAC_OS_X_VERSION_10_7)
+		if(checksumDemanded & (IONetworkController::kChecksumTCPIPv6|IONetworkController::kChecksumUDPIPv6))
 			// IPv6
+#else
+		if(checksumDemanded & IONetworkController::kChecksumTCPSum16)
+#endif
+		{
 			ip_hlen = sizeof(struct ip6_hdr);
 			type_tucmd |= E1000_ADVTXD_TUCMD_IPV6;
 		} else {
