@@ -1390,10 +1390,16 @@ static int e1000_setup_tx_resources(struct e1000_adapter *adapter,
 	tx_ring->size = tx_ring->count * sizeof(struct e1000_tx_desc);
 	tx_ring->size = ALIGN(tx_ring->size, 4096);
 
+#if defined(MAC_OS_X_VERSION_10_6)
 	tx_ring->pool = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
 						kIODirectionInOut | kIOMemoryPhysicallyContiguous, 
 						tx_ring->size,
 						0xFFFF0000UL);	// 32-bits, 64K-aligned
+#else
+	tx_ring->pool = IOBufferMemoryDescriptor::withOptions(kIOMemoryPhysicallyContiguous, 
+						tx_ring->size,
+						PAGE_SIZE);
+#endif
 	if(tx_ring->pool){
 		tx_ring->pool->prepare();
 		tx_ring->desc = (void*)tx_ring->pool->getBytesNoCopy();
@@ -1585,9 +1591,15 @@ static int e1000_setup_rx_resources(struct e1000_adapter *adapter,
 	rx_ring->size = rx_ring->count * desc_len;
 	rx_ring->size = ALIGN(rx_ring->size, 4096);
 
+#if defined(MAC_OS_X_VERSION_10_6)
 	rx_ring->pool = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,kIODirectionInOut | kIOMemoryPhysicallyContiguous, 
 								rx_ring->size,
 								0xFFFF0000UL);	// 32-bits, 64K-aligned
+#else
+	rx_ring->pool = IOBufferMemoryDescriptor::withOptions(kIOMemoryPhysicallyContiguous,
+								rx_ring->size,
+								PAGE_SIZE);
+#endif
 	if(rx_ring->pool){
 		rx_ring->pool->prepare();
 		rx_ring->desc = (void*)rx_ring->pool->getBytesNoCopy();
@@ -5309,7 +5321,6 @@ void AppleIntelE1000::free()
 	RELEASE(mediumDict);
 	
 	RELEASE(csrPCIAddress);
-	RELEASE(flashPCIAddress);
 	
 	RELEASE(txMbufCursor);
 	
@@ -5328,7 +5339,6 @@ bool AppleIntelE1000::init(OSDictionary *properties)
 	pciDevice = NULL;
 	mediumDict = NULL;
 	csrPCIAddress = NULL;
-	flashPCIAddress = NULL;
 	interruptSource = NULL;
 	watchdogSource = NULL;
 	phyinfoSource = NULL;
@@ -5390,11 +5400,6 @@ bool AppleIntelE1000::start(IOService* provider)
 	csrPCIAddress = pciDevice->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress0);
 	if (csrPCIAddress == NULL) {
 		E1000_DBG("csrPCIAddress.\n");
-		return false;
-	}
-	flashPCIAddress = pciDevice->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress1);
-	if (flashPCIAddress == NULL) {
-		E1000_DBG("flashPCIAddress.\n");
 		return false;
 	}
 	createWorkLoop(); // dummy call

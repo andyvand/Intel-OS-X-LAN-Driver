@@ -121,7 +121,6 @@ private:
     
 public:
 	IOMemoryMap * csrPCIAddress;
-	IOMemoryMap * flashPCIAddress;
 	
 	IOMbufNaturalMemoryCursor * txMbufCursor;
 	
