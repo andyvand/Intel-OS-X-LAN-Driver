@@ -71,8 +71,7 @@
 
 #define GG82563_MSCR_ASSERT_CRS_ON_TX		0x0010	/* 1=Assert */
 
-/* DSP Distance Register (Page 5, Register 26) */
-/*
+/* DSP Distance Register (Page 5, Register 26)
  * 0 = <50M
  * 1 = 50-80M
  * 2 = 80-100M

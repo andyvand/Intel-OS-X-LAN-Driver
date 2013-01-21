@@ -75,6 +75,11 @@ static struct {
 	{ E1000_DEV_ID_PCH2_LV_LM, board_pch2lan },
 	{ E1000_DEV_ID_PCH2_LV_V, board_pch2lan },
 
+	{ E1000_DEV_ID_PCH_LPT_I217_LM, board_pch_lpt},
+	{ E1000_DEV_ID_PCH_LPT_I217_V, board_pch_lpt},
+	{ E1000_DEV_ID_PCH_LPTLP_I218_LM, board_pch_lpt},
+	{ E1000_DEV_ID_PCH_LPTLP_I218_V, board_pch_lpt},
+
 	{ 0, 0 }	/* terminate list */
 };
 
@@ -188,7 +193,8 @@ static struct e1000_info e1000_82574_info = {
 	.mac = e1000_82574,
 	.flags = FLAG_HAS_HW_VLAN_FILTER
     | FLAG_HAS_MSIX
-    | FLAG_HAS_JUMBO_FRAMES | FLAG_HAS_WOL | FLAG_APME_IN_CTRL3
+	| FLAG_HAS_JUMBO_FRAMES
+	| FLAG_HAS_WOL | FLAG_HAS_HW_TIMESTAMP | FLAG_APME_IN_CTRL3
 #ifndef HAVE_NDO_SET_FEATURES
     | FLAG_RX_CSUM_ENABLED
 #endif
@@ -205,7 +211,8 @@ static struct e1000_info e1000_82574_info = {
 
 static struct e1000_info e1000_82583_info = {
 	.mac = e1000_82583,
-	.flags = FLAG_HAS_HW_VLAN_FILTER | FLAG_HAS_WOL | FLAG_APME_IN_CTRL3
+	.flags = FLAG_HAS_HW_VLAN_FILTER
+	| FLAG_HAS_WOL | FLAG_HAS_HW_TIMESTAMP | FLAG_APME_IN_CTRL3
 #ifndef HAVE_NDO_SET_FEATURES
     | FLAG_RX_CSUM_ENABLED
 #endif
@@ -240,8 +247,7 @@ static s32 e1000_get_variants_ich8lan(struct e1000_adapter *adapter)
 {
 	struct e1000_hw *hw = &adapter->hw;
     
-	/*
-	 * Disable Jumbo Frame support on parts with Intel 10/100 PHY or
+	/* Disable Jumbo Frame support on parts with Intel 10/100 PHY or
 	 * on parts with MACsec enabled in NVM (reflected in CTRL_EXT).
 	 */
 	if ((adapter->hw.phy.type == e1000_phy_ife) ||
@@ -333,14 +339,14 @@ static struct e1000_info e1000_pch2_info = {
     | FLAG_HAS_FLASH | FLAG_HAS_JUMBO_FRAMES | FLAG_APME_IN_WUC,
 	.flags2 = FLAG2_HAS_PHY_STATS | FLAG2_HAS_EEE,
 	.pba = 26,
-	.max_hw_frame_size = DEFAULT_JUMBO,
+	.max_hw_frame_size = 9018,
 	.init_ops = e1000_init_function_pointers_ich8lan,
 	.get_variants = e1000_get_variants_ich8lan,
 };
 
 static struct e1000_info e1000_pch_lpt_info = {
 	.mac = e1000_pch_lpt,
-	.flags = FLAG_IS_ICH | FLAG_HAS_WOL
+	.flags = FLAG_IS_ICH | FLAG_HAS_WOL | FLAG_HAS_HW_TIMESTAMP
 #ifndef HAVE_NDO_SET_FEATURES
 	| FLAG_RX_CSUM_ENABLED
 #endif
@@ -349,7 +355,7 @@ static struct e1000_info e1000_pch_lpt_info = {
 	| FLAG_HAS_FLASH | FLAG_HAS_JUMBO_FRAMES | FLAG_APME_IN_WUC,
 	.flags2 = FLAG2_HAS_PHY_STATS | FLAG2_HAS_EEE,
 	.pba = 26,
-	.max_hw_frame_size = DEFAULT_JUMBO,
+	.max_hw_frame_size = 9018,
 	.init_ops = e1000_init_function_pointers_ich8lan,
 	.get_variants = e1000_get_variants_ich8lan,
 };

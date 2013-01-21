@@ -17,21 +17,21 @@
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.1.7</string>
+	<string>2.2.14</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>2.1.7</string>
+	<string>2.2.14</string>
 	<key>IOKitPersonalities</key>
 	<dict>
-		<key>I217</key>
+		<key>I21X</key>
 		<dict>
 			<key>CFBundleIdentifier</key>
 			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
 			<key>IOClass</key>
 			<string>${PRODUCT_NAME}</string>
 			<key>IOPCIMatch</key>
-			<string>0x153a8086 0x153b8086</string>
+			<string>0x153a8086 0x153b8086 0x15598086 0x155a8086</string>
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
 		</dict>

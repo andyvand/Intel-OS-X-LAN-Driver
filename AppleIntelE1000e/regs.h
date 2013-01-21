@@ -45,6 +45,9 @@
 #define E1000_FEXTNVM2	0x00030	/* Future Extended NVM 2 - RW */
 #define E1000_FEXTNVM3	0x0003C	/* Future Extended NVM 3 - RW */
 #define E1000_FEXTNVM4	0x00024	/* Future Extended NVM 4 - RW */
+#define E1000_FEXTNVM5	0x00014	/* Future Extended NVM 5 - RW */
+#define E1000_FEXTNVM6	0x00010	/* Future Extended NVM 6 - RW */
+#define E1000_FEXTNVM7	0x000E4	/* Future Extended NVM 7 - RW */
 #define E1000_FCT	0x00030	/* Flow Control Type - RW */
 #define E1000_CONNSW	0x00034	/* Copper/Fiber switch control - RW */
 #define E1000_VET	0x00038	/* VLAN Ether Type - RW */
@@ -75,6 +78,7 @@
 #define E1000_POEMB	E1000_PHY_CTRL	/* PHY OEM Bits */
 #define E1000_PBA	0x01000	/* Packet Buffer Allocation - RW */
 #define E1000_PBS	0x01008	/* Packet Buffer Size */
+#define E1000_PBECCSTS	0x0100C	/* Packet Buffer ECC Status - RW */
 #define E1000_EEMNGCTL	0x01010	/* MNG EEprom Control */
 #define E1000_EEARBC	0x01024	/* EEPROM Auto Read Bus Control */
 #define E1000_FLASHT	0x01028	/* FLASH Timer Register */
@@ -103,8 +107,7 @@
 #define E1000_RDPUCTL	0x025DC	/* DMA Rx Descriptor uC Control - RW */
 #define E1000_RDTR	0x02820	/* Rx Delay Timer - RW */
 #define E1000_RADV	0x0282C	/* Rx Interrupt Absolute Delay Timer - RW */
-/*
- * Convenience macros
+/* Convenience macros
  *
  * Note: "_n" is the queue number of the register to be written to.
  *
@@ -345,7 +348,6 @@
 #define E1000_RSSIR	0x05868	/* RSS Interrupt Request */
 #define E1000_TSYNCRXCTL	0x0B620	/* Rx Time Sync Control register - RW */
 #define E1000_TSYNCTXCTL	0x0B614	/* Tx Time Sync Control register - RW */
-#define E1000_TSYNCRXCFG	0x05F50	/* Time Sync Rx Configuration - RW */
 #define E1000_RXSTMPL	0x0B624	/* Rx timestamp Low - RO */
 #define E1000_RXSTMPH	0x0B628	/* Rx timestamp High - RO */
 #define E1000_RXSATRL	0x0B62C	/* Rx timestamp attribute low - RO */
@@ -355,6 +357,9 @@
 #define E1000_SYSTIML	0x0B600	/* System time register Low - RO */
 #define E1000_SYSTIMH	0x0B604	/* System time register High - RO */
 #define E1000_TIMINCA	0x0B608	/* Increment attributes register - RW */
+#define E1000_TIMADJL	0x0B60C	/* Time sync time adjustment offset Low - RW */
+#define E1000_TIMADJH	0x0B610	/* Time sync time adjustment offset High - RW */
+#define E1000_TSAUXC	0x0B640	/* Timesync Auxiliary Control register */
 #define E1000_RXMTRL	0x0B634	/* Time sync Rx EtherType and Msg Type - RW */
 #define E1000_RXUDP	0x0B638	/* Time Sync Rx UDP Port - RW */
 

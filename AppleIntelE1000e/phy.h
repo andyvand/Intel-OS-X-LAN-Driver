@@ -167,6 +167,7 @@ s32 e1000_get_cable_length_82577(struct e1000_hw *hw);
 #define E1000_82580_PM_SPD		0x0001	/* Smart Power Down */
 #define E1000_82580_PM_D0_LPLU		0x0002	/* For D0a states */
 #define E1000_82580_PM_D3_LPLU		0x0004	/* For all other states */
+#define E1000_82580_PM_GO_LINKD		0x0020	/* Go Link Disconnect */
 
 /* BM PHY Copper Specific Control 1 */
 #define BM_CS_CTRL1			16

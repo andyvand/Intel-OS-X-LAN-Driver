@@ -85,6 +85,7 @@
 #define E1000_H2ME_SLCAPD	0x00000010	/* Start LCAPD */
 #define E1000_H2ME_IPV4_ARP_EN	0x00000020	/* Arp Offload enable bit */
 #define E1000_H2ME_IPV6_NS_EN	0x00000040	/* NS Offload enable bit */
+#define E1000_H2ME_ULP		0x00000800	/* ULP Indication Bit */
 
 #define ID_LED_DEFAULT_ICH8LAN	((ID_LED_DEF1_DEF2 << 12) | \
 				 (ID_LED_OFF1_OFF2 <<  8) | \
@@ -186,8 +187,7 @@
 
 #define E1000_FCRTV_PCH	0x05F40	/* PCH Flow Control Refresh Timer Value */
 
-/*
- * For ICH, the name used for NVM word 17h is LED1 Config.
+/* For ICH, the name used for NVM word 17h is LED1 Config.
  * For PCH, the word was re-named to OEM Config.
  */
 #define E1000_NVM_LED1_CONFIG		0x17	/* NVM LED1/LPLU Config Word */
@@ -201,6 +201,17 @@
 /* SMBus Control Phy Register */
 #define CV_SMB_CTRL		PHY_REG(769, 23)
 #define CV_SMB_CTRL_FORCE_SMBUS	0x0001
+
+/* I218 Ultra Low Power Configuration 1 Register */
+#define I218_ULP_CONFIG1		PHY_REG(779, 16)
+#define I218_ULP_CONFIG1_START		0x0001	/* Start auto ULP config */
+#define I218_ULP_CONFIG1_IND		0x0004	/* Pwr up from ULP indication */
+#define I218_ULP_CONFIG1_STICKY_ULP	0x0010	/* Set sticky ULP mode */
+#define I218_ULP_CONFIG1_INBAND_EXIT	0x0020	/* Inband on ULP exit */
+#define I218_ULP_CONFIG1_WOL_HOST	0x0040	/* WoL Host on ULP exit */
+#define I218_ULP_CONFIG1_WOL_ME		0x0080	/* WoL ME on ULP exit */
+#define I218_ULP_CONFIG1_RESET_TO_SMBUS	0x0100	/* Reset to SMBus mode */
+#define I218_ULP_CONFIG1_DISABLE_SMB_PERST	0x1000	/* Disable on PERST# */
 
 /* SMBus Address Phy Register */
 #define HV_SMB_ADDR		PHY_REG(768, 26)
@@ -238,6 +249,7 @@
 /* PHY Power Management Control */
 #define HV_PM_CTRL		PHY_REG(770, 17)
 #define HV_PM_CTRL_PLL_STOP_IN_K1_GIGA	0x100
+#define HV_PM_CTRL_K1_ENABLE		0x4000
 #define I217_MEM_PM_CFG		PHY_REG(772, 27)	/* I217 PHY Mem PM Cfg Reg */
 #define I217_MEM_PM_CFG_TXF_SD	0x0020	/* Tx FIFO Memories Shutdown */
 
@@ -250,17 +262,26 @@
 #define I82579_LPI_CTRL_ENABLE_MASK		0x6000
 #define I82579_LPI_CTRL_FORCE_PLL_LOCK_COUNT	0x80
 
-/* EMI Registers */
+/* Extended Management Interface (EMI) Registers */
 #define I82579_EMI_ADDR		0x10
 #define I82579_EMI_DATA		0x11
 #define I82579_LPI_UPDATE_TIMER	0x4805	/* in 40ns units + 40 ns base value */
-#define I82579_MSE_THRESHOLD	0x084F	/* Mean Square Error Threshold */
+#define I82579_MSE_THRESHOLD	0x084F	/* 82579 Mean Square Error Threshold */
+#define I82577_MSE_THRESHOLD	0x0887	/* 82577 Mean Square Error Threshold */
 #define I82579_MSE_LINK_DOWN	0x2411	/* MSE count before dropping link */
+#define I82579_EEE_PCS_STATUS		0x182D	/* IEEE MMD Register 3.1 >> 8 */
+#define I82579_EEE_CAPABILITY		0x0410	/* IEEE MMD Register 3.20 */
+#define I82579_EEE_ADVERTISEMENT	0x040E	/* IEEE MMD Register 7.60 */
 #define I82579_EEE_LP_ABILITY		0x040F	/* IEEE MMD Register 7.61 */
 #define I82579_EEE_100_SUPPORTED	(1 << 1)	/* 100BaseTx EEE supported */
 #define I82579_EEE_1000_SUPPORTED	(1 << 2)	/* 1000BaseTx EEE supported */
+#define I217_EEE_PCS_STATUS	0x9401	/* IEEE MMD Register 3.1 */
+#define I217_EEE_CAPABILITY	0x8000	/* IEEE MMD Register 3.20 */
 #define I217_EEE_ADVERTISEMENT	0x8001	/* IEEE MMD Register 7.60 */
 #define I217_EEE_LP_ABILITY	0x8002	/* IEEE MMD Register 7.61 */
+
+#define E1000_EEE_RX_LPI_RCVD	0x0400	/* Tx LP idle received */
+#define E1000_EEE_TX_LPI_RCVD	0x0800	/* Rx LP idle received */
 
 /* Intel Rapid Start Technology Support */
 #define I217_PROXY_CTRL		BM_PHY_REG(BM_WUC_PAGE, 70)
@@ -273,8 +294,7 @@
 #define I217_MEMPWR			PHY_REG(772, 26)
 #define I217_MEMPWR_DISABLE_SMB_RELEASE	0x0010
 
-/*
- * Additional interrupts need to be handled for ICH family:
+/* Additional interrupts need to be handled for ICH family:
  *  DSW = The FW changed the status of the DISSW bit in FWSM
  *  PHYINT = The LAN connected device generates an interrupt
  *  EPRST = Manageability reset event
@@ -299,6 +319,25 @@
 /* Receive Address Initial CRC Calculation */
 #define E1000_PCH_RAICC(_n)	(0x05F50 + ((_n) * 4))
 
+/* Latency Tolerance Reporting */
+#define E1000_LTRV			0x000F8
+#define E1000_LTRV_SCALE_MAX		5
+#define E1000_LTRV_SCALE_FACTOR		5
+#define E1000_LTRV_REQ_SHIFT		15
+#define E1000_LTRV_NOSNOOP_SHIFT	16
+#define E1000_LTRV_SEND			(1 << 30)
+
+/* Proprietary Latency Tolerance Reporting PCI Capability */
+#define E1000_PCI_LTR_CAP_LPT		0xA8
+
+/* OBFF Control & Threshold Defines */
+#define E1000_SVCR_OFF_EN		0x00000001
+#define E1000_SVCR_OFF_MASKINT		0x00001000
+#define E1000_SVCR_OFF_TIMER_MASK	0xFFFF0000
+#define E1000_SVCR_OFF_TIMER_SHIFT	16
+#define E1000_SVT_OFF_HWM_MASK		0x0000001F
+
+#define E1000_PCI_REVISION_ID_REG	0x08
 void e1000e_set_kmrn_lock_loss_workaround_ich8lan(struct e1000_hw *hw,
 						  bool state);
 void e1000e_igp3_phy_powerdown_workaround_ich8lan(struct e1000_hw *hw);
@@ -308,4 +347,5 @@ void e1000_resume_workarounds_pchlan(struct e1000_hw *hw);
 s32 e1000_configure_k1_ich8lan(struct e1000_hw *hw, bool k1_enable);
 void e1000_copy_rx_addrs_to_phy_ich8lan(struct e1000_hw *hw);
 s32 e1000_lv_jumbo_workaround_ich8lan(struct e1000_hw *hw, bool enable);
-#endif
+s32 e1000_read_emi_reg_locked(struct e1000_hw *hw, u16 addr, u16 *data);
+#endif /* _E1000_ICH8LAN_H_ */

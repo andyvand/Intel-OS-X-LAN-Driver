@@ -89,6 +89,8 @@ struct e1000_hw;
 #define E1000_DEV_ID_PCH2_LV_V			0x1503
 #define E1000_DEV_ID_PCH_LPT_I217_LM		0x153A
 #define E1000_DEV_ID_PCH_LPT_I217_V		0x153B
+#define E1000_DEV_ID_PCH_LPTLP_I218_LM		0x155A
+#define E1000_DEV_ID_PCH_LPTLP_I218_V		0x1559
 #define E1000_REVISION_0	0
 #define E1000_REVISION_1	1
 #define E1000_REVISION_3	3
@@ -511,12 +513,12 @@ struct e1000_mac_operations {
 				     struct e1000_host_mng_command_header *);
 	 s32(*mng_enable_host_if) (struct e1000_hw *);
 	 s32(*wait_autoneg) (struct e1000_hw *);
+	 s32(*set_obff_timer) (struct e1000_hw *, u32);
 	 s32(*acquire_swfw_sync) (struct e1000_hw *, u16);
 	void (*release_swfw_sync) (struct e1000_hw *, u16);
 };
 
-/*
- * When to use various PHY register access functions:
+/* When to use various PHY register access functions:
  *
  *                 Func   Caller
  *   Function      Does   Does    When to use

@@ -50,6 +50,9 @@
 #define min_t(type,x,y) \
 	({ type __x = (x); type __y = (y); __x < __y ? __x: __y; })
 
+#define max_t(type, x, y) \
+	({ type __max1 = (x); type __max2 = (y); __max1 > __max2 ? __max1: __max2; })
+
 #define cpu_to_le16(x)	OSSwapHostToLittleConstInt16(x)
 #define cpu_to_le32(x)	OSSwapHostToLittleConstInt32(x)
 #define	cpu_to_le64(x)	OSSwapHostToLittleConstInt64(x)
@@ -79,10 +82,11 @@
 struct net_device {
 	u32 mtu;
 };
-struct pci_dev {
+typedef struct pci_dev {
 	u16 vendor;
 	u16 device;
-};
+	void* provider;
+} pci_dev;
 
 struct net_device_stats {
 	unsigned long	rx_packets;				/* total packets received       */
@@ -170,6 +174,12 @@ struct work_struct {
 #define	PCI_EXP_LNKCTL	16
 #define PCIE_LINK_STATE_L0S     1
 #define PCIE_LINK_STATE_L1 2
+
+#define PCI_LTR_MAX_SNOOP_LAT	0x4
+#define PCI_LTR_MAX_NOSNOOP_LAT	0x6
+#define  PCI_LTR_VALUE_MASK	0x000003ff
+#define  PCI_LTR_SCALE_MASK	0x00001c00
+#define  PCI_LTR_SCALE_SHIFT	10
 
 #define MAX_NUMNODES 1
 #define first_online_node 0
@@ -262,5 +272,15 @@ static inline int test_and_set_bit(int nr, volatile unsigned long * addr) {
 	return rc;
 }
 
+#define do_div(lat_ns, speed) \
+	(lat_ns) = (UInt64)(lat_ns) / (speed)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+int pci_read_config_word(pci_dev *dev, int where, u16 *val);
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _KCOMPAT_H_ */
