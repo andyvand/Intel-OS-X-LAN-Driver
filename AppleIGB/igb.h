@@ -401,8 +401,6 @@ struct igb_ring {
 #endif
 	/* Items past this point are only used during ring alloc / free */
 	dma_addr_t dma;                 /* phys address of the ring */
-	int numa_node;                  /* node to alloc ring memory on */
-
 } ____cacheline_internodealigned_in_smp;
 
 enum e1000_ring_flags_t {
@@ -571,8 +569,6 @@ struct igb_adapter {
 	u32 eims_other;
 
 	/* to not mess up cache alignment, always add to the bottom */
-	bool wol_supported;
-
 	u32 *config_space;
 	u16 tx_ring_count;
 	u16 rx_ring_count;
@@ -612,7 +608,7 @@ struct igb_adapter {
 #endif /* IGB_PROCFS */
 #endif /* IGB_SYSFS */
 	u32 etrack_id;
-	
+
 #ifdef CONFIG_IGB_PTP
 	struct ptp_clock *ptp_clock;
 	struct ptp_clock_info ptp_caps;
@@ -641,17 +637,19 @@ struct igb_vmdq_adapter {
 };
 #endif
 
-
-#define IGB_FLAG_HAS_MSI           (1 << 0)
-#define IGB_FLAG_MSI_ENABLE        (1 << 1)
-#define IGB_FLAG_DCA_ENABLED       (1 << 2)
-#define IGB_FLAG_LLI_PUSH          (1 << 3)
-#define IGB_FLAG_QUAD_PORT_A       (1 << 4)
-#define IGB_FLAG_QUEUE_PAIRS       (1 << 5)
-#define IGB_FLAG_EEE               (1 << 6)
-#define IGB_FLAG_DMAC              (1 << 7)
-#define IGB_FLAG_DETECT_BAD_DMA    (1 << 8)
-#define IGB_FLAG_PTP               (1 << 9)
+#define IGB_FLAG_HAS_MSI		(1 << 0)
+#define IGB_FLAG_MSI_ENABLE		(1 << 1)
+#define IGB_FLAG_DCA_ENABLED		(1 << 2)
+#define IGB_FLAG_LLI_PUSH		(1 << 3)
+#define IGB_FLAG_QUAD_PORT_A		(1 << 4)
+#define IGB_FLAG_QUEUE_PAIRS		(1 << 5)
+#define IGB_FLAG_EEE			(1 << 6)
+#define IGB_FLAG_DMAC			(1 << 7)
+#define IGB_FLAG_DETECT_BAD_DMA		(1 << 8)
+#define IGB_FLAG_PTP			(1 << 9)
+#define IGB_FLAG_RSS_FIELD_IPV4_UDP	(1 << 10)
+#define IGB_FLAG_RSS_FIELD_IPV6_UDP	(1 << 11)
+#define IGB_FLAG_WOL_SUPPORTED		(1 << 12)
 
 #define IGB_MIN_TXPBSIZE           20408
 #define IGB_TX_BUF_4096            4096
@@ -672,7 +670,6 @@ struct igb_vmdq_adapter {
 #define IGB_DMAC_8000          8000
 #define IGB_DMAC_9000          9000
 #define IGB_DMAC_MAX          10000
-
 
 #define IGB_82576_TSYNC_SHIFT 19
 #define IGB_82580_TSYNC_SHIFT 24
@@ -759,10 +756,10 @@ extern void igb_ptp_reset(struct igb_adapter *adapter);
 extern void igb_ptp_tx_work(struct work_struct *work);
 extern void igb_ptp_tx_hwtstamp(struct igb_adapter *adapter);
 extern void igb_ptp_rx_hwtstamp(struct igb_q_vector *q_vector,
-								union e1000_adv_rx_desc *rx_desc,
-								struct sk_buff *skb);
+				union e1000_adv_rx_desc *rx_desc,
+				struct sk_buff *skb);
 extern int igb_ptp_hwtstamp_ioctl(struct net_device *netdev,
-								  struct ifreq *ifr, int cmd);
+					struct ifreq *ifr, int cmd);
 #endif /* CONFIG_IGB_PTP */
 #ifdef ETHTOOL_OPS_COMPAT
 extern int ethtool_ioctl(struct ifreq *);
@@ -778,7 +775,7 @@ extern void igb_enable_vlan_tags(struct igb_adapter *adapter);
 extern void igb_vlan_mode(struct net_device *, u32);
 #endif
 
-
+#define E1000_PCS_CFG_IGN_SD	1
 
 #ifdef IGB_SYSFS
 void igb_sysfs_exit(struct igb_adapter *adapter);

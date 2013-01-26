@@ -10,6 +10,9 @@
 		32D94FC60562CBF700B6AF17 /* AppleIGB.h in Headers */ = {isa = PBXBuildFile; fileRef = 1A224C3EFF42367911CA2CB7 /* AppleIGB.h */; };
 		32D94FCA0562CBF700B6AF17 /* AppleIGB.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1A224C3FFF42367911CA2CB7 /* AppleIGB.cpp */; settings = {ATTRIBUTES = (); }; };
 		4D0D81731179AD4B000A4C84 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = 089C167EFE841241C02AAC07 /* InfoPlist.strings */; };
+		4D8498D116A405AD007604C0 /* e1000_i210.c in Sources */ = {isa = PBXBuildFile; fileRef = 4D8498CF16A405AD007604C0 /* e1000_i210.c */; };
+		4D8498D216A405AD007604C0 /* e1000_i210.h in Headers */ = {isa = PBXBuildFile; fileRef = 4D8498D016A405AD007604C0 /* e1000_i210.h */; };
+		4D8498D516A40720007604C0 /* igb_ptp.c in Sources */ = {isa = PBXBuildFile; fileRef = 4D8498D416A40720007604C0 /* igb_ptp.c */; };
 		4D99BBA310E4D08700292443 /* kcompat.h in Headers */ = {isa = PBXBuildFile; fileRef = 4D99BBA210E4D08700292443 /* kcompat.h */; };
 		4D9C4093146CF9E5008344C0 /* igb_vmdq.h in Headers */ = {isa = PBXBuildFile; fileRef = 4D9C4091146CF9E5008344C0 /* igb_vmdq.h */; };
 		4D9C4094146CF9E5008344C0 /* igb.h in Headers */ = {isa = PBXBuildFile; fileRef = 4D9C4092146CF9E5008344C0 /* igb.h */; };
@@ -42,6 +45,9 @@
 		1A224C3FFF42367911CA2CB7 /* AppleIGB.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = AppleIGB.cpp; sourceTree = "<group>"; };
 		32D94FCF0562CBF700B6AF17 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		32D94FD00562CBF700B6AF17 /* AppleIGB.kext */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppleIGB.kext; sourceTree = BUILT_PRODUCTS_DIR; };
+		4D8498CF16A405AD007604C0 /* e1000_i210.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = e1000_i210.c; sourceTree = "<group>"; };
+		4D8498D016A405AD007604C0 /* e1000_i210.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = e1000_i210.h; sourceTree = "<group>"; };
+		4D8498D416A40720007604C0 /* igb_ptp.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = igb_ptp.c; sourceTree = "<group>"; };
 		4D99BBA210E4D08700292443 /* kcompat.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = kcompat.h; sourceTree = "<group>"; };
 		4D9C4091146CF9E5008344C0 /* igb_vmdq.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = igb_vmdq.h; sourceTree = "<group>"; };
 		4D9C4092146CF9E5008344C0 /* igb.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = igb.h; sourceTree = "<group>"; };
@@ -118,6 +124,7 @@
 				1A224C3EFF42367911CA2CB7 /* AppleIGB.h */,
 				1A224C3FFF42367911CA2CB7 /* AppleIGB.cpp */,
 				4DB1EE9E14668F0800BDCFB3 /* e1000_82575.c */,
+				4D8498CF16A405AD007604C0 /* e1000_i210.c */,
 				4DB1EE9F14668F0800BDCFB3 /* e1000_api.c */,
 				4DB1EEA014668F0800BDCFB3 /* e1000_mac.c */,
 				4DB1EEA114668F0800BDCFB3 /* e1000_manage.c */,
@@ -125,6 +132,7 @@
 				4DB1EEA314668F0800BDCFB3 /* e1000_nvm.c */,
 				4DB1EEA414668F0800BDCFB3 /* e1000_phy.c */,
 				4DB1EEA514668F0800BDCFB3 /* igb_vmdq.c */,
+				4D8498D416A40720007604C0 /* igb_ptp.c */,
 				4DB1EE8414668E2F00BDCFB3 /* igb_param.c */,
 			);
 			name = Source;
@@ -135,6 +143,7 @@
 			children = (
 				4D99BBA210E4D08700292443 /* kcompat.h */,
 				4DB1EE8814668EEB00BDCFB3 /* e1000_82575.h */,
+				4D8498D016A405AD007604C0 /* e1000_i210.h */,
 				4DB1EE8914668EEB00BDCFB3 /* e1000_api.h */,
 				4DB1EE8A14668EEB00BDCFB3 /* e1000_hw.h */,
 				4DB1EEAE14668F1400BDCFB3 /* e1000_defines.h */,
@@ -184,6 +193,7 @@
 				4DB1EEAF14668F1400BDCFB3 /* e1000_defines.h in Headers */,
 				4D9C4093146CF9E5008344C0 /* igb_vmdq.h in Headers */,
 				4D9C4094146CF9E5008344C0 /* igb.h in Headers */,
+				4D8498D216A405AD007604C0 /* e1000_i210.h in Headers */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -270,6 +280,8 @@
 				4DB1EEAC14668F0800BDCFB3 /* e1000_phy.c in Sources */,
 				4DB1EEAD14668F0800BDCFB3 /* igb_vmdq.c in Sources */,
 				4D9C4120146CFF43008344C0 /* igb_param.c in Sources */,
+				4D8498D116A405AD007604C0 /* e1000_i210.c in Sources */,
+				4D8498D516A40720007604C0 /* igb_ptp.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

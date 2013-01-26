@@ -104,7 +104,7 @@ static int netif_running(IOEthernetController* netdev)
 
 static int netif_queue_stopped(IOEthernetController* netdev)
 {
-	return !netif_running(netdev);
+	return ((AppleIGB*)netdev)->queueStopped();
 }
 
 static int netif_carrier_ok(IOEthernetController* netdev)
@@ -2342,15 +2342,19 @@ static void igb_setup_mrqc(struct igb_adapter *adapter)
 	igb_vmm_control(adapter);
 
 	/*
-	 * Generate RSS hash based on TCP port numbers and/or
-	 * IPv4/v6 src and dst addresses since UDP cannot be
-	 * hashed reliably due to IP fragmentation
+	 * Generate RSS hash based on packet types, TCP/UDP
+	 * port numbers and/or IPv4/v6 src and dst addresses
 	 */
 	mrqc |= E1000_MRQC_RSS_FIELD_IPV4 |
 		E1000_MRQC_RSS_FIELD_IPV4_TCP |
 		E1000_MRQC_RSS_FIELD_IPV6 |
 		E1000_MRQC_RSS_FIELD_IPV6_TCP |
 		E1000_MRQC_RSS_FIELD_IPV6_TCP_EX;
+
+	if (adapter->flags & IGB_FLAG_RSS_FIELD_IPV4_UDP)
+		mrqc |= E1000_MRQC_RSS_FIELD_IPV4_UDP;
+	if (adapter->flags & IGB_FLAG_RSS_FIELD_IPV6_UDP)
+		mrqc |= E1000_MRQC_RSS_FIELD_IPV6_UDP;
 
 	E1000_WRITE_REG(hw, E1000_MRQC, mrqc);
 }
@@ -3814,13 +3818,12 @@ dma_error:
 
 static int __igb_maybe_stop_tx(struct igb_ring *tx_ring, const u16 size)
 {
+#ifndef __APPLE__
 	IOEthernetController *netdev = netdev_ring(tx_ring);
 
-#ifndef __APPLE__
 	if (netif_is_multiqueue(netdev))
 		netif_stop_subqueue(netdev, ring_queue_index(tx_ring));
 	else
-#endif
 		netif_stop_queue(netdev);
 
 	/* Herbert's original patch had:
@@ -3834,15 +3837,16 @@ static int __igb_maybe_stop_tx(struct igb_ring *tx_ring, const u16 size)
 		return -EBUSY;
 
 	/* A reprieve! */
-#ifndef __APPLE__
 	if (netif_is_multiqueue(netdev))
 		netif_wake_subqueue(netdev, ring_queue_index(tx_ring));
 	else
-#endif
 		netif_wake_queue(netdev);
 
 	tx_ring->tx_stats.restart_queue++;
 	return 0;
+#else
+	return -EBUSY;
+#endif
 }
 
 static inline int igb_maybe_stop_tx(struct igb_ring *tx_ring, const u16 size)
@@ -6221,14 +6225,19 @@ int igb_set_spd_dplx(struct igb_adapter *adapter, u16 spddplx)
 	mac->autoneg = 0;
 
 	/*
-	 * Fiber NIC's only allow 1000 gbps Full duplex
+	 * SerDes device's only allow 2.5/1000 gbps Full duplex
 	 * and 100Mbps Full duplex for 100baseFx sfp
 	 */
-	if (adapter->hw.phy.media_type == e1000_media_type_internal_serdes)
-		if (spddplx != (SPEED_1000 + DUPLEX_FULL) ||
-		    spddplx != (SPEED_100 + DUPLEX_FULL)) {
-			IOLog("Unsupported Speed/Duplex configuration\n");
-			return -EINVAL;
+	if (adapter->hw.phy.media_type == e1000_media_type_internal_serdes) {
+		switch (spddplx) {
+			case SPEED_10 + DUPLEX_HALF:
+			case SPEED_10 + DUPLEX_FULL:
+			case SPEED_100 + DUPLEX_HALF:
+				IOLog("Unsupported Speed/Duplex configuration\n");
+				return -EINVAL;
+			default:
+				break;
+		}
 	}
 
 	switch (spddplx) {
@@ -6534,7 +6543,7 @@ static pci_ers_result_t igb_io_error_detected(IOPCIDevice *pdev,
 		goto skip_bad_vf_detection;
 	
 	bdev = pdev->bus->self;
-	while (bdev && (bdev->pcie_type != PCI_EXP_TYPE_ROOT_PORT))
+	while (bdev && (pci_pcie_type(bdev) != PCI_EXP_TYPE_ROOT_PORT))
 		bdev = bdev->bus->self;
 	
 	if (!bdev)
@@ -7359,9 +7368,9 @@ bool AppleIGB::start(IOService* provider)
 		
 		e1000_validate_mdi_setting(hw);
 		
-		/* Initial Wake on LAN setting If APM wake is enabled in the EEPROM,
-		 * enable the ACPI Magic Packet filter
-		 */
+		/* By default, support wake on port A */
+		if (hw->bus.func == 0)
+			adapter->flags |= IGB_FLAG_WOL_SUPPORTED;
 		
 		/* Check the NVM for wake support for non-port A ports */
 		if (hw->mac.type >= e1000_82580)
@@ -7372,14 +7381,14 @@ bool AppleIGB::start(IOService* provider)
 			e1000_read_nvm(hw, NVM_INIT_CONTROL3_PORT_B, 1, &eeprom_data);
 		
 		if (eeprom_data & IGB_EEPROM_APME)
-			adapter->wol_supported = true;
+			adapter->flags |= IGB_FLAG_WOL_SUPPORTED;
 		
 		/* now that we have the eeprom settings, apply the special cases where
 		 * the eeprom may be wrong or the board simply won't support wake on
 		 * lan on a particular port */
 		switch (pdev->configRead16(kIOPCIConfigDeviceID)) {
 		case E1000_DEV_ID_82575GB_QUAD_COPPER:
-			adapter->wol_supported = false;
+			adapter->flags &= ~IGB_FLAG_WOL_SUPPORTED;
 			break;
 		case E1000_DEV_ID_82575EB_FIBER_SERDES:
 		case E1000_DEV_ID_82576_FIBER:
@@ -7387,13 +7396,13 @@ bool AppleIGB::start(IOService* provider)
 			/* Wake events only supported on port A for dual fiber
 			 * regardless of eeprom setting */
 			if (E1000_READ_REG(hw, E1000_STATUS) & E1000_STATUS_FUNC_1)
-				adapter->wol_supported = false;
+				adapter->flags &= ~IGB_FLAG_WOL_SUPPORTED;
 			break;
 		case E1000_DEV_ID_82576_QUAD_COPPER:
 		case E1000_DEV_ID_82576_QUAD_COPPER_ET2:
 			/* if quad port adapter, disable WoL on all but port A */
 			if (global_quad_port_a != 0)
-				adapter->wol_supported = false;
+				adapter->flags &= ~IGB_FLAG_WOL_SUPPORTED;
 			else
 				adapter->flags |= IGB_FLAG_QUAD_PORT_A;
 			/* Reset for multiple quad port adapters */
@@ -7401,26 +7410,28 @@ bool AppleIGB::start(IOService* provider)
 				global_quad_port_a = 0;
 			break;
 		default:
-			/* For all other devices, support wake on port A */
-			if (hw->bus.func == 0)
-				adapter->wol_supported = true;
+			/* If the device can't wake, don't set software support */
+#if	0
+			if (!device_can_wakeup(&adapter->pdev->dev))
+				adapter->flags &= ~IGB_FLAG_WOL_SUPPORTED;
+#endif
 			break;
 		}
 		
 		/* initialize the wol settings based on the eeprom settings */
-		if (adapter->wol_supported)
+		if (adapter->flags & IGB_FLAG_WOL_SUPPORTED)
 			adapter->wol |= E1000_WUFC_MAG;
 		
 		/* Some vendors want WoL disabled by default, but still supported */
 #if	0
 		if ((hw->mac.type == e1000_i350) &&
 			(pdev->subsystem_vendor == PCI_VENDOR_ID_HP)) {
-			adapter->wol_supported = true;
+			adapter->flags |= IGB_FLAG_WOL_SUPPORTED;
 			adapter->wol = 0;
 		}
 
 		device_set_wakeup_enable(pci_dev_to_dev(adapter->pdev),
-								 adapter->wol_supported);
+					adapter->flags & IGB_FLAG_WOL_SUPPORTED);
 #endif
 		/* reset the hardware with the new settings */
 		igb_reset(adapter);
@@ -7463,18 +7474,20 @@ bool AppleIGB::start(IOService* provider)
 		IOLog("PBA No: %s\n", ret_val ? "Unknown": (char*)pba_str);
 
 		/* Initialize the thermal sensor on i350 devices. */
-		if (hw->mac.type == e1000_i350 && hw->bus.func == 0) {
-			u16 ets_word;
-			
-			/*
-			 * Read the NVM to determine if this i350 device supports an
-			 * external thermal sensor.
-			 */
-			e1000_read_nvm(hw, NVM_ETS_CFG, 1, &ets_word);
-			if (ets_word != 0x0000 && ets_word != 0xFFFF)
-				adapter->ets = true;
-			else
-				adapter->ets = false;
+		if (hw->mac.type == e1000_i350) {
+			if (hw->bus.func == 0) {
+				u16 ets_word;
+				
+				/*
+				 * Read the NVM to determine if this i350 device
+				 * supports an external thermal sensor.
+				 */
+				e1000_read_nvm(hw, NVM_ETS_CFG, 1, &ets_word);
+				if (ets_word != 0x0000 && ets_word != 0xFFFF)
+					adapter->ets = true;
+				else
+					adapter->ets = false;
+			}
 		} else {
 			adapter->ets = false;
 		}
@@ -7674,7 +7687,7 @@ UInt32 AppleIGB::outputPacket(mbuf_t skb, void * param)
          * otherwise try next time */
         if (igb_maybe_stop_tx(tx_ring, MAX_SKB_FRAGS + 4)) {
             /* this is a hard error */
-            rc = kIOReturnOutputDropped;
+            rc = kIOReturnOutputStall;
             break;
         }
         /* record the location of the first descriptor for this packet */
@@ -8015,7 +8028,6 @@ void AppleIGB::watchdogTask()
 	u32 link;
 	int i;
 	u32 thstat, ctrl_ext;
-	
 
 	link = igb_has_link(adapter);
 	if (link) {
@@ -8047,6 +8059,8 @@ void AppleIGB::watchdogTask()
 					break;
 				case SPEED_100:
 					/* maybe add some timeout factor ? */
+					break;
+				default:
 					break;
 			}
 			
@@ -8220,9 +8234,9 @@ IOReturn AppleIGB::setWakeOnMagicPacket(bool active)
 {
 	igb_adapter *adapter = &priv_adapter;
 	if(active){
-       if (adapter->wol_supported == 0)
+       if ((adapter->flags & IGB_FLAG_WOL_SUPPORTED) == 0)
            return kIOReturnUnsupported;   
-		adapter->wol = adapter->wol_supported;
+		adapter->wol = 1;
 	} else {
 		adapter->wol = 0;
 	}
@@ -8257,12 +8271,14 @@ UInt32 AppleIGB::getFeatures() const {
 void AppleIGB::startTxQueue()
 {
 	transmitQueue->start();
+	bQueueStopped = false;
 }
 
 void AppleIGB::stopTxQueue()
 {
 	transmitQueue->stop();
 	transmitQueue->flush();
+	bQueueStopped = true;
 }
 
 void AppleIGB::rxChecksumOK( mbuf_t skb, UInt32 flag )

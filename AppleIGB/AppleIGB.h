@@ -112,6 +112,7 @@ private:
 	IOMbufNaturalMemoryCursor * txMbufCursor;
 	
 	bool enabledForNetif;
+	bool bQueueStopped;
 	UInt32 iff_flags;
 	UInt32 _features;
 	UInt32 preLinkStatus;
@@ -135,6 +136,7 @@ public:
 	IOMbufNaturalMemoryCursor * rxCursor(){ return rxMbufCursor; }
 	void rxChecksumOK( mbuf_t, UInt32 flag );
 	bool running(){return enabledForNetif;}
+	bool queueStopped(){return bQueueStopped;}
 	bool carrier();
 	void setCarrier(bool);
 	bool netifAttach();
