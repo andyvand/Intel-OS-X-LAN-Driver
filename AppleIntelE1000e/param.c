@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2012 Intel Corporation.
+  Copyright(c) 1999 - 2013 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -72,10 +72,16 @@ MODULE_PARM_DESC(copybreak,
 	static unsigned int num_##X;				 \
 	MODULE_PARM(X, "1-" __MODULE_STRING(E1000_MAX_NIC) "i"); \
 	MODULE_PARM_DESC(X, desc);
-#else
+#elif defined(HAVE_CONFIG_HOTPLUG)
 #define E1000_PARAM(X, desc)					\
 	static int __devinitdata X[E1000_MAX_NIC+1]		\
 		= E1000_PARAM_INIT;				\
+	static unsigned int num_##X;				\
+	module_param_array_named(X, X, int, &num_##X, 0);	\
+	MODULE_PARM_DESC(X, desc);
+#else
+#define E1000_PARAM(X, desc)					\
+	static int X[E1000_MAX_NIC+1] = E1000_PARAM_INIT;	\
 	static unsigned int num_##X;				\
 	module_param_array_named(X, X, int, &num_##X, 0);	\
 	MODULE_PARM_DESC(X, desc);
@@ -199,11 +205,13 @@ struct e1000_option {
 	const char *err;
 	int def;
 	union {
-		struct {	/* range_option info */
+		/* range_option info */
+		struct {
 			int min;
 			int max;
 		} r;
-		struct {	/* list_option info */
+		/* list_option info */
+		struct {
 			int nr;
 			struct e1000_opt_list {
 				int i;
@@ -213,9 +221,15 @@ struct e1000_option {
 	} arg;
 };
 
+#ifdef HAVE_CONFIG_HOTPLUG
 static int __devinit e1000_validate_option(unsigned int *value,
 					   const struct e1000_option *opt,
 					   struct e1000_adapter *adapter)
+#else
+static int e1000_validate_option(unsigned int *value,
+				 const struct e1000_option *opt,
+				 struct e1000_adapter *adapter)
+#endif
 {
 	if (*value == OPTION_UNSET) {
 		*value = opt->def;
@@ -278,7 +292,11 @@ static int __devinit e1000_validate_option(unsigned int *value,
  * value exists, a default value is used.  The final value is stored
  * in a variable in the adapter structure.
  **/
+#ifdef HAVE_CONFIG_HOTPLUG
 void __devinit e1000e_check_options(struct e1000_adapter *adapter)
+#else
+void e1000e_check_options(struct e1000_adapter *adapter)
+#endif
 {
 	struct e1000_hw *hw = &adapter->hw;
 	int bd = adapter->bd_number;
@@ -290,7 +308,8 @@ void __devinit e1000e_check_options(struct e1000_adapter *adapter)
 			   "Using defaults for all values\n");
 	}
 
-	{			/* Transmit Interrupt Delay */
+	/* Transmit Interrupt Delay */
+	{
 /* *INDENT-OFF* */
 		static const struct e1000_option opt = {
 			.type = range_option,
@@ -311,7 +330,8 @@ void __devinit e1000e_check_options(struct e1000_adapter *adapter)
 			adapter->tx_int_delay = opt.def;
 		}
 	}
-	{			/* Transmit Absolute Interrupt Delay */
+	/* Transmit Absolute Interrupt Delay */
+	{
 /* *INDENT-OFF* */
 		static const struct e1000_option opt = {
 			.type = range_option,
@@ -332,7 +352,8 @@ void __devinit e1000e_check_options(struct e1000_adapter *adapter)
 			adapter->tx_abs_int_delay = opt.def;
 		}
 	}
-	{			/* Receive Interrupt Delay */
+	/* Receive Interrupt Delay */
+	{
 /* *INDENT-OFF* */
 		static struct e1000_option opt = {
 			.type = range_option,
@@ -353,7 +374,8 @@ void __devinit e1000e_check_options(struct e1000_adapter *adapter)
 			adapter->rx_int_delay = opt.def;
 		}
 	}
-	{			/* Receive Absolute Interrupt Delay */
+	/* Receive Absolute Interrupt Delay */
+	{
 /* *INDENT-OFF* */
 		static const struct e1000_option opt = {
 			.type = range_option,
@@ -374,7 +396,8 @@ void __devinit e1000e_check_options(struct e1000_adapter *adapter)
 			adapter->rx_abs_int_delay = opt.def;
 		}
 	}
-	{			/* Interrupt Throttling Rate */
+	/* Interrupt Throttling Rate */
+	{
 /* *INDENT-OFF* */
 		static const struct e1000_option opt = {
 			.type = range_option,
@@ -446,19 +469,20 @@ void __devinit e1000e_check_options(struct e1000_adapter *adapter)
 			break;
 		}
 	}
-	{			/* Interrupt Mode */
+	/* Interrupt Mode */
+	{
+/* *INDENT-OFF* */
 		static struct e1000_option opt = {
 			.type = range_option,
 			.name = "Interrupt Mode",
 #ifndef CONFIG_PCI_MSI
-/* *INDENT-OFF* */
 			.err  = "defaulting to 0 (legacy)",
 			.def  = E1000E_INT_MODE_LEGACY,
 			.arg  = { .r = { .min = 0,
 					 .max = 0 } }
-/* *INDENT-ON* */
 #endif
 		};
+/* *INDENT-ON* */
 
 #ifdef CONFIG_PCI_MSI
 		if (adapter->flags & FLAG_HAS_MSIX) {
@@ -491,13 +515,16 @@ void __devinit e1000e_check_options(struct e1000_adapter *adapter)
 		kfree(opt.err);
 #endif
 	}
-	{			/* Smart Power Down */
+	/* Smart Power Down */
+	{
+/* *INDENT-OFF* */
 		static const struct e1000_option opt = {
 			.type = enable_option,
 			.name = "PHY Smart Power Down",
-			.err = "defaulting to Disabled",
-			.def = OPTION_DISABLED
+			.err  = "defaulting to Disabled",
+			.def  = OPTION_DISABLED
 		};
+/* *INDENT-ON* */
 
 		if (num_SmartPowerDownEnable > bd) {
 			unsigned int spd = SmartPowerDownEnable[bd];
@@ -506,13 +533,16 @@ void __devinit e1000e_check_options(struct e1000_adapter *adapter)
 				adapter->flags |= FLAG_SMART_POWER_DOWN;
 		}
 	}
-	{			/* CRC Stripping */
+	/* CRC Stripping */
+	{
+/* *INDENT-OFF* */
 		static const struct e1000_option opt = {
 			.type = enable_option,
 			.name = "CRC Stripping",
-			.err = "defaulting to Enabled",
-			.def = OPTION_ENABLED
+			.err  = "defaulting to Enabled",
+			.def  = OPTION_ENABLED
 		};
+/* *INDENT-ON* */
 
 		if (num_CrcStripping > bd) {
 			unsigned int crc_stripping = CrcStripping[bd];
@@ -526,13 +556,16 @@ void __devinit e1000e_check_options(struct e1000_adapter *adapter)
 			adapter->flags2 |= FLAG2_DFLT_CRC_STRIPPING;
 		}
 	}
-	{			/* Kumeran Lock Loss Workaround */
+	/* Kumeran Lock Loss Workaround */
+	{
+/* *INDENT-OFF* */
 		static const struct e1000_option opt = {
 			.type = enable_option,
 			.name = "Kumeran Lock Loss Workaround",
-			.err = "defaulting to Enabled",
-			.def = OPTION_ENABLED
+			.err  = "defaulting to Enabled",
+			.def  = OPTION_ENABLED
 		};
+/* *INDENT-ON* */
 
 		if (num_KumeranLockLoss > bd) {
 			unsigned int kmrn_lock_loss = KumeranLockLoss[bd];
@@ -547,16 +580,19 @@ void __devinit e1000e_check_options(struct e1000_adapter *adapter)
 									     def);
 		}
 	}
-	{			/* EEE for parts supporting the feature */
+	/* EEE for parts supporting the feature */
+	{
+/* *INDENT-OFF* */
 		static const struct e1000_option opt = {
 			.type = enable_option,
 			.name = "EEE Support",
-			.err = "defaulting to Enabled",
-			.def = OPTION_ENABLED
+			.err  = "defaulting to Enabled",
+			.def  = OPTION_ENABLED
 		};
+/* *INDENT-ON* */
 
 		if (adapter->flags2 & FLAG2_HAS_EEE) {
-			/* Currently only supported on 82579 */
+			/* Currently only supported on 82579 and newer */
 			if (num_EEE > bd) {
 				unsigned int eee = EEE[bd];
 				e1000_validate_option(&eee, &opt, adapter);
@@ -564,9 +600,14 @@ void __devinit e1000e_check_options(struct e1000_adapter *adapter)
 			} else {
 				hw->dev_spec.ich8lan.eee_disable = !opt.def;
 			}
+
+			if (!hw->dev_spec.ich8lan.eee_disable)
+				adapter->eee_advert = (MDIO_EEE_100TX |
+						       MDIO_EEE_1000T);
 		}
 	}
-	{			/* configure node specific allocation */
+	/* configure node specific allocation */
+	{
 /* *INDENT-OFF* */
 		static struct e1000_option opt = {
 			.type = range_option,

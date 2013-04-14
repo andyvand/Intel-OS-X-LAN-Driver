@@ -7687,6 +7687,7 @@ UInt32 AppleIGB::outputPacket(mbuf_t skb, void * param)
          * otherwise try next time */
         if (igb_maybe_stop_tx(tx_ring, MAX_SKB_FRAGS + 4)) {
             /* this is a hard error */
+			bQueueStopped = true;
             rc = kIOReturnOutputStall;
             break;
         }

@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2012 Intel Corporation.
+  Copyright(c) 1999 - 2013 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -59,6 +59,9 @@
 #include <linux/ptp_clock_kernel.h>
 #include <linux/ptp_classify.h>
 #endif
+#ifndef	__APPLE__
+#include <linux/mii.h>
+#endif
 #include "hw.h"
 
 struct e1000_info;
@@ -115,9 +118,6 @@ IOLog("AppleIntelE1000e(Notice): " format, ## arg)
 #define E1000_MIN_ITR_USECS		10	/* 100000 irq/sec */
 #define E1000_MAX_ITR_USECS		10000	/* 100    irq/sec */
 
-/* Early Receive defines */
-#define E1000_ERT_2048			0x100
-
 #define E1000_FC_PAUSE_TIME		0x0680	/* 858 usec */
 
 /* How many Tx Descriptors do we need to call netif_wake_queue ? */
@@ -140,7 +140,7 @@ IOLog("AppleIntelE1000e(Notice): " format, ## arg)
 /* Count for polling __E1000_RESET condition every 10-20msec.
  * Experimentation has shown the reset can take approximately 210msec.
  */
-#define E1000_CHECK_RESET_COUNT         25
+#define E1000_CHECK_RESET_COUNT		25
 
 #define DEFAULT_RDTR			0
 #define DEFAULT_RADV			8
@@ -290,9 +290,8 @@ struct e1000_adapter {
 	u16 tx_itr;
 	u16 rx_itr;
 
-	/* Tx */
-	struct e1000_ring *tx_ring	/* One per active queue */
-	 ____cacheline_aligned_in_smp;
+	/* Tx - one ring per active queue */
+	struct e1000_ring *tx_ring ____cacheline_aligned_in_smp;
 	u32 tx_fifo_limit;
 
 #ifdef CONFIG_E1000E_NAPI
@@ -423,7 +422,7 @@ struct e1000_adapter {
 	u16 tx_ring_count;
 	u16 rx_ring_count;
 	u8 revision_id;
-	
+
 #ifdef HAVE_HW_TIME_STAMP
 	struct hwtstamp_config hwtstamp_config;
 	struct delayed_work systim_overflow_work;
@@ -437,6 +436,8 @@ struct e1000_adapter {
 	struct ptp_clock *ptp_clock;
 	struct ptp_clock_info ptp_clock_info;
 #endif
+
+	u16 eee_advert;
 };
 
 struct e1000_info {
@@ -446,7 +447,9 @@ struct e1000_info {
 	u32 pba;
 	u32 max_hw_frame_size;
 	 s32(*get_variants) (struct e1000_adapter *);
-	void (*init_ops) (struct e1000_hw *);
+	const struct e1000_mac_operations *mac_ops;
+	const struct e1000_phy_operations *phy_ops;
+	const struct e1000_nvm_operations *nvm_ops;
 };
 
 #ifdef HAVE_HW_TIME_STAMP
@@ -539,6 +542,7 @@ s32 e1000e_get_base_timinca(struct e1000_adapter *adapter, u32 *timinca);
 #define FLAG2_PCIM2PCI_ARBITER_WA         (1 << 11)
 #define FLAG2_DFLT_CRC_STRIPPING          (1 << 12)
 #define FLAG2_CHECK_RX_HWTSTAMP           (1 << 13)
+#define FLAG2_NEEDS_OBFF_WORKAROUND       (1 << 29)
 
 #define E1000_RX_DESC_PS(R, i)	    \
 	(&(((union e1000_rx_desc_packet_split *)((R).desc))[i]))
@@ -549,7 +553,7 @@ s32 e1000e_get_base_timinca(struct e1000_adapter *adapter, u32 *timinca);
 #define E1000_CONTEXT_DESC(R, i)	E1000_GET_DESC(R, i, e1000_context_desc)
 
 enum e1000_state_t {
-	__E1000_OBFF_ENABLED,
+	__E1000_OBFF_DISABLED,
 	__E1000_TESTING,
 	__E1000_RESETTING,
 	__E1000_ACCESS_SHARED_RESOURCE,
@@ -598,111 +602,35 @@ extern void e1000e_write_itr(struct e1000_adapter *adapter, u32 itr);
 
 extern unsigned int copybreak;
 
-extern void e1000_init_function_pointers_82571(struct e1000_hw *hw);
-extern void e1000_init_function_pointers_80003es2lan(struct e1000_hw *hw);
-extern void e1000_init_function_pointers_ich8lan(struct e1000_hw *hw);
+extern const struct e1000_info e1000_82571_info;
+extern const struct e1000_info e1000_82572_info;
+extern const struct e1000_info e1000_82573_info;
+extern const struct e1000_info e1000_82574_info;
+extern const struct e1000_info e1000_82583_info;
+extern const struct e1000_info e1000_ich8_info;
+extern const struct e1000_info e1000_ich9_info;
+extern const struct e1000_info e1000_ich10_info;
+extern const struct e1000_info e1000_pch_info;
+extern const struct e1000_info e1000_pch2_info;
+extern const struct e1000_info e1000_pch_lpt_info;
+extern const struct e1000_info e1000_es2_info;
 
-static inline s32 e1000e_commit_phy(struct e1000_hw *hw)
-{
-	if (hw->phy.ops.commit)
-		return hw->phy.ops.commit(hw);
-
-	return 0;
-}
-
-extern bool e1000e_enable_mng_pass_thru(struct e1000_hw *hw);
-
-extern bool e1000e_get_laa_state_82571(struct e1000_hw *hw);
-extern void e1000e_set_laa_state_82571(struct e1000_hw *hw, bool state);
-
-extern void e1000e_set_kmrn_lock_loss_workaround_ich8lan(struct e1000_hw *hw,
-							 bool state);
-extern void e1000e_igp3_phy_powerdown_workaround_ich8lan(struct e1000_hw *hw);
-extern void e1000e_gig_downshift_workaround_ich8lan(struct e1000_hw *hw);
-extern void e1000e_disable_gig_wol_ich8lan(struct e1000_hw *hw);
-
-extern s32 e1000e_check_for_copper_link(struct e1000_hw *hw);
-extern s32 e1000e_check_for_fiber_link(struct e1000_hw *hw);
-extern s32 e1000e_check_for_serdes_link(struct e1000_hw *hw);
-extern s32 e1000e_cleanup_led_generic(struct e1000_hw *hw);
-extern s32 e1000e_led_on_generic(struct e1000_hw *hw);
-extern s32 e1000e_led_off_generic(struct e1000_hw *hw);
-extern s32 e1000e_get_bus_info_pcie(struct e1000_hw *hw);
-extern s32 e1000e_get_speed_and_duplex_copper(struct e1000_hw *hw, u16 *speed,
-					      u16 *duplex);
-extern s32 e1000e_get_speed_and_duplex_fiber_serdes(struct e1000_hw *hw,
-						    u16 *speed, u16 *duplex);
-extern s32 e1000e_disable_pcie_master(struct e1000_hw *hw);
-extern s32 e1000e_get_auto_rd_done(struct e1000_hw *hw);
-extern s32 e1000e_id_led_init(struct e1000_hw *hw);
-extern void e1000e_clear_hw_cntrs_base(struct e1000_hw *hw);
-extern s32 e1000e_setup_fiber_serdes_link(struct e1000_hw *hw);
-extern s32 e1000e_copper_link_setup_m88(struct e1000_hw *hw);
-extern s32 e1000e_copper_link_setup_igp(struct e1000_hw *hw);
-extern s32 e1000e_setup_link_generic(struct e1000_hw *hw);
-extern void e1000_clear_vfta_generic(struct e1000_hw *hw);
-extern void e1000e_init_rx_addrs(struct e1000_hw *hw, u16 rar_count);
-extern void e1000e_update_mc_addr_list_generic(struct e1000_hw *hw,
-					       u8 *mc_addr_list,
-					       u32 mc_addr_count);
-extern s32 e1000e_set_fc_watermarks(struct e1000_hw *hw);
-extern void e1000e_set_pcie_no_snoop(struct e1000_hw *hw, u32 no_snoop);
-extern s32 e1000e_get_hw_semaphore(struct e1000_hw *hw);
-extern s32 e1000e_valid_led_default(struct e1000_hw *hw, u16 *data);
-extern s32 e1000e_config_fc_after_link_up(struct e1000_hw *hw);
-extern s32 e1000e_force_mac_fc(struct e1000_hw *hw);
-extern s32 e1000e_blink_led_generic(struct e1000_hw *hw);
-extern void e1000_write_vfta_generic(struct e1000_hw *hw, u32 offset,
-				     u32 value);
-extern void e1000e_reset_adaptive(struct e1000_hw *hw);
-extern void e1000e_update_adaptive(struct e1000_hw *hw);
-
-extern s32 e1000e_setup_copper_link(struct e1000_hw *hw);
-extern void e1000e_put_hw_semaphore(struct e1000_hw *hw);
-extern s32 e1000e_phy_force_speed_duplex_igp(struct e1000_hw *hw);
-extern s32 e1000e_get_cable_length_igp_2(struct e1000_hw *hw);
-extern s32 e1000e_get_phy_info_igp(struct e1000_hw *hw);
-extern s32 e1000e_read_phy_reg_igp(struct e1000_hw *hw, u32 offset, u16 *data);
-extern s32 e1000e_phy_hw_reset_generic(struct e1000_hw *hw);
-extern s32 e1000e_set_d3_lplu_state(struct e1000_hw *hw, bool active);
-extern s32 e1000e_write_phy_reg_igp(struct e1000_hw *hw, u32 offset, u16 data);
-extern s32 e1000e_phy_sw_reset(struct e1000_hw *hw);
-extern s32 e1000e_phy_force_speed_duplex_m88(struct e1000_hw *hw);
-extern s32 e1000e_get_cfg_done(struct e1000_hw *hw);
-extern s32 e1000e_get_cable_length_m88(struct e1000_hw *hw);
-extern s32 e1000e_get_phy_info_m88(struct e1000_hw *hw);
-extern s32 e1000e_read_phy_reg_m88(struct e1000_hw *hw, u32 offset, u16 *data);
-extern s32 e1000e_write_phy_reg_m88(struct e1000_hw *hw, u32 offset, u16 data);
-extern enum e1000_phy_type e1000e_get_phy_type_from_id(u32 phy_id);
-extern s32 e1000e_determine_phy_address(struct e1000_hw *hw);
-extern s32 e1000e_write_phy_reg_bm(struct e1000_hw *hw, u32 offset, u16 data);
-extern s32 e1000e_read_phy_reg_bm(struct e1000_hw *hw, u32 offset, u16 *data);
-extern void e1000e_phy_force_speed_duplex_setup(struct e1000_hw *hw,
-						u16 *phy_ctrl);
-extern s32 e1000e_write_kmrn_reg(struct e1000_hw *hw, u32 offset, u16 data);
-extern s32 e1000e_read_kmrn_reg(struct e1000_hw *hw, u32 offset, u16 *data);
-extern s32 e1000e_phy_has_link_generic(struct e1000_hw *hw, u32 iterations,
-				       u32 usec_interval, bool *success);
-extern s32 e1000e_phy_reset_dsp(struct e1000_hw *hw);
-extern s32 e1000e_read_phy_reg_mdic(struct e1000_hw *hw, u32 offset, u16 *data);
-extern s32 e1000e_write_phy_reg_mdic(struct e1000_hw *hw, u32 offset, u16 data);
-extern s32 e1000e_check_downshift(struct e1000_hw *hw);
-extern bool e1000_check_phy_82574(struct e1000_hw *hw);
+#ifdef HAVE_PTP_1588_CLOCK
+extern void e1000e_ptp_init(struct e1000_adapter *adapter);
+extern void e1000e_ptp_remove(struct e1000_adapter *adapter);
+#else
+#define e1000e_ptp_init(adapter) do {} while (0)
+#define e1000e_ptp_remove(adapter) do {} while (0)
+#endif
 
 static inline s32 e1000_phy_hw_reset(struct e1000_hw *hw)
 {
-	if (hw->phy.ops.reset)
-		return hw->phy.ops.reset(hw);
-
-	return 0;
+	return hw->phy.ops.reset(hw);
 }
 
 static inline s32 e1e_rphy(struct e1000_hw *hw, u32 offset, u16 *data)
 {
-	if (hw->phy.ops.read_reg)
-		return hw->phy.ops.read_reg(hw, offset, data);
-
-	return 0;
+	return hw->phy.ops.read_reg(hw, offset, data);
 }
 
 static inline s32 e1e_rphy_locked(struct e1000_hw *hw, u32 offset, u16 *data)
@@ -712,10 +640,7 @@ static inline s32 e1e_rphy_locked(struct e1000_hw *hw, u32 offset, u16 *data)
 
 static inline s32 e1e_wphy(struct e1000_hw *hw, u32 offset, u16 data)
 {
-	if (hw->phy.ops.write_reg)
-		return hw->phy.ops.write_reg(hw, offset, data);
-
-	return 0;
+	return hw->phy.ops.write_reg(hw, offset, data);
 }
 
 static inline s32 e1e_wphy_locked(struct e1000_hw *hw, u32 offset, u16 data)
@@ -723,23 +648,7 @@ static inline s32 e1e_wphy_locked(struct e1000_hw *hw, u32 offset, u16 data)
 	return hw->phy.ops.write_reg_locked(hw, offset, data);
 }
 
-static inline s32 e1000_get_cable_length(struct e1000_hw *hw)
-{
-	if (hw->phy.ops.get_cable_length)
-		return hw->phy.ops.get_cable_length(hw);
-
-	return 0;
-}
-
-extern s32 e1000e_acquire_nvm(struct e1000_hw *hw);
-extern s32 e1000e_write_nvm_spi(struct e1000_hw *hw, u16 offset, u16 words,
-				u16 *data);
-extern s32 e1000e_update_nvm_checksum_generic(struct e1000_hw *hw);
-extern s32 e1000e_poll_eerd_eewr_done(struct e1000_hw *hw, int ee_reg);
-extern s32 e1000e_read_nvm_eerd(struct e1000_hw *hw, u16 offset, u16 words,
-				u16 *data);
-extern s32 e1000e_validate_nvm_checksum_generic(struct e1000_hw *hw);
-extern void e1000e_release_nvm(struct e1000_hw *hw);
+extern void e1000e_reload_nvm_generic(struct e1000_hw *hw);
 
 static inline s32 e1000e_read_mac_addr(struct e1000_hw *hw)
 {
@@ -773,15 +682,8 @@ static inline s32 e1000_write_nvm(struct e1000_hw *hw, u16 offset, u16 words,
 
 static inline s32 e1000_get_phy_info(struct e1000_hw *hw)
 {
-	if (hw->phy.ops.get_info)
-		return hw->phy.ops.get_info(hw);
-
-	return 0;
+	return hw->phy.ops.get_info(hw);
 }
-
-extern bool e1000e_enable_tx_pkt_filtering(struct e1000_hw *hw);
-extern s32 e1000e_mng_write_dhcp_info(struct e1000_hw *hw, u8 *buffer,
-				      u16 length);
 
 static inline u32 __er32(struct e1000_hw *hw, unsigned long reg)
 {
@@ -824,36 +726,11 @@ static inline void __ew32(struct e1000_hw *hw, unsigned long reg, u32 val)
 
 #define e1e_flush()	er32(STATUS)
 
-#define E1000_WRITE_REG_ARRAY(a, reg, offset, value) ( \
-	__ew32((a), (reg + ((offset) << 2)), (value)))
+#define E1000_WRITE_REG_ARRAY(a, reg, offset, value) \
+	(__ew32((a), (reg + ((offset) << 2)), (value)))
 
-#define E1000_READ_REG_ARRAY(a, reg, offset) ( \
-	readl((u8*)((a)->hw_addr) + reg + ((offset) << 2)))
-
-static inline u16 __er16flash(struct e1000_hw *hw, unsigned long reg)
-{
-	return readw((u8*)(hw->flash_address) + reg);
-}
-
-static inline u32 __er32flash(struct e1000_hw *hw, unsigned long reg)
-{
-	return readl((u8*)(hw->flash_address) + reg);
-}
-
-static inline void __ew16flash(struct e1000_hw *hw, unsigned long reg, u16 val)
-{
-	writew(val, (u8*)(hw->flash_address) + reg);
-}
-
-static inline void __ew32flash(struct e1000_hw *hw, unsigned long reg, u32 val)
-{
-	writel(val, (u8*)(hw->flash_address) + reg);
-}
-
-#define er16flash(reg)		__er16flash(hw, (reg))
-#define er32flash(reg)		__er32flash(hw, (reg))
-#define ew16flash(reg, val)	__ew16flash(hw, (reg), (val))
-#define ew32flash(reg, val)	__ew32flash(hw, (reg), (val))
+#define E1000_READ_REG_ARRAY(a, reg, offset) \
+	(readl((u8*)((a)->hw_addr) + reg + ((offset) << 2)))
 
 #ifdef	__APPLE__
 extern IOLock* nvm_mutex;

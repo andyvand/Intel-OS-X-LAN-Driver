@@ -156,13 +156,19 @@ static void e1000e_disable_aspm(IOPCIDevice *pci_dev, u16 state)
 {
 	u8 pos;
 	u16 reg16;
+	u16 aspm_ctl = 0;
+	
+	if (state & PCIE_LINK_STATE_L0S)
+		aspm_ctl |= PCI_EXP_LNKCTL_ASPM_L0S;
+	if (state & PCIE_LINK_STATE_L1)
+		aspm_ctl |= PCI_EXP_LNKCTL_ASPM_L1;
 	
 	/* Both device and parent should have the same ASPM setting.
 	 * Disable ASPM in downstream component first and then upstream.
 	 */
 	pci_dev->findPCICapability(kIOPCIPCIExpressCapability, &pos);
 	reg16 = pci_dev->configRead16(pos + PCI_EXP_LNKCTL);
-	reg16 &= ~state;
+	reg16 &= ~aspm_ctl;
 	pci_dev->configWrite16(pos + PCI_EXP_LNKCTL, reg16);
 #if	0
 	if (!pdev->bus->self)
@@ -170,7 +176,7 @@ static void e1000e_disable_aspm(IOPCIDevice *pci_dev, u16 state)
 	
 	pos = pci_pcie_cap(pdev->bus->self);
 	pci_read_config_word(pdev->bus->self, pos + PCI_EXP_LNKCTL, &reg16);
-	reg16 &= ~state;
+	reg16 &= ~aspm_ctl;
 	pci_write_config_word(pdev->bus->self, pos + PCI_EXP_LNKCTL, reg16);
 #endif
 }
@@ -319,28 +325,11 @@ static void e1000_irq_enable(struct e1000_adapter *adapter)
 static int e1000_sw_init(struct e1000_adapter *adapter)
 {
 	struct net_device *netdev = adapter->netdev;
-	struct e1000_hw *hw = &adapter->hw;
-	s32 rc;
 	
 	adapter->rx_buffer_len = ETH_FRAME_LEN + VLAN_HLEN + ETH_FCS_LEN;
 	adapter->rx_ps_bsize0 = 128;
 	adapter->max_frame_size = netdev->mtu + ETH_HLEN + ETH_FCS_LEN;
 	adapter->min_frame_size = ETH_ZLEN + ETH_FCS_LEN;
-	
-	/* Set various function pointers */
-	adapter->ei->init_ops(&adapter->hw);
-	
-	rc = hw->mac.ops.init_params(&adapter->hw);
-	if (rc)
-		return rc;
-	
-	rc = hw->nvm.ops.init_params(&adapter->hw);
-	if (rc)
-		return rc;
-	
-	rc = hw->phy.ops.init_params(&adapter->hw);
-	if (rc)
-		return rc;
 	
 	e1000e_set_interrupt_capability(adapter);
 	
@@ -761,6 +750,38 @@ void e1000e_reset(struct e1000_adapter *adapter)
 	e1000e_config_hwtstamp(adapter);
 #endif
 	
+	/* Set EEE advertisement as appropriate */
+	if (adapter->flags2 & FLAG2_HAS_EEE) {
+		s32 ret_val;
+		u16 adv_addr;
+		
+		switch (hw->phy.type) {
+			case e1000_phy_82579:
+				adv_addr = I82579_EEE_ADVERTISEMENT;
+				break;
+			case e1000_phy_i217:
+				adv_addr = I217_EEE_ADVERTISEMENT;
+				break;
+			default:
+				e_info("Invalid PHY type setting EEE advertisement\n");
+				return;
+		}
+		
+		ret_val = hw->phy.ops.acquire(hw);
+		if (ret_val) {
+			e_info("EEE advertisement - unable to acquire PHY\n");
+			return;
+		}
+		
+		if (!adapter->eee_advert)
+			dev_info(pci_dev_to_dev(adapter->pdev),
+					 "Disabling EEE advertisement\n");
+		
+		e1000_write_emi_reg_locked(hw, adv_addr, adapter->eee_advert);
+		
+		hw->phy.ops.release(hw);
+	}
+	
 #if 0
 	if (!netif_running(adapter->netdev) &&
 	    !test_bit(__E1000_TESTING, &adapter->state)) {
@@ -941,9 +962,7 @@ static void e1000e_update_tdt_wa(struct e1000_ring *tx_ring, unsigned int i)
  *      while increasing bulk throughput.  This functionality is controlled
  *      by the InterruptThrottleRate module parameter.
  **/
-static unsigned int e1000_update_itr(struct e1000_adapter *adapter,
-									 u16 itr_setting, int packets,
-									 int bytes)
+static unsigned int e1000_update_itr(u16 itr_setting, int packets, int bytes)
 {
 	unsigned int retval = itr_setting;
 	
@@ -1003,16 +1022,14 @@ static void e1000_set_itr(struct e1000_adapter *adapter)
 		goto set_itr_now;
 	}
 
-	adapter->tx_itr = e1000_update_itr(adapter,
-									   adapter->tx_itr,
+	adapter->tx_itr = e1000_update_itr(adapter->tx_itr,
 									   adapter->total_tx_packets,
 									   adapter->total_tx_bytes);
 	/* conservative mode (itr 3) eliminates the lowest_latency setting */
 	if (adapter->itr_setting == 3 && adapter->tx_itr == lowest_latency)
 		adapter->tx_itr = low_latency;
 	
-	adapter->rx_itr = e1000_update_itr(adapter,
-									   adapter->rx_itr,
+	adapter->rx_itr = e1000_update_itr(adapter->rx_itr,
 									   adapter->total_rx_packets,
 									   adapter->total_rx_bytes);
 	/* conservative mode (itr 3) eliminates the lowest_latency setting */
@@ -1021,8 +1038,8 @@ static void e1000_set_itr(struct e1000_adapter *adapter)
 	
 	current_itr = max(adapter->rx_itr, adapter->tx_itr);
 	
+	/* counts and packets in update_itr are dependent on these numbers */
 	switch (current_itr) {
-			/* counts and packets in update_itr are dependent on these numbers */
 		case lowest_latency:
 			new_itr = 70000;
 			break;
@@ -1203,20 +1220,13 @@ static void e1000_tx_queue(struct e1000_ring *tx_ring, int tx_flags, int count)
 	
 	tx_ring->next_to_use = i;
 
-	if (adapter->hw.mac.type == e1000_pch_lpt) {
+	if ((adapter->flags2 & FLAG2_NEEDS_OBFF_WORKAROUND) &&
+	    !test_bit(__E1000_OBFF_DISABLED, &adapter->state)) {
 		struct e1000_hw *hw = &adapter->hw;
+		u32 svcr = er32(SVCR);
 		
-		if ((hw->adapter->revision_id <= 2) &&
-		    (hw->adapter->pdev->device !=
-		     E1000_DEV_ID_PCH_LPTLP_I218_LM)
-		    && (hw->adapter->pdev->device !=
-				E1000_DEV_ID_PCH_LPTLP_I218_V)
-		    && test_bit(__E1000_OBFF_ENABLED, &adapter->state)) {
-			u32 svcr = er32(SVCR);
-			
-			ew32(SVCR, svcr & ~E1000_SVCR_OFF_EN);
-			clear_bit(__E1000_OBFF_ENABLED, &adapter->state);
-		}
+		ew32(SVCR, svcr & ~E1000_SVCR_OFF_EN);
+		set_bit(__E1000_OBFF_DISABLED, &adapter->state);
 	}
 	
 	if (adapter->flags2 & FLAG2_PCIM2PCI_ARBITER_WA)
@@ -1318,7 +1328,7 @@ static int e1000_init_phy_wakeup(struct e1000_adapter *adapter, u32 wufc)
 	struct e1000_hw *hw = &adapter->hw;
 	u32 i, mac_reg;
 	u16 phy_reg, wuc_enable;
-	int retval = 0;
+	int retval;
 	
 	/* copy MAC RARs to PHY RARs */
 	e1000_copy_rx_addrs_to_phy_ich8lan(hw);
@@ -1390,6 +1400,106 @@ static void e1000e_downshift_workaround(struct e1000_adapter *adapter)
 	e1000e_gig_downshift_workaround_ich8lan(&adapter->hw);
 }
 
+#ifdef SIOCGMIIPHY
+/**
+ * e1000_phy_read_status - Update the PHY register status snapshot
+ * @adapter: board private structure
+ **/
+static void e1000_phy_read_status(struct e1000_adapter *adapter)
+{
+	struct e1000_hw *hw = &adapter->hw;
+	struct e1000_phy_regs *phy = &adapter->phy_regs;
+	
+	if ((er32(STATUS) & E1000_STATUS_LU) &&
+	    (adapter->hw.phy.media_type == e1000_media_type_copper)) {
+		int ret_val;
+		
+		ret_val = e1e_rphy(hw, MII_BMCR, &phy->bmcr);
+		ret_val |= e1e_rphy(hw, MII_BMSR, &phy->bmsr);
+		ret_val |= e1e_rphy(hw, MII_ADVERTISE, &phy->advertise);
+		ret_val |= e1e_rphy(hw, MII_LPA, &phy->lpa);
+		ret_val |= e1e_rphy(hw, MII_EXPANSION, &phy->expansion);
+		ret_val |= e1e_rphy(hw, MII_CTRL1000, &phy->ctrl1000);
+		ret_val |= e1e_rphy(hw, MII_STAT1000, &phy->stat1000);
+		ret_val |= e1e_rphy(hw, MII_ESTATUS, &phy->estatus);
+		if (ret_val)
+			e_warn("Error reading PHY register\n");
+	} else {
+		/* Do not read PHY registers if link is not up
+		 * Set values to typical power-on defaults
+		 */
+		phy->bmcr = (BMCR_SPEED1000 | BMCR_ANENABLE | BMCR_FULLDPLX);
+		phy->bmsr = (BMSR_100FULL | BMSR_100HALF | BMSR_10FULL |
+					 BMSR_10HALF | BMSR_ESTATEN | BMSR_ANEGCAPABLE |
+					 BMSR_ERCAP);
+		phy->advertise = (ADVERTISE_PAUSE_ASYM | ADVERTISE_PAUSE_CAP |
+						  ADVERTISE_ALL | ADVERTISE_CSMA);
+		phy->lpa = 0;
+		phy->expansion = EXPANSION_ENABLENPAGE;
+		phy->ctrl1000 = ADVERTISE_1000FULL;
+		phy->stat1000 = 0;
+		phy->estatus = (ESTATUS_1000_TFULL | ESTATUS_1000_THALF);
+	}
+}
+
+#endif /* SIOCGMIIPHY */
+static void e1000_print_link_info(struct e1000_adapter *adapter)
+{
+	struct e1000_hw *hw = &adapter->hw;
+	u32 ctrl = er32(CTRL);
+	
+	/* Link status message must follow this format for user tools */
+	/* *INDENT-OFF* */
+	e_info("%s NIC Link is Up %d Mbps %s Duplex, Flow Control: %s\n",
+			"e1000e", adapter->link_speed,
+			adapter->link_duplex == FULL_DUPLEX ? "Full" : "Half",
+			(ctrl & E1000_CTRL_TFCE) && (ctrl & E1000_CTRL_RFCE) ? "Rx/Tx" :
+			(ctrl & E1000_CTRL_RFCE) ? "Rx" :
+			(ctrl & E1000_CTRL_TFCE) ? "Tx" : "None");
+	/* *INDENT-ON* */
+}
+
+static bool e1000e_has_link(struct e1000_adapter *adapter)
+{
+	struct e1000_hw *hw = &adapter->hw;
+	bool link_active = false;
+	s32 ret_val = 0;
+	
+	/* get_link_status is set on LSC (link status) interrupt or
+	 * Rx sequence error interrupt.  get_link_status will stay
+	 * false until the check_for_link establishes link
+	 * for copper adapters ONLY
+	 */
+	switch (hw->phy.media_type) {
+		case e1000_media_type_copper:
+			if (hw->mac.get_link_status) {
+				ret_val = hw->mac.ops.check_for_link(hw);
+				link_active = !hw->mac.get_link_status;
+			} else {
+				link_active = true;
+			}
+			break;
+		case e1000_media_type_fiber:
+			ret_val = hw->mac.ops.check_for_link(hw);
+			link_active = !!(er32(STATUS) & E1000_STATUS_LU);
+			break;
+		case e1000_media_type_internal_serdes:
+			ret_val = hw->mac.ops.check_for_link(hw);
+			link_active = adapter->hw.mac.serdes_has_link;
+			break;
+		default:
+		case e1000_media_type_unknown:
+			break;
+	}
+	
+	if ((ret_val == E1000_ERR_PHY) && (hw->phy.type == e1000_phy_igp_3) &&
+	    (er32(CTRL) & E1000_PHY_CTRL_GBE_DISABLE)) {
+		/* See e1000_kmrn_lock_loss_workaround_ich8lan() */
+		e_info("Gigabit has been disabled, downgrading speed\n");
+	}
+	
+	return link_active;
+}
 /////////////////
 
 
@@ -1608,19 +1718,15 @@ bool AppleIntelE1000e::start(IOService* provider)
 		if(err)
 			break;
 
+		memcpy(&hw->mac.ops, ei->mac_ops, sizeof(hw->mac.ops));
+		memcpy(&hw->nvm.ops, ei->nvm_ops, sizeof(hw->nvm.ops));
+		memcpy(&hw->phy.ops, ei->phy_ops, sizeof(hw->phy.ops));
+		
 		if (ei->get_variants) {
 			err = ei->get_variants(adapter);
 			if (err)
 				break;
 		}
-		
-
-		/* setup adapter struct */
-		if (adapter->ei->get_variants) {
-			if (adapter->ei->get_variants(adapter))
-				break;
-		}
-		
 		
 		adapter->hw.mac.ops.get_bus_info(&adapter->hw);
 		
@@ -1725,7 +1831,6 @@ bool AppleIntelE1000e::start(IOService* provider)
 		 */
 		if (!(adapter->flags & FLAG_HAS_AMT))
 			e1000e_get_hw_control(adapter);
-		
 #if 0
 		/* init PTP hardware clock */
 		e1000e_ptp_init(adapter);
@@ -2058,13 +2163,14 @@ UInt32 AppleIntelE1000e::outputPacket(mbuf_t skb, void * param)
 	
 	if (enabledForNetif == false) {             // drop the packet.
 		e_dbg("not enabledForNetif in outputPacket.\n");
-		return kIOReturnOutputStall;
+		return kIOReturnOutputDropped;
 	}
 
 	if (adapter->hw.mac.tx_pkt_filtering)
 		e1000_transfer_dhcp_info(adapter, skb);
 
 	if (e1000_desc_unused(adapter->tx_ring) < TBDS_PER_TCB+2){
+		stalled = true;
 		return kIOReturnOutputStall;
 	}
 	
@@ -3254,10 +3360,10 @@ void AppleIntelE1000e::e1000_print_hw_hang()
 	adapter->tx_hang_recheck = false;
 //	netif_stop_queue(netdev);
 
-	e1e_rphy(hw, PHY_STATUS, &phy_status);
-	e1e_rphy(hw, PHY_1000T_STATUS, &phy_1000t_status);
-	e1e_rphy(hw, PHY_EXT_STATUS, &phy_ext_status);
-
+	e1e_rphy(hw, MII_BMSR, &phy_status);
+	e1e_rphy(hw, MII_STAT1000, &phy_1000t_status);
+	e1e_rphy(hw, MII_ESTATUS, &phy_ext_status);
+	
 	pci_status = pciDevice->configRead16( kIOPCIConfigStatus );
 	
 	/* detected Hardware unit hang */
@@ -3386,22 +3492,18 @@ bool AppleIntelE1000e::e1000_clean_tx_irq()
 	
 	tx_ring->next_to_clean = i;
 
-#if	0
 #define TX_WAKE_THRESHOLD 32
-	if (count && netif_carrier_ok(netdev) &&
+	if (count &&
 	    e1000_desc_unused(tx_ring) >= TX_WAKE_THRESHOLD) {
 		/* Make sure that anybody stopping the queue after this
 		 * sees the new next_to_clean.
 		 */
-		smp_mb();
-		
-		if (netif_queue_stopped(netdev) &&
+		if (stalled &&
 		    !(test_bit(__E1000_DOWN, &adapter->state))) {
-			netif_wake_queue(netdev);
+			transmitQueue->start();
 			++adapter->restart_queue;
 		}
 	}
-#endif
 
 	if (adapter->detect_tx_hung) {
 		/* Detect a transmit hang in hardware, this serializes the
@@ -3442,48 +3544,6 @@ void AppleIntelE1000e::e1000e_enable_receives()
 	}
 }
 
-bool AppleIntelE1000e::e1000e_has_link()
-{
-	e1000_adapter *adapter = &priv_adapter;
-	struct e1000_hw *hw = &priv_adapter.hw;
-	bool link_active = false;
-	SInt32 ret_val = 0;
-	
-	/* get_link_status is set on LSC (link status) interrupt or
-	 * Rx sequence error interrupt.  get_link_status will stay
-	 * false until the check_for_link establishes link
-	 * for copper adapters ONLY
-	 */
-	switch (hw->phy.media_type) {
-	case e1000_media_type_copper:
-		if (hw->mac.get_link_status) {
-			ret_val = hw->mac.ops.check_for_link(hw);
-			link_active = !hw->mac.get_link_status;
-		} else {
-			link_active = true;
-		}
-		break;
-	case e1000_media_type_fiber:
-		ret_val = hw->mac.ops.check_for_link(hw);
-		link_active = !!(er32(STATUS) & E1000_STATUS_LU);
-		break;
-	case e1000_media_type_internal_serdes:
-		ret_val = hw->mac.ops.check_for_link(hw);
-		link_active = adapter->hw.mac.serdes_has_link;
-		break;
-	default:
-	case e1000_media_type_unknown:
-		break;
-	}
-	
-	if ((ret_val == E1000_ERR_PHY) && (hw->phy.type == e1000_phy_igp_3) &&
-	    (er32(CTRL) & E1000_PHY_CTRL_GBE_DISABLE)) {
-		/* See e1000_kmrn_lock_loss_workaround_ich8lan() */
-		e_info("Gigabit has been disabled, downgrading speed\n");
-	}
-
-	return link_active;
-}
 
 void AppleIntelE1000e::e1000_put_txbuf(e1000_buffer *buffer_info)
 {
@@ -3666,25 +3726,20 @@ void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 	struct e1000_hw *hw = &adapter->hw;
 	UInt32 link, tctl;
 	
-	link = e1000e_has_link();
+	link = e1000e_has_link(adapter);
 	
 	//e_dbg("timeout link:%d, preLinkStatus:%d.\n", (int)link, (int)preLinkStatus);
 	if (link && link == preLinkStatus) {
 		e1000e_enable_receives();
 		
-		if ((hw->mac.type == e1000_pch_lpt) &&
-		    (hw->adapter->revision_id <= 2) &&
-		    (hw->adapter->pdev->device !=
-		     E1000_DEV_ID_PCH_LPTLP_I218_LM)
-		    && (hw->adapter->pdev->device !=
-				E1000_DEV_ID_PCH_LPTLP_I218_V)
-		    && !test_bit(__E1000_OBFF_ENABLED, &adapter->state)
-		    && (er32(TDH(0)) == er32(TDT(0)))) {
+		if ((adapter->flags2 & FLAG2_NEEDS_OBFF_WORKAROUND) &&
+		    test_bit(__E1000_OBFF_DISABLED, &adapter->state) &&
+		    (er32(TDH(0)) == er32(TDT(0)))) {
 			u32 svcr = er32(SVCR);
 			
 			/* Enable OBFF when there is nothing to transmit */
 			ew32(SVCR, svcr | E1000_SVCR_OFF_EN);
-			set_bit(__E1000_OBFF_ENABLED, &adapter->state);
+			clear_bit(__E1000_OBFF_DISABLED, &adapter->state);
 		}
 		
 		goto link_up;
@@ -3700,7 +3755,14 @@ void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 		mac->ops.get_link_up_info(hw,
 								  &adapter->link_speed,
 								  &adapter->link_duplex);
-		e1000_print_link_info();
+		e1000_print_link_info(adapter);
+		
+		/* check if SmartSpeed worked */
+		e1000e_check_downshift(hw);
+		if (phy->speed_downgraded)
+			netdev_warn(netdev,
+					    "Link Speed was downgraded by SmartSpeed\n");
+		
 		/* On supported PHYs, check for duplex mismatch only
 		 * if link has autonegotiated at 10/100 half
 		 */
@@ -3712,9 +3774,9 @@ void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 		    (adapter->link_duplex == HALF_DUPLEX)) {
 			UInt16 autoneg_exp;
 			
-			e1e_rphy(hw, PHY_AUTONEG_EXP, &autoneg_exp);
+			e1e_rphy(hw, MII_EXPANSION, &autoneg_exp);
 			
-			if (!(autoneg_exp & NWAY_ER_LP_NWAY_CAPS))
+			if (!(autoneg_exp & EXPANSION_NWAY))
 				e_info("Autonegotiated half duplex but"
 				       " link partner cannot autoneg. "
 				       " Try forcing full duplex if "
@@ -3849,21 +3911,6 @@ void AppleIntelE1000e::timeoutHandler(OSObject * target, IOTimerEventSource * sr
 	
 }
 
-void AppleIntelE1000e::e1000_print_link_info()
-{
-	e1000_adapter *adapter = &priv_adapter;
-	struct e1000_hw *hw = &adapter->hw;
-	UInt32 ctrl = er32(CTRL);
-	
-	e_info("Link is Up %d Mbps %s, Flow Control: %s\n",
-		   adapter->link_speed,
-		   (adapter->link_duplex == FULL_DUPLEX) ?
-	       "Full Duplex" : "Half Duplex",
-		   ((ctrl & E1000_CTRL_TFCE) && (ctrl & E1000_CTRL_RFCE)) ?
-	       "Rx/Tx" :
-		   ((ctrl & E1000_CTRL_RFCE) ? "Rx" :
-			((ctrl & E1000_CTRL_TFCE) ? "Tx" : "None" )));
-}
 
 void AppleIntelE1000e::e1000e_set_rx_mode()
 {
@@ -4184,8 +4231,8 @@ static int e1000e_config_hwtstamp(struct e1000_adapter *adapter)
 #endif
 	
 	/* Clear TSYNCRXCTL_VALID & TSYNCTXCTL_VALID bit */
-	regval = er32(RXSTMPH);
-	regval = er32(TXSTMPH);
+	er32(RXSTMPH);
+	er32(TXSTMPH);
 	
 	/* Get and set the System Time Register SYSTIM base frequency */
 	ret_val = e1000e_get_base_timinca(adapter, &regval);
@@ -4280,12 +4327,6 @@ void AppleIntelE1000e::e1000_rx_checksum(mbuf_t skb, u32 status_err)
 
 	UInt32 ckMask = kChecksumTCP;
 	UInt32 ckResult = 0;
-#if USE_RX_IP_CHECKSUM
-	ckMask |= kChecksumIP;
-	if (status & E1000_RXD_STAT_IPCS) {
-		ckResult |= kChecksumIP;
-	}
-#endif
 #if USE_RX_UDP_CHECKSUM
 	ckMask |= kChecksumUDP;
 	if (status & E1000_RXD_STAT_UDPCS) {
@@ -4620,10 +4661,6 @@ int AppleIntelE1000e::__e1000_shutdown(bool *enable_wake, bool runtime)
 		}
 		
 		ctrl = er32(CTRL);
-		/* advertise wake from D3Cold */
-#define E1000_CTRL_ADVD3WUC 0x00100000
-		/* phy power management enable */
-#define E1000_CTRL_EN_PHY_PWR_MGMT 0x00200000
 		ctrl |= E1000_CTRL_ADVD3WUC;
 		if (!(adapter->flags2 & FLAG2_HAS_PHY_WAKEUP))
 			ctrl |= E1000_CTRL_EN_PHY_PWR_MGMT;
@@ -4720,6 +4757,13 @@ extern "C" {
 		IOPCIDevice* pDev = (IOPCIDevice*)(dev->provider);
 		*val = pDev->configRead16(where);
 		return 0;
+	}
+	u16 pci_find_capability(pci_dev *dev, u16 val)
+	{
+		IOPCIDevice* pDev = (IOPCIDevice*)(dev->provider);
+		u8 pos;
+		pDev->findPCICapability(kIOPCIPCIExpressCapability, &pos);
+		return (u16)pos;
 	}
 }
 

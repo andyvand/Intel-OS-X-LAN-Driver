@@ -125,6 +125,7 @@ private:
 	bool enabledForNetif;
 	bool promiscusMode;
 	bool multicastMode;
+	bool stalled;
 	UInt32 mcCount;
 	UInt32 preLinkStatus;
 	UInt32 powerState;
@@ -142,12 +143,10 @@ private:
 	bool initEventSources( IOService* provider );
 	bool initPCIConfigSpace(IOPCIDevice* provider);
 
-	void e1000_print_link_info();
 	void e1000_clean_rx_ring();
 	void e1000_clean_tx_ring();
 	void e1000e_free_tx_resources();
 	void e1000e_free_rx_resources();
-	bool e1000e_has_link();
 	void e1000e_enable_receives();
 	bool e1000_clean_tx_irq();
 	bool e1000_clean_rx_irq();

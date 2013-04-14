@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2012 Intel Corporation.
+  Copyright(c) 1999 - 2013 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -165,8 +165,9 @@ static int e1000e_phc_settime(struct ptp_clock_info *ptp,
  * Enable (or disable) ancillary features of the PHC subsystem.
  * Currently, no ancillary features are supported.
  **/
-static int e1000e_phc_enable(struct ptp_clock_info *ptp,
-			     struct ptp_clock_request *request, int on)
+static int e1000e_phc_enable(struct ptp_clock_info __always_unused *ptp,
+			     struct ptp_clock_request __always_unused *request,
+			     int __always_unused on)
 {
 	return -EOPNOTSUPP;
 }
@@ -187,7 +188,7 @@ static void e1000e_systim_overflow_work(struct work_struct *work)
 }
 
 /* *INDENT-OFF* */
-static struct ptp_clock_info e1000e_ptp_clock_info = {
+static const struct ptp_clock_info e1000e_ptp_clock_info = {
 	.owner		= THIS_MODULE,
 	.n_alarm	= 0,
 	.n_ext_ts	= 0,

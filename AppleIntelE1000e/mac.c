@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2012 Intel Corporation.
+  Copyright(c) 1999 - 2013 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -28,35 +28,6 @@
 
 #include "e1000.h"
 
-static s32 e1000_validate_mdi_setting_generic(struct e1000_hw *hw);
-static void e1000_set_lan_id_multi_port_pcie(struct e1000_hw *hw);
-static void e1000e_config_collision_dist_generic(struct e1000_hw *hw);
-static void e1000e_rar_set_generic(struct e1000_hw *hw, u8 *addr, u32 index);
-
-/**
- *  e1000_init_mac_ops_generic - Initialize MAC function pointers
- *  @hw: pointer to the HW structure
- *
- *  Setups up the function pointers to no-op functions
- **/
-void e1000_init_mac_ops_generic(struct e1000_hw *hw)
-{
-	struct e1000_mac_info *mac = &hw->mac;
-	/* General Setup */
-	mac->ops.set_lan_id = e1000_set_lan_id_multi_port_pcie;
-	mac->ops.read_mac_addr = e1000_read_mac_addr_generic;
-	mac->ops.config_collision_dist = e1000e_config_collision_dist_generic;
-	/* LINK */
-	mac->ops.wait_autoneg = e1000_wait_autoneg;
-	/* Management */
-	mac->ops.mng_host_if_write = e1000_mng_host_if_write;
-	mac->ops.mng_write_cmd_header = e1000_mng_write_cmd_header;
-	mac->ops.mng_enable_host_if = e1000_mng_enable_host_if;
-	/* VLAN, MC, etc. */
-	mac->ops.rar_set = e1000e_rar_set_generic;
-	mac->ops.validate_mdi_setting = e1000_validate_mdi_setting_generic;
-}
-
 /**
  *  e1000e_get_bus_info_pcie - Get PCIe bus information
  *  @hw: pointer to the HW structure
@@ -69,29 +40,16 @@ s32 e1000e_get_bus_info_pcie(struct e1000_hw *hw)
 {
 	struct e1000_mac_info *mac = &hw->mac;
 	struct e1000_bus_info *bus = &hw->bus;
-	s32 ret_val;
-	u16 pcie_link_status;
+	struct e1000_adapter *adapter = hw->adapter;
+	u16 pcie_link_status, cap_offset;
 
-	bus->type = e1000_bus_type_pci_express;
-
-	ret_val = e1000_read_pcie_cap_reg(hw, PCIE_LINK_STATUS,
-					  &pcie_link_status);
-	if (ret_val) {
+	cap_offset = pci_find_capability(adapter->pdev, PCI_CAP_ID_EXP);
+	if (!cap_offset) {
 		bus->width = e1000_bus_width_unknown;
-		bus->speed = e1000_bus_speed_unknown;
 	} else {
-		switch (pcie_link_status & PCIE_LINK_SPEED_MASK) {
-		case PCIE_LINK_SPEED_2500:
-			bus->speed = e1000_bus_speed_2500;
-			break;
-		case PCIE_LINK_SPEED_5000:
-			bus->speed = e1000_bus_speed_5000;
-			break;
-		default:
-			bus->speed = e1000_bus_speed_unknown;
-			break;
-		}
-
+		pci_read_config_word(adapter->pdev,
+				     cap_offset + PCIE_LINK_STATUS,
+				     &pcie_link_status);
 		bus->width = (enum e1000_bus_width)((pcie_link_status &
 						     PCIE_LINK_WIDTH_MASK) >>
 						    PCIE_LINK_WIDTH_SHIFT);
@@ -110,7 +68,7 @@ s32 e1000e_get_bus_info_pcie(struct e1000_hw *hw)
  *  Determines the LAN function id by reading memory-mapped registers
  *  and swaps the port value if requested.
  **/
-static void e1000_set_lan_id_multi_port_pcie(struct e1000_hw *hw)
+void e1000_set_lan_id_multi_port_pcie(struct e1000_hw *hw)
 {
 	struct e1000_bus_info *bus = &hw->bus;
 	u32 reg;
@@ -207,7 +165,7 @@ void e1000e_init_rx_addrs(struct e1000_hw *hw, u16 rar_count)
 s32 e1000_check_alt_mac_addr_generic(struct e1000_hw *hw)
 {
 	u32 i;
-	s32 ret_val = 0;
+	s32 ret_val;
 	u16 offset, nvm_alt_mac_addr_offset, nvm_data;
 	u8 alt_mac_addr[ETH_ALEN];
 
@@ -269,7 +227,7 @@ s32 e1000_check_alt_mac_addr_generic(struct e1000_hw *hw)
  *  Sets the receive address array register at index to the address passed
  *  in by addr.
  **/
-static void e1000e_rar_set_generic(struct e1000_hw *hw, u8 *addr, u32 index)
+void e1000e_rar_set_generic(struct e1000_hw *hw, u8 *addr, u32 index)
 {
 	u32 rar_low, rar_high;
 
@@ -941,7 +899,7 @@ s32 e1000e_setup_fiber_serdes_link(struct e1000_hw *hw)
  *  Configures the collision distance to the default value and is used
  *  during link setup.
  **/
-static void e1000e_config_collision_dist_generic(struct e1000_hw *hw)
+void e1000e_config_collision_dist_generic(struct e1000_hw *hw)
 {
 	u32 tctl;
 
@@ -1095,14 +1053,14 @@ s32 e1000e_config_fc_after_link_up(struct e1000_hw *hw)
 		 * has completed.  We read this twice because this reg has
 		 * some "sticky" (latched) bits.
 		 */
-		ret_val = e1e_rphy(hw, PHY_STATUS, &mii_status_reg);
+		ret_val = e1e_rphy(hw, MII_BMSR, &mii_status_reg);
 		if (ret_val)
 			return ret_val;
-		ret_val = e1e_rphy(hw, PHY_STATUS, &mii_status_reg);
+		ret_val = e1e_rphy(hw, MII_BMSR, &mii_status_reg);
 		if (ret_val)
 			return ret_val;
 
-		if (!(mii_status_reg & MII_SR_AUTONEG_COMPLETE)) {
+		if (!(mii_status_reg & BMSR_ANEGCOMPLETE)) {
 			e_dbg("Copper PHY and Auto Neg has not completed.\n");
 			return ret_val;
 		}
@@ -1113,11 +1071,10 @@ s32 e1000e_config_fc_after_link_up(struct e1000_hw *hw)
 		 * Page Ability Register (Address 5) to determine how
 		 * flow control was negotiated.
 		 */
-		ret_val = e1e_rphy(hw, PHY_AUTONEG_ADV, &mii_nway_adv_reg);
+		ret_val = e1e_rphy(hw, MII_ADVERTISE, &mii_nway_adv_reg);
 		if (ret_val)
 			return ret_val;
-		ret_val = e1e_rphy(hw, PHY_LP_ABILITY,
-				   &mii_nway_lp_ability_reg);
+		ret_val = e1e_rphy(hw, MII_LPA, &mii_nway_lp_ability_reg);
 		if (ret_val)
 			return ret_val;
 
@@ -1154,8 +1111,8 @@ s32 e1000e_config_fc_after_link_up(struct e1000_hw *hw)
 		 *   1   |   DC    |   1   |   DC    | E1000_fc_full
 		 *
 		 */
-		if ((mii_nway_adv_reg & NWAY_AR_PAUSE) &&
-		    (mii_nway_lp_ability_reg & NWAY_LPAR_PAUSE)) {
+		if ((mii_nway_adv_reg & ADVERTISE_PAUSE_CAP) &&
+		    (mii_nway_lp_ability_reg & LPA_PAUSE_CAP)) {
 			/* Now we need to check if the user selected Rx ONLY
 			 * of pause frames.  In this case, we had to advertise
 			 * FULL flow control because we could not advertise Rx
@@ -1177,10 +1134,10 @@ s32 e1000e_config_fc_after_link_up(struct e1000_hw *hw)
 		 *-------|---------|-------|---------|--------------------
 		 *   0   |    1    |   1   |    1    | e1000_fc_tx_pause
 		 */
-		else if (!(mii_nway_adv_reg & NWAY_AR_PAUSE) &&
-			 (mii_nway_adv_reg & NWAY_AR_ASM_DIR) &&
-			 (mii_nway_lp_ability_reg & NWAY_LPAR_PAUSE) &&
-			 (mii_nway_lp_ability_reg & NWAY_LPAR_ASM_DIR)) {
+		else if (!(mii_nway_adv_reg & ADVERTISE_PAUSE_CAP) &&
+			 (mii_nway_adv_reg & ADVERTISE_PAUSE_ASYM) &&
+			 (mii_nway_lp_ability_reg & LPA_PAUSE_CAP) &&
+			 (mii_nway_lp_ability_reg & LPA_PAUSE_ASYM)) {
 			hw->fc.current_mode = e1000_fc_tx_pause;
 			e_dbg("Flow Control = Tx PAUSE frames only.\n");
 		}
@@ -1191,10 +1148,10 @@ s32 e1000e_config_fc_after_link_up(struct e1000_hw *hw)
 		 *-------|---------|-------|---------|--------------------
 		 *   1   |    1    |   0   |    1    | e1000_fc_rx_pause
 		 */
-		else if ((mii_nway_adv_reg & NWAY_AR_PAUSE) &&
-			 (mii_nway_adv_reg & NWAY_AR_ASM_DIR) &&
-			 !(mii_nway_lp_ability_reg & NWAY_LPAR_PAUSE) &&
-			 (mii_nway_lp_ability_reg & NWAY_LPAR_ASM_DIR)) {
+		else if ((mii_nway_adv_reg & ADVERTISE_PAUSE_CAP) &&
+			 (mii_nway_adv_reg & ADVERTISE_PAUSE_ASYM) &&
+			 !(mii_nway_lp_ability_reg & LPA_PAUSE_CAP) &&
+			 (mii_nway_lp_ability_reg & LPA_PAUSE_ASYM)) {
 			hw->fc.current_mode = e1000_fc_rx_pause;
 			e_dbg("Flow Control = Rx PAUSE frames only.\n");
 		} else {
@@ -1398,8 +1355,8 @@ s32 e1000e_get_speed_and_duplex_copper(struct e1000_hw *hw, u16 *speed,
  *  Sets the speed and duplex to gigabit full duplex (the only possible option)
  *  for fiber/serdes links.
  **/
-s32 e1000e_get_speed_and_duplex_fiber_serdes(struct e1000_hw *hw,
-					     u16 *speed, u16 *duplex)
+s32 e1000e_get_speed_and_duplex_fiber_serdes(struct e1000_hw __always_unused
+					     *hw, u16 *speed, u16 *duplex)
 {
 	*speed = SPEED_1000;
 	*duplex = FULL_DUPLEX;
@@ -1643,15 +1600,28 @@ s32 e1000e_blink_led_generic(struct e1000_hw *hw)
 		ledctl_blink = E1000_LEDCTL_LED0_BLINK |
 		    (E1000_LEDCTL_MODE_LED_ON << E1000_LEDCTL_LED0_MODE_SHIFT);
 	} else {
-		/* set the blink bit for each LED that's "on" (0x0E)
-		 * in ledctl_mode2
+		/* Set the blink bit for each LED that's "on" (0x0E)
+		 * (or "off" if inverted) in ledctl_mode2.  The blink
+		 * logic in hardware only works when mode is set to "on"
+		 * so it must be changed accordingly when the mode is
+		 * "off" and inverted.
 		 */
 		ledctl_blink = hw->mac.ledctl_mode2;
-		for (i = 0; i < 4; i++)
-			if (((hw->mac.ledctl_mode2 >> (i * 8)) & 0xFF) ==
-			    E1000_LEDCTL_MODE_LED_ON)
-				ledctl_blink |= (E1000_LEDCTL_LED0_BLINK <<
-						 (i * 8));
+		for (i = 0; i < 32; i += 8) {
+			u32 mode = (hw->mac.ledctl_mode2 >> i) &
+			    E1000_LEDCTL_LED0_MODE_MASK;
+			u32 led_default = hw->mac.ledctl_default >> i;
+
+			if ((!(led_default & E1000_LEDCTL_LED0_IVRT) &&
+			     (mode == E1000_LEDCTL_MODE_LED_ON)) ||
+			    ((led_default & E1000_LEDCTL_LED0_IVRT) &&
+			     (mode == E1000_LEDCTL_MODE_LED_OFF))) {
+				ledctl_blink &=
+				    ~(E1000_LEDCTL_LED0_MODE_MASK << i);
+				ledctl_blink |= (E1000_LEDCTL_LED0_BLINK |
+						 E1000_LEDCTL_MODE_LED_ON) << i;
+			}
+		}
 	}
 
 	ew32(LEDCTL, ledctl_blink);
@@ -1830,13 +1800,13 @@ void e1000e_update_adaptive(struct e1000_hw *hw)
 }
 
 /**
- *  e1000_validate_mdi_setting_generic - Verify MDI/MDIx settings
+ *  e1000e_validate_mdi_setting_generic - Verify MDI/MDIx settings
  *  @hw: pointer to the HW structure
  *
  *  Verify that when not using auto-negotiation that MDI/MDIx is correctly
  *  set, which is forced to MDI mode only.
  **/
-static s32 e1000_validate_mdi_setting_generic(struct e1000_hw *hw)
+s32 e1000e_validate_mdi_setting_generic(struct e1000_hw *hw)
 {
 	if (!hw->mac.autoneg && (hw->phy.mdix == 0 || hw->phy.mdix == 3)) {
 		e_dbg("Invalid MDI setting detected\n");
@@ -1848,13 +1818,14 @@ static s32 e1000_validate_mdi_setting_generic(struct e1000_hw *hw)
 }
 
 /**
- *  e1000_validate_mdi_setting_crossover_generic - Verify MDI/MDIx settings
+ *  e1000e_validate_mdi_setting_crossover_generic - Verify MDI/MDIx settings
  *  @hw: pointer to the HW structure
  *
  *  Validate the MDI/MDIx setting, allowing for auto-crossover during forced
  *  operation.
  **/
-s32 e1000_validate_mdi_setting_crossover_generic(struct e1000_hw *hw)
+s32 e1000e_validate_mdi_setting_crossover_generic(struct e1000_hw
+						  __always_unused *hw)
 {
 	return 0;
 }

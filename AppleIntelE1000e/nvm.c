@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2012 Intel Corporation.
+  Copyright(c) 1999 - 2013 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -27,21 +27,6 @@
 *******************************************************************************/
 
 #include "e1000.h"
-
-static void e1000e_reload_nvm_generic(struct e1000_hw *hw);
-
-/**
- *  e1000_init_nvm_ops_generic - Initialize NVM function pointers
- *  @hw: pointer to the HW structure
- *
- *  Setups up the function pointers to no-op functions
- **/
-void e1000_init_nvm_ops_generic(struct e1000_hw *hw)
-{
-	struct e1000_nvm_info *nvm = &hw->nvm;
-	/* Initialize function pointers */
-	nvm->ops.reload = e1000e_reload_nvm_generic;
-}
 
 /**
  *  e1000_raise_eec_clk - Raise EEPROM clock
@@ -639,7 +624,7 @@ s32 e1000e_update_nvm_checksum_generic(struct e1000_hw *hw)
  *  Reloads the EEPROM by setting the "Reinitialize from EEPROM" bit in the
  *  extended control register.
  **/
-static void e1000e_reload_nvm_generic(struct e1000_hw *hw)
+void e1000e_reload_nvm_generic(struct e1000_hw *hw)
 {
 	u32 ctrl_ext;
 

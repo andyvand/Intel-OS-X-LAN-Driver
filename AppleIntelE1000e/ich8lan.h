@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel PRO/1000 Linux driver
-  Copyright(c) 1999 - 2012 Intel Corporation.
+  Copyright(c) 1999 - 2013 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -26,8 +26,8 @@
 
 *******************************************************************************/
 
-#ifndef _E1000_ICH8LAN_H_
-#define _E1000_ICH8LAN_H_
+#ifndef _E1000E_ICH8LAN_H_
+#define _E1000E_ICH8LAN_H_
 
 #define ICH_FLASH_GFPREG		0x0000
 #define ICH_FLASH_HSFSTS		0x0004
@@ -53,12 +53,8 @@
 #define ICH_FLASH_SEG_SIZE_4K		4096
 #define ICH_FLASH_SEG_SIZE_8K		8192
 #define ICH_FLASH_SEG_SIZE_64K		65536
-#define ICH_FLASH_SECTOR_SIZE		4096
-
-#define ICH_FLASH_REG_MAPSIZE		0x00A0
 
 #define E1000_ICH_FWSM_RSPCIPHY		0x00000040	/* Reset PHY on PCI Reset */
-#define E1000_ICH_FWSM_DISSW		0x10000000	/* FW Disables SW Writes */
 /* FW established a valid mode */
 #define E1000_ICH_FWSM_FW_VALID		0x00008000
 #define E1000_ICH_FWSM_PCIM2PCI		0x01000000	/* ME PCIm-to-PCI active */
@@ -66,26 +62,12 @@
 
 #define E1000_ICH_MNG_IAMT_MODE		0x2
 
-#define E1000_FWSM_PROXY_MODE		0x00000008	/* FW is in proxy mode */
-#define E1000_FWSM_MEMC			0x00000010	/* ME Messaging capable */
 #define E1000_FWSM_WLOCK_MAC_MASK	0x0380
 #define E1000_FWSM_WLOCK_MAC_SHIFT	7
 
 /* Shared Receive Address Registers */
 #define E1000_SHRAL_PCH_LPT(_i)		(0x05408 + ((_i) * 8))
 #define E1000_SHRAH_PCH_LPT(_i)		(0x0540C + ((_i) * 8))
-#define E1000_SHRAH_AV		0x80000000	/* Addr Valid bit */
-#define E1000_SHRAH_MAV		0x40000000	/* Multicast Addr Valid bit */
-
-#define E1000_H2ME		0x05B50	/* Host to ME */
-#define E1000_H2ME_LSECREQ	0x00000001	/* Linksec Request */
-#define E1000_H2ME_LSECA	0x00000002	/* Linksec Active */
-#define E1000_H2ME_LSECSF	0x00000004	/* Linksec Failed */
-#define E1000_H2ME_LSECD	0x00000008	/* Linksec Disabled */
-#define E1000_H2ME_SLCAPD	0x00000010	/* Start LCAPD */
-#define E1000_H2ME_IPV4_ARP_EN	0x00000020	/* Arp Offload enable bit */
-#define E1000_H2ME_IPV6_NS_EN	0x00000040	/* NS Offload enable bit */
-#define E1000_H2ME_ULP		0x00000800	/* ULP Indication Bit */
 
 #define ID_LED_DEFAULT_ICH8LAN	((ID_LED_DEF1_DEF2 << 12) | \
 				 (ID_LED_OFF1_OFF2 <<  8) | \
@@ -99,19 +81,17 @@
 
 #define E1000_ICH8_LAN_INIT_TIMEOUT	1500
 
-/* FEXT register bit definition */
-#define E1000_FEXT_PHY_CABLE_DISCONNECTED	0x00000004
-
 #define E1000_FEXTNVM_SW_CONFIG		1
 #define E1000_FEXTNVM_SW_CONFIG_ICH8M	(1 << 27)	/* Bit redefined for ICH8M */
 
-#define E1000_FEXTNVM3	0x0003C	/* Future Extended NVM 3 - RW */
 #define E1000_FEXTNVM3_PHY_CFG_COUNTER_MASK	0x0C000000
 #define E1000_FEXTNVM3_PHY_CFG_COUNTER_50MSEC	0x08000000
 
 #define E1000_FEXTNVM4_BEACON_DURATION_MASK	0x7
 #define E1000_FEXTNVM4_BEACON_DURATION_8USEC	0x7
 #define E1000_FEXTNVM4_BEACON_DURATION_16USEC	0x3
+
+#define E1000_FEXTNVM6_REQ_PLL_CLK	0x00000100
 
 #define PCIE_ICH8_SNOOP_ALL	PCIE_NO_SNOOP_ALL
 
@@ -124,13 +104,10 @@
 				 ((reg) & MAX_PHY_REG_ADDRESS))
 #define IGP3_KMRN_DIAG		PHY_REG(770, 19)	/* KMRN Diagnostic */
 #define IGP3_VR_CTRL		PHY_REG(776, 18)	/* Voltage Regulator Control */
-#define IGP3_CAPABILITY		PHY_REG(776, 19)	/* Capability */
-#define IGP3_PM_CTRL		PHY_REG(769, 20)	/* Power Management Control */
 
 #define IGP3_KMRN_DIAG_PCS_LOCK_LOSS		0x0002
 #define IGP3_VR_CTRL_DEV_POWERDOWN_MODE_MASK	0x0300
 #define IGP3_VR_CTRL_MODE_SHUTDOWN		0x0200
-#define IGP3_PM_CTRL_FORCE_PWR_DOWN		0x0020
 
 /* PHY Wakeup Registers and defines */
 #define BM_PORT_GEN_CFG		PHY_REG(BM_PORT_CTRL_PAGE, 17)
@@ -143,19 +120,6 @@
 #define BM_RAR_H(_i)		(BM_PHY_REG(BM_WUC_PAGE, 18 + ((_i) << 2)))
 #define BM_RAR_CTRL(_i)		(BM_PHY_REG(BM_WUC_PAGE, 19 + ((_i) << 2)))
 #define BM_MTA(_i)		(BM_PHY_REG(BM_WUC_PAGE, 128 + ((_i) << 1)))
-#define BM_IPAV			(BM_PHY_REG(BM_WUC_PAGE, 64))
-#define BM_IP4AT_L(_i)		(BM_PHY_REG(BM_WUC_PAGE, 82 + ((_i) * 2)))
-#define BM_IP4AT_H(_i)		(BM_PHY_REG(BM_WUC_PAGE, 83 + ((_i) * 2)))
-
-#define BM_SHRAL_LOWER(_i)	(BM_PHY_REG(BM_WUC_PAGE, 44 + ((_i) * 4)))
-#define BM_SHRAL_UPPER(_i)	(BM_PHY_REG(BM_WUC_PAGE, 45 + ((_i) * 4)))
-#define BM_SHRAH_LOWER(_i)	(BM_PHY_REG(BM_WUC_PAGE, 46 + ((_i) * 4)))
-#define BM_SHRAH_UPPER(_i)	(BM_PHY_REG(BM_WUC_PAGE, 47 + ((_i) * 4)))
-
-#define I217_SHRAL_LOWER(_i)	(BM_PHY_REG(BM_WUC_PAGE, 20 + ((_i) * 4)))
-#define I217_SHRAL_UPPER(_i)	(BM_PHY_REG(BM_WUC_PAGE, 21 + ((_i) * 4)))
-#define I217_SHRAH_LOWER(_i)	(BM_PHY_REG(BM_WUC_PAGE, 22 + ((_i) * 4)))
-#define I217_SHRAH_UPPER(_i)	(BM_PHY_REG(BM_WUC_PAGE, 23 + ((_i) * 4)))
 
 #define BM_RCTL_UPE		0x0001	/* Unicast Promiscuous Mode */
 #define BM_RCTL_MPE		0x0002	/* Multicast Promiscuous Mode */
@@ -187,31 +151,12 @@
 
 #define E1000_FCRTV_PCH	0x05F40	/* PCH Flow Control Refresh Timer Value */
 
-/* For ICH, the name used for NVM word 17h is LED1 Config.
- * For PCH, the word was re-named to OEM Config.
- */
-#define E1000_NVM_LED1_CONFIG		0x17	/* NVM LED1/LPLU Config Word */
-#define E1000_NVM_LED1_CONFIG_LPLU_NONDOA 0x0400	/* NVM LPLU in non-D0a Bit */
-#define E1000_NVM_OEM_CONFIG		E1000_NVM_LED1_CONFIG
-#define E1000_NVM_OEM_CONFIG_LPLU_NONDOA E1000_NVM_LED1_CONFIG_LPLU_NONDOA
-
 #define E1000_NVM_K1_CONFIG	0x1B	/* NVM K1 Config Word */
 #define E1000_NVM_K1_ENABLE	0x1	/* NVM Enable K1 bit */
 
 /* SMBus Control Phy Register */
 #define CV_SMB_CTRL		PHY_REG(769, 23)
 #define CV_SMB_CTRL_FORCE_SMBUS	0x0001
-
-/* I218 Ultra Low Power Configuration 1 Register */
-#define I218_ULP_CONFIG1		PHY_REG(779, 16)
-#define I218_ULP_CONFIG1_START		0x0001	/* Start auto ULP config */
-#define I218_ULP_CONFIG1_IND		0x0004	/* Pwr up from ULP indication */
-#define I218_ULP_CONFIG1_STICKY_ULP	0x0010	/* Set sticky ULP mode */
-#define I218_ULP_CONFIG1_INBAND_EXIT	0x0020	/* Inband on ULP exit */
-#define I218_ULP_CONFIG1_WOL_HOST	0x0040	/* WoL Host on ULP exit */
-#define I218_ULP_CONFIG1_WOL_ME		0x0080	/* WoL ME on ULP exit */
-#define I218_ULP_CONFIG1_RESET_TO_SMBUS	0x0100	/* Reset to SMBus mode */
-#define I218_ULP_CONFIG1_DISABLE_SMB_PERST	0x1000	/* Disable on PERST# */
 
 /* SMBus Address Phy Register */
 #define HV_SMB_ADDR		PHY_REG(768, 26)
@@ -235,8 +180,6 @@
 #define HV_OEM_BITS_GBE_DIS	0x0040	/* Gigabit Disable */
 #define HV_OEM_BITS_RESTART_AN	0x0400	/* Restart Auto-negotiation */
 
-#define LCD_CFG_PHY_ADDR_BIT	0x0020	/* Phy addr bit from LCD Config word */
-
 /* KMRN Mode Control */
 #define HV_KMRN_MODE_CTRL	PHY_REG(769, 16)
 #define HV_KMRN_MDIO_SLOW	0x0400
@@ -249,9 +192,6 @@
 /* PHY Power Management Control */
 #define HV_PM_CTRL		PHY_REG(770, 17)
 #define HV_PM_CTRL_PLL_STOP_IN_K1_GIGA	0x100
-#define HV_PM_CTRL_K1_ENABLE		0x4000
-#define I217_MEM_PM_CFG		PHY_REG(772, 27)	/* I217 PHY Mem PM Cfg Reg */
-#define I217_MEM_PM_CFG_TXF_SD	0x0020	/* Tx FIFO Memories Shutdown */
 
 #define SW_FLAG_TIMEOUT		1000	/* SW Semaphore flag timeout in ms */
 
@@ -269,7 +209,8 @@
 #define I82579_MSE_THRESHOLD	0x084F	/* 82579 Mean Square Error Threshold */
 #define I82577_MSE_THRESHOLD	0x0887	/* 82577 Mean Square Error Threshold */
 #define I82579_MSE_LINK_DOWN	0x2411	/* MSE count before dropping link */
-#define I82579_EEE_PCS_STATUS		0x182D	/* IEEE MMD Register 3.1 >> 8 */
+#define I82579_RX_CONFIG		0x3412	/* Receive configuration */
+#define I82579_EEE_PCS_STATUS		0x182E	/* IEEE MMD Register 3.1 >> 8 */
 #define I82579_EEE_CAPABILITY		0x0410	/* IEEE MMD Register 3.20 */
 #define I82579_EEE_ADVERTISEMENT	0x040E	/* IEEE MMD Register 7.60 */
 #define I82579_EEE_LP_ABILITY		0x040F	/* IEEE MMD Register 7.61 */
@@ -288,33 +229,10 @@
 #define I217_PROXY_CTRL_AUTO_DISABLE	0x0080
 #define I217_SxCTRL			PHY_REG(BM_PORT_CTRL_PAGE, 28)
 #define I217_SxCTRL_ENABLE_LPI_RESET	0x1000
-#define I217_SxCTRL_ENABLE_SERDES	0x0020
 #define I217_CGFREG			PHY_REG(772, 29)
 #define I217_CGFREG_ENABLE_MTA_RESET	0x0002
 #define I217_MEMPWR			PHY_REG(772, 26)
 #define I217_MEMPWR_DISABLE_SMB_RELEASE	0x0010
-
-/* Additional interrupts need to be handled for ICH family:
- *  DSW = The FW changed the status of the DISSW bit in FWSM
- *  PHYINT = The LAN connected device generates an interrupt
- *  EPRST = Manageability reset event
- */
-#define IMS_ICH_ENABLE_MASK (\
-	E1000_IMS_DSW   | \
-	E1000_IMS_PHYINT | \
-	E1000_IMS_EPRST)
-
-/* Additional interrupt register bit definitions */
-#define E1000_ICR_LSECPNC	0x00004000	/* PN threshold - client */
-#define E1000_IMS_LSECPNC	E1000_ICR_LSECPNC	/* PN threshold - client */
-#define E1000_ICS_LSECPNC	E1000_ICR_LSECPNC	/* PN threshold - client */
-
-/* Security Processing bit Indication */
-#define E1000_RXDEXT_LINKSEC_STATUS_LSECH	0x01000000
-#define E1000_RXDEXT_LINKSEC_ERROR_BIT_MASK	0x60000000
-#define E1000_RXDEXT_LINKSEC_ERROR_NO_SA_MATCH	0x20000000
-#define E1000_RXDEXT_LINKSEC_ERROR_REPLAY_ERROR	0x40000000
-#define E1000_RXDEXT_LINKSEC_ERROR_BAD_SIG	0x60000000
 
 /* Receive Address Initial CRC Calculation */
 #define E1000_PCH_RAICC(_n)	(0x05F50 + ((_n) * 4))
@@ -348,4 +266,5 @@ s32 e1000_configure_k1_ich8lan(struct e1000_hw *hw, bool k1_enable);
 void e1000_copy_rx_addrs_to_phy_ich8lan(struct e1000_hw *hw);
 s32 e1000_lv_jumbo_workaround_ich8lan(struct e1000_hw *hw, bool enable);
 s32 e1000_read_emi_reg_locked(struct e1000_hw *hw, u16 addr, u16 *data);
-#endif /* _E1000_ICH8LAN_H_ */
+s32 e1000_write_emi_reg_locked(struct e1000_hw *hw, u16 addr, u16 data);
+#endif /* _E1000E_ICH8LAN_H_ */

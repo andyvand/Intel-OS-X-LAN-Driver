@@ -39,6 +39,7 @@
 		1A224C3FFF42367911CA2CB7 /* AppleIntelE1000e.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = AppleIntelE1000e.cpp; sourceTree = "<group>"; };
 		32D94FCF0562CBF700B6AF17 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		32D94FD00562CBF700B6AF17 /* AppleIntelE1000e.kext */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppleIntelE1000e.kext; sourceTree = BUILT_PRODUCTS_DIR; };
+		4D00349F171A529C00EF3D67 /* ptp.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = ptp.c; sourceTree = "<group>"; };
 		4D403D02136F81CE00ECF8EB /* 80003es2lan.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = 80003es2lan.c; sourceTree = "<group>"; };
 		4D403D03136F81CE00ECF8EB /* 80003es2lan.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = 80003es2lan.h; sourceTree = "<group>"; };
 		4D403D07136F839600ECF8EB /* 82571.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = 82571.h; sourceTree = "<group>"; };
@@ -146,6 +147,7 @@
 		4DED0B1910EB2A4600CF5CE1 /* Unused */ = {
 			isa = PBXGroup;
 			children = (
+				4D00349F171A529C00EF3D67 /* ptp.c */,
 				4DED0B1C10EB2A6300CF5CE1 /* kcompat.c */,
 				4DED0B1D10EB2A6300CF5CE1 /* netdev.c */,
 			);
