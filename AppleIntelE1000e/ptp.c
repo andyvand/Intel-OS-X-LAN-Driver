@@ -145,8 +145,7 @@ static int e1000e_phc_settime(struct ptp_clock_info *ptp,
 	unsigned long flags;
 	u64 ns;
 
-	ns = ts->tv_sec * NSEC_PER_SEC;
-	ns += ts->tv_nsec;
+	ns = timespec_to_ns(ts);
 
 	/* reset the timecounter */
 	spin_lock_irqsave(&adapter->systim_lock, flags);
@@ -187,7 +186,6 @@ static void e1000e_systim_overflow_work(struct work_struct *work)
 			      E1000_SYSTIM_OVERFLOW_PERIOD);
 }
 
-/* *INDENT-OFF* */
 static const struct ptp_clock_info e1000e_ptp_clock_info = {
 	.owner		= THIS_MODULE,
 	.n_alarm	= 0,
@@ -200,7 +198,6 @@ static const struct ptp_clock_info e1000e_ptp_clock_info = {
 	.settime	= e1000e_phc_settime,
 	.enable		= e1000e_phc_enable,
 };
-/* *INDENT-ON* */
 
 /**
  * e1000e_ptp_init - initialize PTP for devices which support it

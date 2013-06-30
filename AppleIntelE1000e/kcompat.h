@@ -1,8 +1,8 @@
 /*******************************************************************************
-
-  Macros to compile Intel PRO/1000 Linux driver almost-as-is for Mac OS X.
  
-*******************************************************************************/
+ Macros to compile Intel PRO/1000 Linux driver almost-as-is for Mac OS X.
+ 
+ *******************************************************************************/
 
 #ifndef _KCOMPAT_H_
 #define _KCOMPAT_H_
@@ -49,10 +49,10 @@
 #define false 0
 
 #define min_t(type,x,y) \
-	({ type __x = (x); type __y = (y); __x < __y ? __x: __y; })
+({ type __x = (x); type __y = (y); __x < __y ? __x: __y; })
 
 #define max_t(type, x, y) \
-	({ type __max1 = (x); type __max2 = (y); __max1 > __max2 ? __max1: __max2; })
+({ type __max1 = (x); type __max2 = (y); __max1 > __max2 ? __max1: __max2; })
 
 #define cpu_to_le16(x)	OSSwapHostToLittleConstInt16(x)
 #define cpu_to_le32(x)	OSSwapHostToLittleConstInt32(x)
@@ -100,7 +100,7 @@ struct net_device_stats {
 	unsigned long	tx_dropped;				/* no space available in linux  */
 	unsigned long	multicast;				/* multicast packets received   */
 	unsigned long	collisions;
-
+    
 	/* detailed rx_errors: */
 	unsigned long	rx_length_errors;
 	unsigned long	rx_over_errors;			/* receiver ring buff overflow  */
@@ -108,14 +108,14 @@ struct net_device_stats {
 	unsigned long	rx_frame_errors;		/* recv'd frame alignment error */
 	unsigned long	rx_fifo_errors;			/* recv'r fifo overrun          */
 	unsigned long	rx_missed_errors;		/* receiver missed packet       */
-
+    
 	/* detailed tx_errors */
 	unsigned long	tx_aborted_errors;
 	unsigned long	tx_carrier_errors;
 	unsigned long	tx_fifo_errors;
 	unsigned long	tx_heartbeat_errors;
 	unsigned long	tx_window_errors;
-
+    
 	/* for cslip etc */
 	unsigned long	rx_compressed;
 	unsigned long	tx_compressed;
@@ -128,13 +128,13 @@ struct list_head {
 struct timer_list {
 	struct list_head entry;
 	unsigned long expires;
-
+    
 	//spinlock_t lock;
 	unsigned long magic;
-
+    
 	void (*function)(unsigned long);
 	unsigned long data;
-
+    
 	//struct tvec_t_base_s *base;
 };
 
@@ -202,7 +202,7 @@ struct work_struct {
 #define BMCR_SPEED100           0x2000  /* Select 100Mbps              */
 #define BMCR_LOOPBACK           0x4000  /* TXD loopback bits           */
 #define BMCR_RESET              0x8000  /* Reset to default state      */
- 
+
 /* Basic mode status register. */
 #define BMSR_ERCAP              0x0001  /* Ext-reg capability          */
 #define BMSR_JCD                0x0002  /* Jabber detected             */
@@ -362,7 +362,7 @@ static inline unsigned int _kc_ether_crc_le(int length, unsigned char *data)
 
 #define mdelay(x)	for(int i = 0; i < x; i++ )udelay(1000)
 #define DIV_ROUND_UP(n,d) (((n) + (d) - 1) / (d))
-#define usleep_range(min, max)	msleep(DIV_ROUND_UP(min, 1000))	
+#define usleep_range(min, max)	msleep(DIV_ROUND_UP(min, 1000))
 
 #define schedule_work(a)
 
@@ -388,7 +388,7 @@ typedef void IOBufferMemoryDescriptor;
 #define	mmiowb()	OSSynchronizeIO()
 
 #define	__MODULE_STRING(s)	"x"
-#define synchronize_irq(x) 
+#define synchronize_irq(x)
 
 static inline int test_bit(int nr, const volatile unsigned long * addr) {
 	return (*addr & (1<<nr)) != 0;
@@ -409,13 +409,13 @@ static inline int test_and_set_bit(int nr, volatile unsigned long * addr) {
 }
 
 #define do_div(lat_ns, speed) \
-	(lat_ns) = (UInt64)(lat_ns) / (speed)
+(lat_ns) = (UInt64)(lat_ns) / (speed)
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-int pci_read_config_word(pci_dev *dev, int where, u16 *val);
-u16 pci_find_capability(pci_dev *dev, u16 val);
+    int pci_read_config_word(pci_dev *dev, int where, u16 *val);
+    u16 pci_find_capability(pci_dev *dev, u16 val);
 #ifdef __cplusplus
 }
 #endif

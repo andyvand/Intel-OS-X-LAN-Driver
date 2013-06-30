@@ -167,7 +167,7 @@ private:
 	void e1000_receive_skb(mbuf_t skb, u32 length, u32 staterr, __le16 vlan);
 	void e1000_configure();
 	void e1000e_up();
-	void e1000e_down();
+	void e1000e_down(bool reset);
 	void e1000_change_mtu(UInt32 maxSize);
 	
 	int __e1000_shutdown(bool *enable_wake, bool runtime);

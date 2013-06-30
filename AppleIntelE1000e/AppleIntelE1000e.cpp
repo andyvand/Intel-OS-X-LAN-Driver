@@ -561,10 +561,6 @@ void e1000e_power_up_phy(struct e1000_adapter *adapter)
  */
 static void e1000_power_down_phy(struct e1000_adapter *adapter)
 {
-	/* WoL is enabled */
-	if (adapter->wol)
-		return;
-	
 	if (adapter->hw.phy.ops.power_down)
 		adapter->hw.phy.ops.power_down(&adapter->hw);
 }
@@ -689,6 +685,8 @@ void e1000e_reset(struct e1000_adapter *adapter)
 				fc->pause_time = 0x0650;
             }
 
+			pba = 14;
+			ew32(PBA, pba);
 			fc->high_water = ((pba << 10) * 9 / 10) & E1000_FCRTH_RTH;
 			fc->low_water = ((pba << 10) * 8 / 10) & E1000_FCRTL_RTL;
 			break;
@@ -708,12 +706,12 @@ void e1000e_reset(struct e1000_adapter *adapter)
 	if (adapter->itr_setting & 0x3) {
 		if ((adapter->max_frame_size * 2) > (pba << 10)) {
 			if (!(adapter->flags2 & FLAG2_DISABLE_AIM)) {
-				IOLog("Interrupt Throttle Rate turned off\n");
+				IOLog("Interrupt Throttle Rate off\n");
 				adapter->flags2 |= FLAG2_DISABLE_AIM;
 				e1000e_write_itr(adapter, 0);
 			}
 		} else if (adapter->flags2 & FLAG2_DISABLE_AIM) {
-			IOLog( "Interrupt Throttle Rate turned on\n");
+			IOLog( "Interrupt Throttle Rate on\n");
 			adapter->flags2 &= ~FLAG2_DISABLE_AIM;
 			adapter->itr = 20000;
 			e1000e_write_itr(adapter, adapter->itr);
@@ -736,7 +734,7 @@ void e1000e_reset(struct e1000_adapter *adapter)
 	if (mac->ops.init_hw(hw))
 		e_err("Hardware Error\n");
 	
-#ifdef NETIF_F_HW_VLAN_TX
+#if defined(NETIF_F_HW_VLAN_TX) || defined(NETIF_F_HW_VLAN_CTAG_TX)
 	e1000_update_mng_vlan(adapter);
 	
 	/* Enable h/w to recognize an 802.1Q VLAN Ethernet packet */
@@ -773,11 +771,9 @@ void e1000e_reset(struct e1000_adapter *adapter)
 			return;
 		}
 		
-		if (!adapter->eee_advert)
-			dev_info(pci_dev_to_dev(adapter->pdev),
-					 "Disabling EEE advertisement\n");
-		
-		e1000_write_emi_reg_locked(hw, adv_addr, adapter->eee_advert);
+		e1000_write_emi_reg_locked(hw, adv_addr,
+					   hw->dev_spec.ich8lan.eee_disable ?
+					   0 : adapter->eee_advert);
 		
 		hw->phy.ops.release(hw);
 	}
@@ -786,7 +782,6 @@ void e1000e_reset(struct e1000_adapter *adapter)
 	if (!netif_running(adapter->netdev) &&
 	    !test_bit(__E1000_TESTING, &adapter->state)) {
 		e1000_power_down_phy(adapter);
-		return;
 	}
 #endif
     
@@ -1094,9 +1089,6 @@ void e1000e_write_itr(struct e1000_adapter *adapter, u32 itr)
 	} else {
 		ew32(ITR, new_itr);
 	}
-	
-	if (hw->mac.type == e1000_pch_lpt)
-		hw->mac.ops.set_obff_timer(hw, new_itr);
 }
 
 static int e1000_tx_map(struct e1000_adapter *adapter, mbuf_t skb, unsigned int first, IOMbufNaturalMemoryCursor * txMbufCursor )
@@ -1219,15 +1211,6 @@ static void e1000_tx_queue(struct e1000_ring *tx_ring, int tx_flags, int count)
 	wmb();
 	
 	tx_ring->next_to_use = i;
-
-	if ((adapter->flags2 & FLAG2_NEEDS_OBFF_WORKAROUND) &&
-	    !test_bit(__E1000_OBFF_DISABLED, &adapter->state)) {
-		struct e1000_hw *hw = &adapter->hw;
-		u32 svcr = er32(SVCR);
-		
-		ew32(SVCR, svcr & ~E1000_SVCR_OFF_EN);
-		set_bit(__E1000_OBFF_DISABLED, &adapter->state);
-	}
 	
 	if (adapter->flags2 & FLAG2_PCIM2PCI_ARBITER_WA)
 		e1000e_update_tdt_wa(tx_ring, i);
@@ -1247,7 +1230,7 @@ static int e1000_transfer_dhcp_info(struct e1000_adapter *adapter,
 	struct e1000_hw *hw = &adapter->hw;
 	u16 length, offset;
 	
-#ifdef NETIF_F_HW_VLAN_TX
+#if defined(NETIF_F_HW_VLAN_TX) || defined(NETIF_F_HW_VLAN_CTAG_TX)
 	if (vlan_tx_tag_present(skb) &&
 	    !((vlan_tx_tag_get(skb) == adapter->hw.mng_cookie.vlan_id) &&
 	      (adapter->hw.mng_cookie.status &
@@ -1326,7 +1309,7 @@ static void e1000e_flush_descriptors(struct e1000_adapter *adapter)
 static int e1000_init_phy_wakeup(struct e1000_adapter *adapter, u32 wufc)
 {
 	struct e1000_hw *hw = &adapter->hw;
-	u32 i, mac_reg;
+	u32 i, mac_reg, wuc;
 	u16 phy_reg, wuc_enable;
 	int retval;
 	
@@ -1372,14 +1355,19 @@ static int e1000_init_phy_wakeup(struct e1000_adapter *adapter, u32 wufc)
 	if (mac_reg & E1000_CTRL_RFCE)
 		phy_reg |= BM_RCTL_RFCE;
 	hw->phy.ops.write_reg_page(&adapter->hw, BM_RCTL, phy_reg);
-	
+
+	wuc = E1000_WUC_PME_EN;
+	if (wufc & (E1000_WUFC_MAG | E1000_WUFC_LNKC))
+		wuc |= E1000_WUC_APME;
+
 	/* enable PHY wakeup in MAC register */
 	ew32(WUFC, wufc);
-	ew32(WUC, E1000_WUC_PHY_WAKE | E1000_WUC_PME_EN);
+	ew32(WUC, (E1000_WUC_PHY_WAKE | E1000_WUC_APMPME |
+		   E1000_WUC_PME_STATUS | wuc));
 	
 	/* configure and enable PHY wakeup in PHY registers */
 	hw->phy.ops.write_reg_page(&adapter->hw, BM_WUFC, wufc);
-	hw->phy.ops.write_reg_page(&adapter->hw, BM_WUC, E1000_WUC_PME_EN);
+	hw->phy.ops.write_reg_page(&adapter->hw, BM_WUC, wuc);
 	
 	/* activate PHY wakeup */
 	wuc_enable |= BM_WUC_ENABLE_BIT | BM_WUC_HOST_WU_BIT;
@@ -1449,14 +1437,12 @@ static void e1000_print_link_info(struct e1000_adapter *adapter)
 	u32 ctrl = er32(CTRL);
 	
 	/* Link status message must follow this format for user tools */
-	/* *INDENT-OFF* */
 	e_info("%s NIC Link is Up %d Mbps %s Duplex, Flow Control: %s\n",
 			"e1000e", adapter->link_speed,
 			adapter->link_duplex == FULL_DUPLEX ? "Full" : "Half",
 			(ctrl & E1000_CTRL_TFCE) && (ctrl & E1000_CTRL_RFCE) ? "Rx/Tx" :
 			(ctrl & E1000_CTRL_RFCE) ? "Rx" :
 			(ctrl & E1000_CTRL_TFCE) ? "Tx" : "None");
-	/* *INDENT-ON* */
 }
 
 static bool e1000e_has_link(struct e1000_adapter *adapter)
@@ -1963,7 +1949,7 @@ IOReturn AppleIntelE1000e::enable(IONetworkInterface * netif)
 	e1000e_power_up_phy(adapter);
 	
 
-#ifdef NETIF_F_HW_VLAN_TX
+#if defined(NETIF_F_HW_VLAN_TX) || defined(NETIF_F_HW_VLAN_CTAG_TX)
 	adapter->mng_vlan_id = E1000_MNG_VLAN_NONE;
 	if ((adapter->hw.mng_cookie.status &
 		 E1000_MNG_DHCP_COOKIE_STATUS_VLAN))
@@ -1999,15 +1985,16 @@ IOReturn AppleIntelE1000e::disable(IONetworkInterface * netif)
 		return kIOReturnSuccess;
 	enabledForNetif = false;
 
-	e1000e_down();	
+	if (!test_bit(__E1000_DOWN, &adapter->state)) {
+		e1000e_down(true);	
 	
-	//e1000_free_irq(adapter);
-	e1000_power_down_phy(adapter);
-	
+		//e1000_free_irq(adapter);
+		//e1000_power_down_phy(adapter);
+	}
 	e1000e_free_tx_resources();
 	e1000e_free_rx_resources();
 	
-#ifdef NETIF_F_HW_VLAN_TX
+#if defined(NETIF_F_HW_VLAN_TX) || defined(NETIF_F_HW_VLAN_CTAG_TX)
 	/* kill manageability vlan ID if supported, but not if a vlan with
 	 * the same ID is registered on the host OS (let 8021q kill it)
 	 */
@@ -2015,7 +2002,12 @@ IOReturn AppleIntelE1000e::disable(IONetworkInterface * netif)
 		 E1000_MNG_DHCP_COOKIE_STATUS_VLAN) &&
 		!(adapter->vlgrp &&
 		  vlan_group_get_device(adapter->vlgrp, adapter->mng_vlan_id)))
+#ifdef NETIF_F_HW_VLAN_CTAG_RX
+		e1000_vlan_rx_kill_vid(netdev, htons(ETH_P_8021Q),
+				       adapter->mng_vlan_id);
+#else
 		e1000_vlan_rx_kill_vid(netdev, adapter->mng_vlan_id);
+#endif
 	
 #endif
 	/* If AMT is enabled, let the firmware know that the network
@@ -2060,7 +2052,12 @@ void AppleIntelE1000e::e1000e_up()
 	
 }
 
-void AppleIntelE1000e::e1000e_down()
+/**
+ * e1000e_down - quiesce the device and optionally reset the hardware
+ * @adapter: board private structure
+ * @reset: boolean flag to reset the hardware or not
+ */
+void AppleIntelE1000e::e1000e_down(bool reset)
 {
 	struct e1000_adapter *adapter = &priv_adapter;
 	struct e1000_hw *hw = &adapter->hw;
@@ -2111,8 +2108,15 @@ void AppleIntelE1000e::e1000e_down()
 
 	adapter->link_speed = 0;
 	adapter->link_duplex = 0;
-	
-	e1000e_reset(adapter);
+
+	/* Disable Si errata workaround on PCHx for jumbo frame flow */
+	if ((hw->mac.type >= e1000_pch2lan) &&
+	    (adapter->netdev->mtu > ETH_DATA_LEN) &&
+	    e1000_lv_jumbo_workaround_ich8lan(hw, false))
+		e_dbg("failed to disable jumbo frame workaround mode\n");
+
+	if (reset)
+		e1000e_reset(adapter);
 
 	/* TODO: for power management, we could drop the link and
 	 * pci_disable_device here.
@@ -2125,7 +2129,7 @@ void e1000e_reinit_locked(struct e1000_adapter *adapter)
 	might_sleep();
 	while (test_and_set_bit(__E1000_RESETTING, &adapter->state))
 		usleep_range(1000, 2000);
-	e1000e_down(adapter);
+	e1000e_down(adapter, true);
 	e1000e_up(adapter);
 	clear_bit(__E1000_RESETTING, &adapter->state);
 }
@@ -2679,15 +2683,9 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	u32 pages = 0;
 
 	/* Workaround Si errata on PCHx - configure jumbo frame flow */
-	if (hw->mac.type >= e1000_pch2lan) {
-		s32 ret_val;
-        
-		if (adapter->netdev->mtu > ETH_DATA_LEN)
-			ret_val = e1000_lv_jumbo_workaround_ich8lan(hw, true);
-		else
-			ret_val = e1000_lv_jumbo_workaround_ich8lan(hw, false);
-        
-		if (ret_val)
+	if ((hw->mac.type >= e1000_pch2lan) &&
+		(adapter->netdev->mtu > ETH_DATA_LEN) &&
+		e1000_lv_jumbo_workaround_ich8lan(hw, true)){
 			e_dbg("failed to enable jumbo frame workaround mode\n");
 	}
 
@@ -2713,9 +2711,8 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	if (adapter->flags2 & FLAG2_CRC_STRIPPING)
 		rctl |= E1000_RCTL_SECRC;
 	
-	/* Workaround Si errata on 82577/82578 - configure IPG for jumbos */
-	if ((hw->mac.type == e1000_pchlan) && (rctl & E1000_RCTL_LPE)) {
-		u32 mac_data;
+	/* Workaround Si errata on 82577 PHY - configure IPG for jumbos */
+	if ((hw->phy.type == e1000_phy_82577) && (rctl & E1000_RCTL_LPE)) {
 		u16 phy_data;
         
 		e1e_rphy(hw, PHY_REG(770, 26), &phy_data);
@@ -2723,18 +2720,12 @@ void AppleIntelE1000e::e1000_setup_rctl()
 		phy_data |= (1 << 2);
 		e1e_wphy(hw, PHY_REG(770, 26), phy_data);
         
-		mac_data = er32(FFLT_DBG);
-		mac_data |= (1 << 17);
-		ew32(FFLT_DBG, mac_data);
-        
-		if (hw->phy.type == e1000_phy_82577) {
-			e1e_rphy(hw, 22, &phy_data);
-			phy_data &= 0x0fff;
-			phy_data |= (1 << 14);
-			e1e_wphy(hw, 0x10, 0x2823);
-			e1e_wphy(hw, 0x11, 0x0003);
-			e1e_wphy(hw, 22, phy_data);
-		}
+		e1e_rphy(hw, 22, &phy_data);
+		phy_data &= 0x0fff;
+		phy_data |= (1 << 14);
+		e1e_wphy(hw, 0x10, 0x2823);
+		e1e_wphy(hw, 0x11, 0x0003);
+		e1e_wphy(hw, 22, phy_data);
 	}
 	
 	
@@ -2794,8 +2785,10 @@ void AppleIntelE1000e::e1000_setup_rctl()
 		switch (adapter->rx_ps_pages) {
 			case 3:
 				psrctl |= PAGE_SIZE << E1000_PSRCTL_BSIZE3_SHIFT;
+				/* fall-through */
 			case 2:
 				psrctl |= PAGE_SIZE << E1000_PSRCTL_BSIZE2_SHIFT;
+				/* fall-through */
 			case 1:
 				psrctl |= PAGE_SIZE >> E1000_PSRCTL_BSIZE1_SHIFT;
 				break;
@@ -3731,21 +3724,10 @@ void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 	//e_dbg("timeout link:%d, preLinkStatus:%d.\n", (int)link, (int)preLinkStatus);
 	if (link && link == preLinkStatus) {
 		e1000e_enable_receives();
-		
-		if ((adapter->flags2 & FLAG2_NEEDS_OBFF_WORKAROUND) &&
-		    test_bit(__E1000_OBFF_DISABLED, &adapter->state) &&
-		    (er32(TDH(0)) == er32(TDT(0)))) {
-			u32 svcr = er32(SVCR);
-			
-			/* Enable OBFF when there is nothing to transmit */
-			ew32(SVCR, svcr | E1000_SVCR_OFF_EN);
-			clear_bit(__E1000_OBFF_DISABLED, &adapter->state);
-		}
-		
 		goto link_up;
 	}
 	
-#ifdef NETIF_F_HW_VLAN_TX
+#if defined(NETIF_F_HW_VLAN_TX) || defined(NETIF_F_HW_VLAN_CTAG_TX)
 	if ((e1000e_enable_tx_pkt_filtering(hw)) &&
 	    (adapter->mng_vlan_id != adapter->hw.mng_cookie.vlan_id))
 		e1000_update_mng_vlan(adapter);
@@ -3918,6 +3900,8 @@ void AppleIntelE1000e::e1000e_set_rx_mode()
 	struct e1000_hw *hw = &adapter->hw;
 	u32 rctl;
 	
+//	if (pm_runtime_suspended((netdev_to_dev(netdev))->parent))
+//		return;
 	/* Check for Promiscuous and All Multicast modes */
 	
 	rctl = er32(RCTL);
@@ -4260,7 +4244,7 @@ void AppleIntelE1000e::e1000_configure()
 
 	setMulticastList(NULL,0);
 	e1000e_vlan_strip_enable(adapter);
-#ifdef NETIF_F_HW_VLAN_TX
+#if defined(NETIF_F_HW_VLAN_TX) || defined(NETIF_F_HW_VLAN_CTAG_TX)
 	e1000_restore_vlan(adapter);
 #endif
 	e1000_init_manageability_pt();
@@ -4625,22 +4609,8 @@ int AppleIntelE1000e::__e1000_shutdown(bool *enable_wake, bool runtime)
 	/* Runtime suspend should only enable wakeup for link changes */
 	u32 wufc = runtime ? E1000_WUFC_LNKC : adapter->wol;
 	int retval = 0;
-#if 0	
-	netif_device_detach(netdev);
-	
-	if (netif_running(netdev)) {
-		int count = E1000_CHECK_RESET_COUNT;
-		
-		while (test_bit(__E1000_RESETTING, &adapter->state) && count--)
-			usleep_range(10000, 20000);
-		
-		WARN_ON(test_bit(__E1000_RESETTING, &adapter->state));
-		e1000e_down(adapter);
-		e1000_free_irq(adapter);
-	}
-#endif
-	e1000e_reset_interrupt_capability(adapter);
-#if	0
+
+#ifdef USE_LEGACY_PM_SUPPORT
 	retval = pci_save_state(pdev);
 	if (retval)
 		return retval;
@@ -4674,12 +4644,12 @@ int AppleIntelE1000e::__e1000_shutdown(bool *enable_wake, bool runtime)
 			ctrl_ext |= E1000_CTRL_EXT_SDP3_DATA;
 			ew32(CTRL_EXT, ctrl_ext);
 		}
-		
+
+		if (!runtime)
+			e1000e_power_up_phy(adapter);
+
 		if (adapter->flags & FLAG_IS_ICH)
 			e1000_suspend_workarounds_ich8lan(&adapter->hw);
-		
-		/* Allow time for pending master requests to run */
-		e1000e_disable_pcie_master(&adapter->hw);
 		
 		if (adapter->flags2 & FLAG2_HAS_PHY_WAKEUP) {
 			/* enable wakeup by the PHY */
@@ -4690,29 +4660,66 @@ int AppleIntelE1000e::__e1000_shutdown(bool *enable_wake, bool runtime)
 			/* enable wakeup by the MAC */
 			ew32(WUFC, wufc);
 			ew32(WUC, E1000_WUC_PME_EN);
+			e1000_power_down_phy(adapter);
 		}
 	} else {
 		ew32(WUC, 0);
 		ew32(WUFC, 0);
 	}
 	
-	*enable_wake = !!wufc;
-	
-	/* make sure adapter isn't asleep if manageability is enabled */
-	if ((adapter->flags & FLAG_MNG_PT_ENABLED) ||
-	    (hw->mac.ops.check_mng_mode(hw)))
-		*enable_wake = true;
-	
 	if (adapter->hw.phy.type == e1000_phy_igp_3)
 		e1000e_igp3_phy_powerdown_workaround_ich8lan(&adapter->hw);
-	
+	else if (hw->mac.type == e1000_pch_lpt) {
+		/* Disable ULP in S5; enable in other Sx and RPM */
+		if (test_bit(__E1000_SHUTDOWN, &adapter->state))
+			retval = e1000_disable_ulp_lpt_lp(hw, true);
+		else if (!(wufc & (E1000_WUFC_EX | E1000_WUFC_MC |
+				   E1000_WUFC_BC)))
+			/* ULP does not support wake from unicast, multicast
+			 * or broadcast.
+			 */
+			retval = e1000_enable_ulp_lpt_lp(hw, !runtime);
+
+		if (retval)
+			return retval;
+	}
+
 	/* Release control of h/w to f/w.  If f/w is AMT enabled, this
 	 * would have already happened in close and is redundant.
 	 */
 	e1000e_release_hw_control(adapter);
 	
-	//pci_disable_device(pdev);
-	
+#ifdef USE_LEGACY_PM_SUPPORT
+	pci_disable_device(pdev);
+#else
+	// pci_clear_master(pdev);
+#endif
+
+	/* The pci-e switch on some quad port adapters will report a
+	 * correctable error when the MAC transitions from D0 to D3.  To
+	 * prevent this we need to mask off the correctable errors on the
+	 * downstream port of the pci-e switch.
+	 */
+	if (adapter->flags & FLAG_IS_QUAD_PORT) {
+		u8 pos;
+		pciDevice->findPCICapability(kIOPCIPCIExpressCapability, &pos);
+		u16 devctl;
+		
+		devctl = pciDevice->configRead16(pos + PCI_EXP_LNKCTL);
+		pciDevice->configWrite16(pos + PCI_EXP_DEVCTL, (devctl & ~PCI_EXP_DEVCTL_CERE));
+
+		
+		//pci_save_state(pdev);
+		//pci_prepare_to_sleep(pdev);
+		
+		pciDevice->configWrite16(pos + PCI_EXP_DEVCTL, devctl);
+	}
+#ifdef USE_LEGACY_PM_SUPPORT
+	else
+		pci_prepare_to_sleep(pdev);
+#endif
+
+
 	return 0;
 }
 
