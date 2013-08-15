@@ -56,6 +56,7 @@ typedef __uint8_t u8;
 #define	writew(val, reg)	_OSWriteInt16(reg, 0, val)
 #define	readl(reg)	_OSReadInt32(reg, 0)
 #define	readw(reg)	_OSReadInt16(reg, 0)
+#define read_barrier_depends()
 
 #ifdef	ALIGN
 #undef	ALIGN
@@ -148,6 +149,7 @@ struct work_struct {
 #define VLAN_ETH_ALEN	6			/* Octets in one ethernet addr   */
 #define VLAN_ETH_HLEN	18			/* Total octets in header.       */
 #define VLAN_ETH_ZLEN	64			/* Min. octets in frame sans FCS */
+#define VLAN_VID_MASK           0x0fff /* VLAN Identifier */
 #define VLAN_N_VID              4096
 
 #define IFF_PROMISC     0x100           /* receive all packets          */
@@ -261,6 +263,7 @@ typedef void AppleIGB;
 #endif
 
 #define	prefetch(x)
+#define	prefetchw(x)
 #define	unlikely(x)	(x)
 #define	likely(x)	(x)
 #define	BUG()
@@ -389,22 +392,7 @@ struct vlan_group {
 	struct IOEthernetController **vlan_devices_arrays[VLAN_GROUP_ARRAY_SPLIT_PARTS];
 };
 
-static inline struct IOEthernetController *vlan_group_get_device(struct vlan_group *vg,u16 vlan_id)
-{
-	IOEthernetController **array;
-	array = vg->vlan_devices_arrays[vlan_id / VLAN_GROUP_ARRAY_PART_LEN];
-	return array ? array[vlan_id % VLAN_GROUP_ARRAY_PART_LEN] : NULL;
-}
 
-static inline void vlan_group_set_device(struct vlan_group *vg, u16 vlan_id,
-									IOEthernetController *dev)
-{
-	IOEthernetController **array;
-	if (!vg)
-		return;
-	array = vg->vlan_devices_arrays[vlan_id / VLAN_GROUP_ARRAY_PART_LEN];
-	array[vlan_id % VLAN_GROUP_ARRAY_PART_LEN] = dev;
-}
 #endif
 
 #endif /* _KCOMPAT_H_ */

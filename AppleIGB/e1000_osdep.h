@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel(R) Gigabit Ethernet Linux driver
-  Copyright(c) 2007-2012 Intel Corporation.
+  Copyright(c) 2007-2013 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -33,7 +33,7 @@
 #ifndef _E1000_OSDEP_H_
 #define _E1000_OSDEP_H_
 
-#ifdef  __APPLE__
+#ifdef __APPLE__
 #include <AvailabilityMacros.h>
 #include <sys/types.h>
 #include <libkern/OSByteOrder.h>
@@ -44,16 +44,17 @@
 #include <netinet/ip6.h>
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
-#else
+#else 
 #include <linux/pci.h>
 #include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/if_ether.h>
 #include <linux/sched.h>
-#endif	// __APPLE__
+#endif
 #include "kcompat.h"
 
 #define usec_delay(x) udelay(x)
+#define usec_delay_irq(x) udelay(x)
 #ifndef msec_delay
 #define msec_delay(x) do { \
 	/* Don't mdelay in interrupt context! */ \

@@ -17,11 +17,11 @@
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>
-	<string>4.1.2</string>
+	<string>4.3.0</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>4.1.2</string>
+	<string>4.3.0</string>
 	<key>IOKitPersonalities</key>
 	<dict>
 		<key>Intel dh89xxcc</key>
@@ -42,7 +42,7 @@
 			<key>IOClass</key>
 			<string>${PRODUCT_NAME}</string>
 			<key>IOPCIMatch</key>
-			<string>0x15338086 0x15348086 0x15358086 0x15368086 0x15378086 0x15388086 0x15398086</string>
+			<string>0x15338086 0x15348086 0x15358086 0x15368086 0x15378086 0x15388086 0x15398086 0x157B8086 0x157C8086</string>
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
 		</dict>

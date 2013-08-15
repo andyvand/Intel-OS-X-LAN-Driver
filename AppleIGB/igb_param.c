@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel(R) Gigabit Ethernet Linux driver
-  Copyright(c) 2007-2012 Intel Corporation.
+  Copyright(c) 2007-2013 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -72,12 +72,12 @@ static int num_online_cpus()
  */
 
 #define IGB_PARAM(X, desc) \
-	static const int __devinitdata X[IGB_MAX_NIC+1] = IGB_PARAM_INIT; \
+	static const int X[IGB_MAX_NIC+1] = IGB_PARAM_INIT; \
 	MODULE_PARM(X, "1-" __MODULE_STRING(IGB_MAX_NIC) "i"); \
 	MODULE_PARM_DESC(X, desc);
 #else
 #define IGB_PARAM(X, desc) \
-	static int __devinitdata X[IGB_MAX_NIC+1] = IGB_PARAM_INIT; \
+	static int X[IGB_MAX_NIC+1] = IGB_PARAM_INIT; \
 	static unsigned int num_##X; \
 	module_param_array_named(X, X, int, &num_##X, 0); \
 	MODULE_PARM_DESC(X, desc);
@@ -241,7 +241,6 @@ IGB_PARAM(QueuePairs, "Enable Tx/Rx queue pairs for interrupt handling (0,1), de
  */
  IGB_PARAM(DMAC, "Disable or set latency for DMA Coalescing ((0=off, 1000-10000(msec), 250, 500 (usec))");
 
-
 #ifndef IGB_NO_LRO
 /* Enable/disable Large Receive Offload
  *
@@ -249,7 +248,7 @@ IGB_PARAM(QueuePairs, "Enable Tx/Rx queue pairs for interrupt handling (0,1), de
  *
  * Default Value: 0
  */
-IGB_PARAM(LRO, "Large Receive Offload (0,1), default 0=off");
+ IGB_PARAM(LRO, "Large Receive Offload (0,1), default 0=off");
 
 #endif
 struct igb_opt_list {
@@ -273,9 +272,9 @@ struct igb_option {
 	} arg;
 };
 
-static int __devinit igb_validate_option(unsigned int *value,
-                                         struct igb_option *opt,
-                                         struct igb_adapter *adapter)
+static int igb_validate_option(unsigned int *value,
+			       struct igb_option *opt,
+			       struct igb_adapter *adapter)
 {
 	if (*value == OPTION_UNSET) {
 		*value = opt->def;
@@ -334,7 +333,7 @@ static int __devinit igb_validate_option(unsigned int *value,
  * in a variable in the adapter structure.
  **/
 
-void __devinit igb_check_options(struct igb_adapter *adapter)
+void igb_check_options(struct igb_adapter *adapter)
 {
 	int bd = adapter->bd_number;
 	struct e1000_hw *hw = &adapter->hw;
@@ -569,10 +568,10 @@ void __devinit igb_check_options(struct igb_adapter *adapter)
 			adapter->vmdq_pools = 0;
 		}
 #endif
-		} else {
-			DPRINTK(PROBE, INFO, "VMDq option is not supported.\n");
-			adapter->vmdq_pools = opt.def;
-		}
+	} else {
+		DPRINTK(PROBE, INFO, "VMDq option is not supported.\n");
+		adapter->vmdq_pools = opt.def;
+	}
 	}
 	{ /* RSS - Enable RSS multiqueue receives */
 		struct igb_option opt = {
@@ -585,41 +584,48 @@ void __devinit igb_check_options(struct igb_adapter *adapter)
 		};
 
 		switch (hw->mac.type) {
-			case e1000_82575:
+		case e1000_82575:
 #ifndef CONFIG_IGB_VMDQ_NETDEV
-				if (!!adapter->vmdq_pools) {
-					if (adapter->vmdq_pools <= 2) {
-						if (adapter->vmdq_pools == 2)
-							opt.arg.r.max = 3;
-					} else {
-						opt.arg.r.max = 1;
-					}
+			if (!!adapter->vmdq_pools) {
+				if (adapter->vmdq_pools <= 2) {
+					if (adapter->vmdq_pools == 2)
+						opt.arg.r.max = 3;
 				} else {
-					opt.arg.r.max = 4;
-				}
-#else
-				opt.arg.r.max = !!adapter->vmdq_pools ? 1 : 4;
-#endif /* CONFIG_IGB_VMDQ_NETDEV */
-				break;
-			case e1000_i210:
-				opt.arg.r.max = 4;
-			case e1000_i211:
-				opt.arg.r.max = 2;
-				break;
-			case e1000_82576:
-#ifndef CONFIG_IGB_VMDQ_NETDEV
-				if (!!adapter->vmdq_pools)
-					opt.arg.r.max = 2;
-				break;
-#endif /* CONFIG_IGB_VMDQ_NETDEV */
-			case e1000_82580:
-			case e1000_i350:
-			default:
-				if (!!adapter->vmdq_pools)
 					opt.arg.r.max = 1;
-				break;
+				}
+			} else {
+				opt.arg.r.max = 4;
+			}
+#else
+			opt.arg.r.max = !!adapter->vmdq_pools ? 1 : 4;
+#endif /* CONFIG_IGB_VMDQ_NETDEV */
+			break;
+		case e1000_i210:
+			opt.arg.r.max = 4;
+			break;
+		case e1000_i211:
+			opt.arg.r.max = 2;
+			break;
+		case e1000_82576:
+#ifndef CONFIG_IGB_VMDQ_NETDEV
+			if (!!adapter->vmdq_pools)
+				opt.arg.r.max = 2;
+			break;
+#endif /* CONFIG_IGB_VMDQ_NETDEV */
+		case e1000_82580:
+		case e1000_i350:
+		default:
+			if (!!adapter->vmdq_pools)
+				opt.arg.r.max = 1;
+			break;
 		}
-		
+
+		if (adapter->int_mode != IGB_INT_MODE_MSIX) {
+			DPRINTK(PROBE, INFO, "RSS is not supported when in MSI/Legacy Interrupt mode, %s\n",
+				opt.err);
+			opt.arg.r.max = 1;
+		}
+
 #ifdef module_param_array
 		if (num_RSS > bd) {
 #endif
@@ -663,22 +669,22 @@ void __devinit igb_check_options(struct igb_adapter *adapter)
 			if (qp == OPTION_DISABLED) {
 				if (adapter->rss_queues > 4)
 					qp = OPTION_ENABLED;
-				
+
 				if (adapter->vmdq_pools > 4)
 					qp = OPTION_ENABLED;
-				
+
 				if (adapter->rss_queues > 1 &&
 				    (adapter->vmdq_pools > 3 ||
 				     adapter->vfs_allocated_count > 6))
 					qp = OPTION_ENABLED;
-				
+
 				if (hw->mac.type == e1000_i210 &&
 				    adapter->rss_queues > 2)
 					qp = OPTION_ENABLED;
-				
+
 				if (qp == OPTION_ENABLED)
 					DPRINTK(PROBE, INFO, "Number of queues exceeds available interrupts, %s\n",
-							opt.err);
+						opt.err);
 			}
 			igb_validate_option(&qp, &opt, adapter);
 			adapter->flags |= qp ? IGB_FLAG_QUEUE_PAIRS : 0;

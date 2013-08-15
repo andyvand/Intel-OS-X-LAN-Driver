@@ -108,7 +108,6 @@ private:
     
 	IOMemoryMap * csrPCIAddress;
 	
-	IOMbufNaturalMemoryCursor * rxMbufCursor;
 	IOMbufNaturalMemoryCursor * txMbufCursor;
 	
 	bool enabledForNetif;
@@ -130,17 +129,14 @@ public:
 	IONetworkStats* getNetStats(){ return netStats; }
 	IOEthernetStats* getEtherStats() { return etherStats; }
 	dma_addr_t mapSingle( mbuf_t );
-	void receive(mbuf_t skb, UInt32 vlanTag );
+	void receive(mbuf_t skb );
 	void receiveError(mbuf_t skb);
 	IOMbufNaturalMemoryCursor * txCursor(){ return txMbufCursor; }
-	IOMbufNaturalMemoryCursor * rxCursor(){ return rxMbufCursor; }
 	void rxChecksumOK( mbuf_t, UInt32 flag );
 	bool running(){return enabledForNetif;}
 	bool queueStopped(){return bQueueStopped;}
 	bool carrier();
 	void setCarrier(bool);
-	bool netifAttach();
-	void netifDetach();
 private:
 	void interruptOccurred(IOInterruptEventSource * src, int count);
 	
