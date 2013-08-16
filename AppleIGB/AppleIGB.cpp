@@ -1373,7 +1373,6 @@ static void igb_irq_enable(struct igb_adapter *adapter)
 
 static void igb_update_mng_vlan(struct igb_adapter *adapter)
 {
-#ifndef __APPLE__
 	struct e1000_hw *hw = &adapter->hw;
 	u16 vid = adapter->hw.mng_cookie.vlan_id;
 	u16 old_vid = adapter->mng_vlan_id;
@@ -1386,6 +1385,8 @@ static void igb_update_mng_vlan(struct igb_adapter *adapter)
 		adapter->mng_vlan_id = IGB_MNG_VLAN_NONE;
 	}
 	
+#ifdef __APPLE__
+#else
 	if ((old_vid != (u16)IGB_MNG_VLAN_NONE) &&
 	    (vid != old_vid) &&
 #ifdef HAVE_VLAN_RX_REGISTER
@@ -6212,16 +6213,17 @@ static void igb_process_skb_fields(struct igb_ring *rx_ring,
 #endif
 	igb_rx_checksum(rx_ring, rx_desc, skb);
 	
-	if ((dev->features() & NETIF_F_HW_VLAN_RX) &&
-	    igb_test_staterr(rx_desc, E1000_RXD_STAT_VP)) {
+	if (igb_test_staterr(rx_desc, E1000_RXD_STAT_VP)) {
 		if (igb_test_staterr(rx_desc, E1000_RXDEXT_STATERR_LB) &&
 		    test_bit(IGB_RING_FLAG_RX_LB_VLAN_BSWAP, &rx_ring->flags))
 			vid = be16_to_cpu(rx_desc->wb.upper.vlan);
 		else
 			vid = le16_to_cpu(rx_desc->wb.upper.vlan);
 	}
-	if(vid)
-		mbuf_set_vlan_tag(skb,vid);
+	if(vid){
+        IOLog("vlan(in) = %d\n",(int)vid);
+        dev->setVid(skb,(UInt32)vid);
+    }
 
 #else // __APPLE__
 	struct net_device *dev = rx_ring->netdev;
@@ -6484,7 +6486,9 @@ static bool igb_cleanup_headers(struct igb_ring *rx_ring,
 #ifdef __APPLE__
 	if (unlikely((igb_test_staterr(rx_desc,
 								   E1000_RXDEXT_ERR_FRAME_ERR_MASK)))) {
-		rx_ring->netdev->freePacket(skb);
+        AppleIGB* netdev = (AppleIGB*)rx_ring->netdev;
+        netdev->getNetStats()->inputErrors += 1;
+		netdev->freePacket(skb);
 		return true;
 	}
 #else
@@ -6839,7 +6843,27 @@ void igb_vlan_mode(IOEthernetController *netdev, u32 features)
 	struct igb_adapter *adapter = netdev_priv(netdev);
 	struct e1000_hw *hw = &adapter->hw;
 	u32 ctrl, rctl;
-	int i;
+#ifdef __APPLE__
+	bool enable = TRUE;
+	if (enable) {
+		/* enable VLAN tag insert/strip */
+		ctrl = E1000_READ_REG(hw, E1000_CTRL);
+		ctrl |= E1000_CTRL_VME;
+		E1000_WRITE_REG(hw, E1000_CTRL, ctrl);
+        
+		/* Disable CFI check */
+		rctl = E1000_READ_REG(hw, E1000_RCTL);
+		rctl &= ~E1000_RCTL_CFIEN;
+		E1000_WRITE_REG(hw, E1000_RCTL, rctl);
+	} else {
+		/* disable VLAN tag insert/strip */
+		ctrl = E1000_READ_REG(hw, E1000_CTRL);
+		ctrl &= ~E1000_CTRL_VME;
+		E1000_WRITE_REG(hw, E1000_CTRL, ctrl);
+	}
+#else //__APPLE__
+    
+    int i;
 #ifdef HAVE_VLAN_RX_REGISTER
 	bool enable = !!vlgrp;
 
@@ -6876,6 +6900,7 @@ void igb_vlan_mode(IOEthernetController *netdev, u32 features)
 				      enable);
 	}
 
+#endif //__APPLE__
 	igb_rlpml_set(adapter);
 }
 
@@ -6934,7 +6959,9 @@ static void igb_vlan_rx_kill_vid(IOEthernetController *netdev, u16 vid)
 
 static void igb_restore_vlan(struct igb_adapter *adapter)
 {
-#ifndef	__APPLE__
+#ifdef	__APPLE__
+	igb_vlan_mode(adapter->netdev, adapter->vlgrp);
+#else
 #ifdef HAVE_VLAN_RX_REGISTER
 	igb_vlan_mode(adapter->netdev, adapter->vlgrp);
 
@@ -8356,6 +8383,11 @@ IOReturn AppleIGB::enable(IONetworkInterface * netif)
 		if(igb_open(this))
 			return kIOReturnIOError;
 		
+        // hack to accept any VLAN
+        for(u16 k = 1; k < 4096; k++){
+            igb_vlan_rx_add_vid(this,k);
+        }
+        
 		enabledForNetif = true;
 	}
 	return kIOReturnSuccess; 
@@ -8438,7 +8470,7 @@ UInt32 AppleIGB::outputPacket(mbuf_t skb, void * param)
         
         UInt32 vlan;
         if(getVlanTagDemand(skb,&vlan)){
-			//IOLog("vlan = %d\n",(int)vlan);
+			//IOLog("vlan(out) = %d\n",(int)vlan);
             tx_flags |= IGB_TX_FLAGS_VLAN;
             tx_flags |= (vlan << IGB_TX_FLAGS_VLAN_SHIFT);
         }
@@ -9070,9 +9102,8 @@ void AppleIGB::receive(mbuf_t skb)
 	netif->inputPacket(skb, mbuf_pkthdr_len(skb));
 }
 
-void AppleIGB::receiveError(mbuf_t skb)
+void AppleIGB::setVid(mbuf_t skb, UInt16 vid)
 {
-	freePacket(skb);
-	netStats->inputErrors += 1;
+	setVlanTag(skb, vid);
 }
 

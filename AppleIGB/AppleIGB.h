@@ -130,7 +130,7 @@ public:
 	IOEthernetStats* getEtherStats() { return etherStats; }
 	dma_addr_t mapSingle( mbuf_t );
 	void receive(mbuf_t skb );
-	void receiveError(mbuf_t skb);
+	void setVid(mbuf_t skb, UInt16 vid);
 	IOMbufNaturalMemoryCursor * txCursor(){ return txMbufCursor; }
 	void rxChecksumOK( mbuf_t, UInt32 flag );
 	bool running(){return enabledForNetif;}

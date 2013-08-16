@@ -12,7 +12,6 @@
 		4D0D81731179AD4B000A4C84 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = 089C167EFE841241C02AAC07 /* InfoPlist.strings */; };
 		4D8498D116A405AD007604C0 /* e1000_i210.c in Sources */ = {isa = PBXBuildFile; fileRef = 4D8498CF16A405AD007604C0 /* e1000_i210.c */; };
 		4D8498D216A405AD007604C0 /* e1000_i210.h in Headers */ = {isa = PBXBuildFile; fileRef = 4D8498D016A405AD007604C0 /* e1000_i210.h */; };
-		4D8498D516A40720007604C0 /* igb_ptp.c in Sources */ = {isa = PBXBuildFile; fileRef = 4D8498D416A40720007604C0 /* igb_ptp.c */; };
 		4D99BBA310E4D08700292443 /* kcompat.h in Headers */ = {isa = PBXBuildFile; fileRef = 4D99BBA210E4D08700292443 /* kcompat.h */; };
 		4D9C4093146CF9E5008344C0 /* igb_vmdq.h in Headers */ = {isa = PBXBuildFile; fileRef = 4D9C4091146CF9E5008344C0 /* igb_vmdq.h */; };
 		4D9C4094146CF9E5008344C0 /* igb.h in Headers */ = {isa = PBXBuildFile; fileRef = 4D9C4092146CF9E5008344C0 /* igb.h */; };
@@ -132,7 +131,6 @@
 				4DB1EEA314668F0800BDCFB3 /* e1000_nvm.c */,
 				4DB1EEA414668F0800BDCFB3 /* e1000_phy.c */,
 				4DB1EEA514668F0800BDCFB3 /* igb_vmdq.c */,
-				4D8498D416A40720007604C0 /* igb_ptp.c */,
 				4DB1EE8414668E2F00BDCFB3 /* igb_param.c */,
 			);
 			name = Source;
@@ -165,6 +163,7 @@
 			isa = PBXGroup;
 			children = (
 				4DB1EE8514668E3B00BDCFB3 /* igb_main.c */,
+				4D8498D416A40720007604C0 /* igb_ptp.c */,
 				4DED0B1C10EB2A6300CF5CE1 /* kcompat.c */,
 			);
 			name = Unused;
@@ -281,7 +280,6 @@
 				4DB1EEAD14668F0800BDCFB3 /* igb_vmdq.c in Sources */,
 				4D9C4120146CFF43008344C0 /* igb_param.c in Sources */,
 				4D8498D116A405AD007604C0 /* e1000_i210.c in Sources */,
-				4D8498D516A40720007604C0 /* igb_ptp.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
