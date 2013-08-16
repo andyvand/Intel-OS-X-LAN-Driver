@@ -298,6 +298,7 @@
 				GCC_OPTIMIZATION_LEVEL = 0;
 				INFOPLIST_FILE = Info.plist;
 				INSTALL_PATH = "$(SYSTEM_LIBRARY_DIR)/Extensions";
+				LD_GENERATE_MAP_FILE = YES;
 				MODULE_NAME = com.insanelymac.driver.AppleIGB;
 				MODULE_VERSION = 1.0.0d1;
 				PRODUCT_NAME = AppleIGB;
@@ -315,6 +316,7 @@
 				GCC_MODEL_TUNING = G5;
 				INFOPLIST_FILE = Info.plist;
 				INSTALL_PATH = "$(SYSTEM_LIBRARY_DIR)/Extensions";
+				LD_GENERATE_MAP_FILE = YES;
 				MODULE_NAME = com.insanelymac.driver.AppleIGB;
 				MODULE_VERSION = 1.0.0d1;
 				PRODUCT_NAME = AppleIGB;

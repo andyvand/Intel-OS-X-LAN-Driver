@@ -137,6 +137,8 @@ public:
 	bool queueStopped(){return bQueueStopped;}
 	bool carrier();
 	void setCarrier(bool);
+    
+    void setTimers(bool enable);
 private:
 	void interruptOccurred(IOInterruptEventSource * src, int count);
 	

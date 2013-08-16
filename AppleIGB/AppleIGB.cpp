@@ -222,7 +222,7 @@ static void igb_configure_tx(struct igb_adapter *);
 static void igb_configure_rx(struct igb_adapter *);
 static void igb_clean_all_tx_rings(struct igb_adapter *);
 static void igb_clean_all_rx_rings(struct igb_adapter *);
-static void igb_clean_tx_ring(struct igb_adapter *,struct igb_ring *);
+static void igb_clean_tx_ring(igb_ring *);
 static void igb_set_rx_mode(IOEthernetController*);
 static void igb_update_phy_info(unsigned long);
 static void igb_watchdog(unsigned long);
@@ -1375,8 +1375,10 @@ static void igb_update_mng_vlan(struct igb_adapter *adapter)
 {
 	struct e1000_hw *hw = &adapter->hw;
 	u16 vid = adapter->hw.mng_cookie.vlan_id;
+#ifndef __APPLE__
 	u16 old_vid = adapter->mng_vlan_id;
-	
+#endif
+
 	if (hw->mng_cookie.status & E1000_MNG_DHCP_COOKIE_STATUS_VLAN) {
 		/* add VID to filter table */
 		igb_vfta_set(adapter, vid, TRUE);
@@ -1665,8 +1667,11 @@ int igb_up(struct igb_adapter *adapter)
 		schedule_work(&adapter->dma_err_task);
 	/* start the watchdog. */
 	hw->mac.get_link_status = 1;
+#ifdef __APPLE__
+    adapter->netdev->setTimers(TRUE);
+#else
 	schedule_work(&adapter->watchdog_task);
-	
+#endif
 	return 0;
 }
 	
@@ -1704,7 +1709,7 @@ void igb_down(struct igb_adapter *adapter)
 	adapter->flags &= ~IGB_FLAG_NEED_LINK_UPDATE;
 
 #ifdef __APPLE__
-
+    adapter->netdev->setTimers(FALSE);
 #else
 	del_timer_sync(&adapter->watchdog_timer);
 	if (adapter->flags & IGB_FLAG_DETECT_BAD_DMA)
@@ -2332,7 +2337,7 @@ static int igb_setup_all_tx_resources(struct igb_adapter *adapter)
 			IOLog(
 				"Allocation for Tx Queue %u failed\n", i);
 			for (i--; i >= 0; i--)
-				igb_free_tx_resources(adapter,adapter->tx_ring[i]);
+				igb_free_tx_resources(adapter->tx_ring[i]);
 			break;
 		}
 	}
@@ -2506,7 +2511,7 @@ static int igb_setup_all_rx_resources(struct igb_adapter *adapter)
 			IOLog(
 				"Allocation for Rx Queue %u failed\n", i);
 			for (i--; i >= 0; i--)
-				igb_free_rx_resources(adapter, adapter->rx_ring[i]);
+				igb_free_rx_resources(adapter->rx_ring[i]);
 			break;
 		}
 	}
@@ -2878,9 +2883,9 @@ static void igb_configure_rx(struct igb_adapter *adapter)
  *
  * Free all transmit software resources
  **/
-void igb_free_tx_resources(struct igb_adapter *adapter, struct igb_ring *tx_ring)
+void igb_free_tx_resources(struct igb_ring *tx_ring)
 {
-	igb_clean_tx_ring(adapter, tx_ring);
+	igb_clean_tx_ring(tx_ring);
 
 	vfree(tx_ring->tx_buffer_info,sizeof(struct igb_tx_buffer) * tx_ring->count);
 	tx_ring->tx_buffer_info = NULL;
@@ -2912,7 +2917,7 @@ static void igb_free_all_tx_resources(struct igb_adapter *adapter)
 	int i;
 
 	for (i = 0; i < adapter->num_tx_queues; i++)
-		igb_free_tx_resources(adapter, adapter->tx_ring[i]);
+		igb_free_tx_resources(adapter->tx_ring[i]);
 }
 
 void igb_unmap_and_free_tx_resource(struct igb_ring *ring,
@@ -2945,7 +2950,7 @@ void igb_unmap_and_free_tx_resource(struct igb_ring *ring,
  * igb_clean_tx_ring - Free Tx Buffers
  * @tx_ring: ring to be cleaned
  **/
-static void igb_clean_tx_ring(struct igb_adapter *adapter, struct igb_ring *tx_ring)
+static void igb_clean_tx_ring(struct igb_ring *tx_ring)
 {
 	struct igb_tx_buffer *buffer_info;
 	unsigned long size;
@@ -2983,7 +2988,7 @@ static void igb_clean_all_tx_rings(struct igb_adapter *adapter)
 	int i;
 
 	for (i = 0; i < adapter->num_tx_queues; i++)
-		igb_clean_tx_ring(adapter,adapter->tx_ring[i]);
+		igb_clean_tx_ring(adapter->tx_ring[i]);
 }
 
 /**
@@ -2992,9 +2997,9 @@ static void igb_clean_all_tx_rings(struct igb_adapter *adapter)
  *
  * Free all receive software resources
  **/
-void igb_free_rx_resources(struct igb_adapter *adapter, struct igb_ring *rx_ring)
+void igb_free_rx_resources(struct igb_ring *rx_ring)
 {
-	igb_clean_rx_ring(adapter, rx_ring);
+	igb_clean_rx_ring(rx_ring);
 
 	vfree(rx_ring->rx_buffer_info,sizeof(struct igb_rx_buffer) * rx_ring->count);
 	rx_ring->rx_buffer_info = NULL;
@@ -3027,14 +3032,14 @@ static void igb_free_all_rx_resources(struct igb_adapter *adapter)
 	int i;
 
 	for (i = 0; i < adapter->num_rx_queues; i++)
-		igb_free_rx_resources(adapter, adapter->rx_ring[i]);
+		igb_free_rx_resources(adapter->rx_ring[i]);
 }
 
 /**
  * igb_clean_rx_ring - Free Rx Buffers per Queue
  * @rx_ring: ring to free buffers from
  **/
-void igb_clean_rx_ring(struct igb_adapter *adapter, struct igb_ring *rx_ring)
+void igb_clean_rx_ring(struct igb_ring *rx_ring)
 {
 	unsigned long size;
 	u16 i;
@@ -3090,7 +3095,7 @@ static void igb_clean_all_rx_rings(struct igb_adapter *adapter)
 	int i;
 
 	for (i = 0; i < adapter->num_rx_queues; i++)
-		igb_clean_rx_ring(adapter, adapter->rx_ring[i]);
+		igb_clean_rx_ring(adapter->rx_ring[i]);
 }
 
 #ifndef __APPLE__
@@ -6117,9 +6122,9 @@ static struct sk_buff *igb_fetch_rx_buffer(struct igb_ring *rx_ring,
                        PAGE_SIZE, DMA_FROM_DEVICE);
     }
     
+#endif
     /* clear contents of rx_buffer */
     rx_buffer->page = NULL;
-#endif
 
     return skb;
 }
@@ -8756,7 +8761,13 @@ void AppleIGB::interruptOccurred(IOInterruptEventSource * src, int count)
 	struct igb_adapter *adapter = &priv_adapter;
 	struct igb_q_vector *q_vector = adapter->q_vector[0];
 	struct e1000_hw *hw = &adapter->hw;
-	/* Interrupt Auto-Mask...upon reading ICR, interrupts are masked.  No
+
+    if(!enabledForNetif)
+        return;
+	if(test_bit(__IGB_DOWN, &adapter->state))
+        return;
+	
+    /* Interrupt Auto-Mask...upon reading ICR, interrupts are masked.  No
 	 * need for the IMC write */
 	u32 icr = E1000_READ_REG(hw, E1000_ICR);
 	
@@ -9107,3 +9118,22 @@ void AppleIGB::setVid(mbuf_t skb, UInt16 vid)
 	setVlanTag(skb, vid);
 }
 
+void AppleIGB::setTimers(bool enable)
+{
+    if(enable){
+        if(watchdogSource)
+            watchdogSource->enable();
+        if(resetSource)
+            resetSource->enable();
+        if(dmaErrSource)
+            dmaErrSource->enable();
+    } else {
+        if(watchdogSource)
+            watchdogSource->disable();
+        if(resetSource)
+            resetSource->disable();
+        if(dmaErrSource)
+            dmaErrSource->disable();
+    }
+}
+   
