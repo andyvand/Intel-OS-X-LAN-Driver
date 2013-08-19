@@ -699,7 +699,11 @@ static void igb_free_q_vector(struct igb_adapter *adapter, int v_idx)
 #ifndef IGB_NO_LRO
 	__skb_queue_purge(&q_vector->lrolist.active);
 #endif
-	kfree(q_vector,sizeof(igb_q_vector));
+#ifdef __APPLE__
+	kfree(q_vector,adapter->q_vector_size[v_idx]);
+#else
+	kfree(q_vector);
+#endif
 }
 
 /**
@@ -1060,6 +1064,9 @@ static int igb_alloc_q_vector(struct igb_adapter *adapter,
 #endif
 	/* tie q_vector and adapter together */
 	adapter->q_vector[v_idx] = q_vector;
+#ifdef __APPLE__
+	adapter->q_vector_size[v_idx] = size;
+#endif
 	q_vector->adapter = adapter;
 	
 	/* initialize work limits */
@@ -1699,7 +1706,7 @@ void igb_down(struct igb_adapter *adapter)
 	/* flush both disables and wait for them to finish */
 	E1000_WRITE_FLUSH(hw);
 	usleep_range(10000, 20000);
-	
+
 #ifndef __APPLE__
 	for (i = 0; i < adapter->num_q_vectors; i++)
 		napi_disable(&(adapter->q_vector[i]->napi));
@@ -2891,14 +2898,17 @@ void igb_free_tx_resources(struct igb_ring *tx_ring)
 	tx_ring->tx_buffer_info = NULL;
 
 	/* if not set, then don't free */
-	if (!tx_ring->desc)
-		return;
-
 #ifdef __APPLE__
+	if (!tx_ring->pool)
+		return;
+    
 	tx_ring->pool->complete();
 	tx_ring->pool->release();
 	tx_ring->pool = NULL;
 #else
+	if (!tx_ring->desc)
+		return;
+    
 	dma_free_coherent(tx_ring->dev, tx_ring->size,
 			  tx_ring->desc, tx_ring->dma);
 #endif
@@ -6226,7 +6236,7 @@ static void igb_process_skb_fields(struct igb_ring *rx_ring,
 			vid = le16_to_cpu(rx_desc->wb.upper.vlan);
 	}
 	if(vid){
-        IOLog("vlan(in) = %d\n",(int)vid);
+        //IOLog("vlan(in) = %d\n",(int)vid);
         dev->setVid(skb,(UInt32)vid);
     }
 
@@ -7850,7 +7860,7 @@ void AppleIGB::stop(IOService* provider)
 		E1000_WRITE_REG(hw, E1000_DCA_CTRL, E1000_DCA_CTRL_DCA_DISABLE);
 	}
 #endif
-	
+
 	/* Release control of h/w to f/w.  If f/w is AMT enabled, this
 	 * would have already happened in close and is redundant. */
 	igb_release_hw_control(adapter);
@@ -7867,9 +7877,9 @@ void AppleIGB::stop(IOService* provider)
 		iounmap(hw->flash_address);
 	pci_release_selected_regions(pdev,
 	                             pci_select_bars(pdev, IORESOURCE_MEM));
-#endif	
-	kfree(adapter->mac_table, sizeof(struct igb_mac_addr));
-	kfree(adapter->rx_ring, sizeof(struct igb_ring));
+#endif
+	kfree(adapter->mac_table, sizeof(struct igb_mac_addr)* adapter->hw.mac.rar_entry_count);
+	kfree(adapter->shadow_vfta, sizeof(u32) * E1000_VFTA_ENTRIES);
 #if	0
 	free_netdev(netdev);
 	

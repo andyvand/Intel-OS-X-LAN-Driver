@@ -633,6 +633,9 @@ struct igb_adapter {
 	int msg_enable;
 
 	struct igb_q_vector *q_vector[MAX_Q_VECTORS];
+#ifdef __APPLE__
+	size_t q_vector_size[MAX_Q_VECTORS];
+#endif
 	u32 eims_enable_mask;
 	u32 eims_other;
 
