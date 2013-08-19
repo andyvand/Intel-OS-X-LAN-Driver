@@ -197,6 +197,8 @@ struct work_struct {
 #define  PCI_STATUS_REC_MASTER_ABORT    0x2000 /* Set on master abort */
 #define  PCI_STATUS_SIG_SYSTEM_ERROR    0x4000 /* Set when we drive SERR */
 
+#define MDIO_EEE_100TX  0x0002  /* Advertise 100TX EEE cap */
+#define MDIO_EEE_1000T  0x0004  /* Advertise 1000T EEE cap */
 
 #define MAX_NUMNODES 1
 #define first_online_node 0
