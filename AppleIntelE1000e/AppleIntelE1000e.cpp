@@ -4507,7 +4507,7 @@ IOReturn AppleIntelE1000e::getMinPacketSize (UInt32 *minSize) const {
  **/
 
 void AppleIntelE1000e::e1000_change_mtu(UInt32 new_mtu){
-	UInt32 max_frame = new_mtu + ETH_HLEN + ETH_FCS_LEN;
+	UInt32 max_frame = new_mtu;
 	e1000_adapter *adapter = &priv_adapter;
 
 
@@ -4553,17 +4553,17 @@ void AppleIntelE1000e::e1000_change_mtu(UInt32 new_mtu){
 }
 
 IOReturn AppleIntelE1000e::setMaxPacketSize (UInt32 maxSize){
-
-	if(maxSize != priv_netdev.mtu){
+    UInt32 newMtu = maxSize - (ETH_HLEN + ETH_FCS_LEN);
+	if(newMtu != priv_netdev.mtu){
 
 		if(enabledForNetif){
 			disable(netif);
 			
-			e1000_change_mtu(maxSize);
+			e1000_change_mtu(newMtu);
 			
 			enable(netif);
 		} else {
-			e1000_change_mtu(maxSize);
+			e1000_change_mtu(newMtu);
 			e1000e_reset(&priv_adapter);
 		}
 	}

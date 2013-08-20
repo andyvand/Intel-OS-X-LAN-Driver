@@ -613,12 +613,13 @@ IOReturn AgereET131x::getMinPacketSize (UInt32 *minSize) const {
 }
 
 IOReturn AgereET131x::setMaxPacketSize (UInt32 maxSize){
-	if(maxSize == mtu)
+    UInt32 newMtu = maxSize - (ETH_HLEN + ETH_FCS_LEN);
+	if(newMtu == mtu)
 		return kIOReturnSuccess;
 
 	adapter_memory_free();
 
-	set_mtu(maxSize);
+	set_mtu(newMtu);
 
 	adapter_memory_alloc();
 

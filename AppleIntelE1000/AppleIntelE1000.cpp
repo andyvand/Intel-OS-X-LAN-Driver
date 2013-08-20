@@ -6056,9 +6056,9 @@ IOReturn AppleIntelE1000::getMaxPacketSize (UInt32 *maxSize) const {
 	if (maxSize){
 		if( adapter.hw.mac.type == e1000_82542 || 
 		   adapter.hw.mac.type == e1000_undefined ) {
-			*maxSize = ETH_DATA_LEN;
+			*maxSize = ETH_DATA_LEN + (ETH_HLEN + ETH_FCS_LEN);
 		} else {
-			*maxSize = MAX_JUMBO_FRAME_SIZE - (ETH_HLEN + ETH_FCS_LEN);
+			*maxSize = MAX_JUMBO_FRAME_SIZE;
 		}
 	}
 	E1000_DBG("AppleIntelE1000::getMaxPacketSize(%d)\n",(int)*maxSize);
@@ -6118,11 +6118,12 @@ void AppleIntelE1000::e1000_set_mtu(UInt32 maxSize){
 }
 
 IOReturn AppleIntelE1000::setMaxPacketSize (UInt32 maxSize){
-	if(maxSize == mtu)
+    UInt32 newMtu = maxSize - (ETH_HLEN + ETH_FCS_LEN);
+	if(newMtu == mtu)
 		return kIOReturnSuccess;
 	
 	
-	e1000_set_mtu(maxSize);
+	e1000_set_mtu(newMtu);
 	
 	e1000_reset(&adapter);
 	
