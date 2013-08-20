@@ -25,6 +25,7 @@ extern "C" {
 #define USE_RX_UDP_CHECKSUM	1
 #define USE_TX_IP_CHECKSUM	0
 #define USE_TX_UDP_CHECKSUM	1
+#define CAN_RECOVER_STALL	0
 
 #define TBDS_PER_TCB 12
 #define super IOEthernetController
@@ -2174,8 +2175,12 @@ UInt32 AppleIntelE1000e::outputPacket(mbuf_t skb, void * param)
 		e1000_transfer_dhcp_info(adapter, skb);
 
 	if (e1000_desc_unused(adapter->tx_ring) < TBDS_PER_TCB+2){
+#if CAN_RECOVER_STALL
 		stalled = true;
 		return kIOReturnOutputStall;
+#else
+		return kIOReturnOutputDropped;
+#endif
 	}
 	
 	if (mbuf_pkthdr_len(skb) <= 0) {

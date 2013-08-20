@@ -51,6 +51,7 @@ extern "C" {
 #include "AppleIntelE1000.h"
 
 #define	USE_RX_UDP_CHECKSUM	0
+#define	CAN_RECOVER_STALL	0
 
 #define super IOEthernetController
 
@@ -5680,14 +5681,22 @@ UInt32 AppleIntelE1000::outputPacket(mbuf_t skb, void * param)
 	/* need: count + 2 desc gap to keep tail from touching
 	 * head, otherwise try next time */
 	if (unlikely(e1000_maybe_stop_tx(this, tx_ring, count + 2)))
+#if CAN_RECOVER_STALL
 		return kIOReturnOutputStall;
-
+#else
+		return kIOReturnOutputDropped;
+#endif
+	
 	if (unlikely(adapter->hw.mac.type == e1000_82547)) {
 		if (unlikely(e1000_82547_fifo_workaround(adapter, skb))) {
 			netif_stop_queue(this);
 			if (!test_bit(__E1000_DOWN, &adapter->state))
 				fifostallSource->setTimeoutMS(10);
+#if CAN_RECOVER_STALL
 			return kIOReturnOutputStall;
+#else
+			return kIOReturnOutputDropped;
+#endif
 		}
 	}
 
