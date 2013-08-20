@@ -23,6 +23,7 @@ extern "C" {
 
 
 #define USE_HW_CSUM 1
+#define CAN_RECOVER_STALL	0
 
 #define	RELEASE(x)	{if(x)x->release();x=NULL;}
 
@@ -8690,12 +8691,17 @@ UInt32 AppleIGB::outputPacket(mbuf_t skb, void * param)
          *       + 1 desc for skb->data,
          *       + 1 desc for context descriptor,
          * otherwise try next time */
-        if (igb_maybe_stop_tx(tx_ring, MAX_SKB_FRAGS + 3)) {
-            IOLog("igb_maybe_stop_tx() returns TRUE\n");
+		if (igb_maybe_stop_tx(tx_ring, MAX_SKB_FRAGS + 3)) {
             /* this is a hard error */
+			//IOLog("igb_maybe_stop_tx() returns TRUE\n");
+#if CAN_RECOVER_STALL
+			rc = kIOReturnOutputStall;
 			bQueueStopped = true;
-            rc = kIOReturnOutputStall;
-            break;
+			watchdogSource->setTimeoutMS(100);
+#else
+			rc = kIOReturnOutputDropped;
+#endif
+			break;
         }
         /* record the location of the first descriptor for this packet */
         first = &tx_ring->tx_buffer_info[tx_ring->next_to_use];
@@ -9128,6 +9134,15 @@ void AppleIGB::watchdogTask()
 			if (!test_bit(__IGB_DOWN, &adapter->state))
 				updatePhyInfoTask();
 		}
+#if CAN_RECOVER_STALL
+		if(queueStopped()){
+			IOLog("watchdogTask: queue is stopped.\n");
+			if(!igb_maybe_stop_tx(tx_ring,MAX_SKB_FRAGS + 4)){
+				IOLog("Restart TxQueue.\n");
+				startTxQueue();
+			}
+		}
+#endif
 	} else {
 		if (netif_carrier_ok(this)) {
 			adapter->link_speed = 0;
@@ -9344,12 +9359,14 @@ UInt32 AppleIGB::getFeatures() const {
 
 void AppleIGB::startTxQueue()
 {
+	IOLog("AppleIGB::startTxQueue()\n");
 	transmitQueue->start();
 	bQueueStopped = false;
 }
 
 void AppleIGB::stopTxQueue()
 {
+	IOLog("AppleIGB::stopTxQueue()\n");
 	transmitQueue->stop();
 	transmitQueue->flush();
 	bQueueStopped = true;
