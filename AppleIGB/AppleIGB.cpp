@@ -4592,7 +4592,7 @@ static int igb_change_mtu(IOEthernetController *netdev, int new_mtu)
 {
 	struct igb_adapter *adapter = netdev_priv(netdev);
 	struct e1000_hw *hw = &adapter->hw;
-	int max_frame = new_mtu + ETH_HLEN + ETH_FCS_LEN + VLAN_HLEN;
+	int max_frame = new_mtu + (ETH_HLEN + ETH_FCS_LEN); // + VLAN_HLEN
 
 	/* adjust max frame to be at least the size of a standard frame */
 	if (max_frame < (ETH_FRAME_LEN + ETH_FCS_LEN))
@@ -9275,9 +9275,10 @@ IOReturn AppleIGB::setPowerState( unsigned long powerStateOrdinal,
     return IOPMAckImplied;
 }
 
+#define MAX_STD_JUMBO_FRAME_SIZE 9238
 IOReturn AppleIGB::getMaxPacketSize (UInt32 *maxSize) const {
 	if (maxSize)
-		*maxSize = 9238;  // or mtu = 9216 ?
+		*maxSize = MAX_STD_JUMBO_FRAME_SIZE;  // or mtu = 9216 ?
 
 	return kIOReturnSuccess;
 }
@@ -9291,15 +9292,14 @@ IOReturn AppleIGB::getMinPacketSize (UInt32 *minSize) const {
 
 
 IOReturn AppleIGB::setMaxPacketSize (UInt32 maxSize){
-
+	IOLog("AppleIGB::setMaxPacketSize(%d)\n",(int)maxSize);
 	if(maxSize != _mtu){
-        _mtu = maxSize;
-        igb_change_mtu(this,maxSize);
+        _mtu = maxSize  - (ETH_HLEN + ETH_FCS_LEN);
+        igb_change_mtu(this,_mtu);
 
         RELEASE(txMbufCursor);
 
-        UInt32 max_frame = _mtu + ETH_HLEN + ETH_FCS_LEN + VLAN_HLEN;
-        txMbufCursor = IOMbufNaturalMemoryCursor::withSpecification(max_frame, MAX_SKB_FRAGS);
+        txMbufCursor = IOMbufNaturalMemoryCursor::withSpecification(maxSize, MAX_SKB_FRAGS);
 	}
 	return kIOReturnSuccess;
 }
