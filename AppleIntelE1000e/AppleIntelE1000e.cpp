@@ -3049,15 +3049,14 @@ void AppleIntelE1000e::e1000_alloc_jumbo_rx_buffers( int cleaned_count )
 		rx_desc = E1000_RX_DESC_EXT(*rx_ring, i);
 		if (!ps_page->page) {
 
-			ps_page->pool = IOBufferMemoryDescriptor::inTaskWithOptions( kernel_task, kIODirectionInOut | kIOMemoryPhysicallyContiguous,
+			ps_page->page = IOBufferMemoryDescriptor::inTaskWithOptions( kernel_task, kIODirectionInOut | kIOMemoryPhysicallyContiguous,
 																			adapter->rx_buffer_len, PAGE_SIZE );
-			if (!ps_page->pool) {
+			if (!ps_page->page) {
 				adapter->alloc_rx_buff_failed++;
 				goto no_buffers;
 			}
-			ps_page->pool->prepare();
-			ps_page->page = (page*)ps_page->pool->getBytesNoCopy();
-			ps_page->dma = ps_page->pool->getPhysicalAddress();
+			ps_page->page->prepare();
+			ps_page->dma = ps_page->page->getPhysicalAddress();
 			/* Refresh the desc even if buffer_addrs
 			 * didn't change because each write-back
 			 * erases this info.
@@ -3281,7 +3280,7 @@ bool AppleIntelE1000e::e1000_clean_jumbo_rx_irq()
 
 		/* Good Receive */
 		ps_page = &buffer_info->ps_pages[0];
-		mbuf_copyback(skb, 0, length, ps_page->page, MBUF_WAITOK);
+		mbuf_copyback(skb, 0, length, ps_page->page->getBytesNoCopy(), MBUF_WAITOK);
 		
 		total_rx_bytes += length;
 		total_rx_packets++;
@@ -3680,9 +3679,9 @@ void AppleIntelE1000e::e1000_clean_rx_ring()
 				break;
 			ps_page->dma = 0;
 
-			ps_page->pool->complete();
-			ps_page->pool->release();
-			ps_page->pool = 0;
+			ps_page->page->complete();
+			ps_page->page->release();
+			ps_page->page = 0;
 			//put_page(ps_page->page);
 			ps_page->page = NULL;
 		}

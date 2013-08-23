@@ -189,9 +189,10 @@ enum e1000_boards {
 
 struct e1000_ps_page {
 #ifdef	__APPLE__
-	IOBufferMemoryDescriptor* pool;
-#endif
+	IOBufferMemoryDescriptor* page;
+#else
 	struct page *page;
+#endif
 	u64 dma; /* must be u64 - written to hw */
 };
 
