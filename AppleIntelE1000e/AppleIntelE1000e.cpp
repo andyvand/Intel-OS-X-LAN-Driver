@@ -21,10 +21,7 @@ extern "C" {
 
 #include "AppleIntelE1000e.h"
 
-#define USE_RX_IP_CHECKSUM	1
-#define USE_RX_UDP_CHECKSUM	1
 #define USE_TX_IP_CHECKSUM	0
-#define USE_TX_UDP_CHECKSUM	1
 #define CAN_RECOVER_STALL	0
 
 #define TBDS_PER_TCB 12
@@ -1092,12 +1089,121 @@ void e1000e_write_itr(struct e1000_adapter *adapter, u32 itr)
 	}
 }
 
-static int e1000_tx_map(struct e1000_adapter *adapter, mbuf_t skb, unsigned int first, IOMbufNaturalMemoryCursor * txMbufCursor )
+#define E1000_TX_FLAGS_CSUM		0x00000001
+#define E1000_TX_FLAGS_VLAN		0x00000002
+#define E1000_TX_FLAGS_TSO		0x00000004
+#define E1000_TX_FLAGS_IPV4		0x00000008
+#define E1000_TX_FLAGS_NO_FCS		0x00000010
+#define E1000_TX_FLAGS_HWTSTAMP		0x00000020
+#define E1000_TX_FLAGS_VLAN_MASK	0xffff0000
+#define E1000_TX_FLAGS_VLAN_SHIFT	16
+
+static int e1000_tso(struct e1000_ring *tx_ring, struct sk_buff *skb, int* pSegs)
+{
+#ifdef NETIF_F_TSO
+	struct e1000_context_desc *context_desc;
+	struct e1000_buffer *buffer_info;
+	unsigned int i;
+	u32 cmd_length = 0;
+	u16 ipcse = 0, mss;
+	u8 ipcss, ipcso, tucss, tucso, hdr_len;
+    int rc = 0;
+    
+    mbuf_tso_request_flags_t request;
+    u_int32_t *mssValue;
+    if(mbuf_get_tso_requested(skb, &request, &mssValue) || request == 0)
+		return 0;
+    
+	hdr_len = skb_transport_offset(skb) + tcp_hdrlen(skb);
+	mss = mssValue;
+
+    struct tcphdr* tcph;
+	int ip_header_len;
+    if (request & MBUF_TSO_IPV4) {
+		struct ip *iph = (struct ip*)mbuf_data(skb);
+		ip_header_len = (iph->ip_hl<< 2);
+		iph->ip_len = 0;
+		iph->ip_sum = 0;
+		tcph = (tcphdr*)((u8*)iph + network_header_len);
+        hdr_len = network_header_len + (tcph->th_off << 2);
+		mbuf_inet_cksum(skb, IPPROTO_TCP, 0, mbuf_pkthdr_len(skb) - ip_header_len, &tcph->th_sum);
+		cmd_length = E1000_TXD_CMD_IP;
+		ipcse = ip_header_len - 1;
+        ipcso = (u8*)&(iph->ip_sum) - (u8*)mbuf_data(skb);
+        rc = 4;
+	} else if (request & MBUF_TSO_IPV6) {
+		struct ip6_hdr *iph = (struct ip6_hdr*)mbuf_data(skb);
+		ip_header_len = sizeof(struct ip6_hdr);
+		iph->ip6_ctlun.ip6_un1.ip6_un1_plen = 0;
+		tcph = (tcphdr*)((u8*)iph + sizeof(struct ip6_hdr));
+		mbuf_inet6_cksum(skb, IPPROTO_TCP, 0, mbuf_pkthdr_len(skb) - network_header_len, &tcph->th_sum);
+		ipcse = 0;
+        ipcso = 0;
+        rc = 6;
+	}
+#ifdef NETIF_F_TSO
+    /* TSO Workaround for 82571/2/3 Controllers -- if skb->data
+     * points to just header, pull a few bytes of payload from
+     * frags into skb->data
+     */
+    /* we do this workaround for ES2LAN, but it is un-necessary,
+     * avoiding it could save a lot of cycles
+     */
+    if (mbuf_len(skb) == ip_header_len + (tcph->th_off << 2)) {
+        unsigned int pull_size =  mbuf_pkthdr_len(skb);
+        if(pull_size > 4)
+            pull_size = 4;
+        if (mbuf_pullup(skb, pull_size)) {
+            IOLog("mbuf_pullup failed.\n");
+            return -1;
+        }
+    }
+#endif
+	ipcss = 0;
+	//ipcso = (void *)&(ip_hdr(skb)->check) - (void *)skb->data;
+	tucss = ip_header_len;
+	tucso = (u8*)&(tcph->th_sum) - (u8*)mbuf_data(skb);
+    
+	cmd_length |= (E1000_TXD_CMD_DEXT | E1000_TXD_CMD_TSE |
+                   E1000_TXD_CMD_TCP | (mbuf_pkthdr_len(skb) - (hdr_len)));
+    
+	i = tx_ring->next_to_use;
+	context_desc = E1000_CONTEXT_DESC(*tx_ring, i);
+	buffer_info = &tx_ring->buffer_info[i];
+    
+	context_desc->lower_setup.ip_fields.ipcss = ipcss;
+	context_desc->lower_setup.ip_fields.ipcso = ipcso;
+	context_desc->lower_setup.ip_fields.ipcse = cpu_to_le16(ipcse);
+	context_desc->upper_setup.tcp_fields.tucss = tucss;
+	context_desc->upper_setup.tcp_fields.tucso = tucso;
+	context_desc->upper_setup.tcp_fields.tucse = 0;
+	context_desc->tcp_seg_setup.fields.mss = cpu_to_le16(mss);
+	context_desc->tcp_seg_setup.fields.hdr_len = hdr_len;
+	context_desc->cmd_and_length = cpu_to_le32(cmd_length);
+    
+	buffer_info->time_stamp = jiffies();
+	buffer_info->next_to_watch = i;
+    
+	i++;
+	if (i == tx_ring->count)
+		i = 0;
+	tx_ring->next_to_use = i;
+
+    *pSegs = (mbuf_pkthdr_len(skb) + (mssValue-1))/mssValue;
+
+	return 1;
+#else /* NETIF_F_TSO */
+	return 0;
+#endif /* NETIF_F_TSO */
+}
+
+static int e1000_tx_map(struct e1000_adapter *adapter, mbuf_t skb, unsigned int first,
+                        IOMbufNaturalMemoryCursor * txMbufCursor, int segs )
 {
 	struct e1000_ring *tx_ring = adapter->tx_ring;
 	struct e1000_buffer *buffer_info;
 	unsigned int count = 0, i;
-	unsigned int f, bytecount, segs;
+	unsigned int f, bytecount;
 
 	unsigned int nr_frags;
 	IOPhysicalSegment tx_segments[TBDS_PER_TCB];
@@ -1128,11 +1234,6 @@ static int e1000_tx_map(struct e1000_adapter *adapter, mbuf_t skb, unsigned int 
 	else
 		i--;
 	
-#ifdef NETIF_F_TSO
-	segs = skb_shinfo(skb)->gso_segs ?: 1;
-#else
-	segs = 1;
-#endif
 	/* multiply data chunks by size of headers */
 	//bytecount = ((segs - 1) * mbuf_pkthdr_len(skb)) +mbuf_len(skb);
 
@@ -2164,6 +2265,7 @@ UInt32 AppleIntelE1000e::outputPacket(mbuf_t skb, void * param)
 	struct e1000_ring *tx_ring = adapter->tx_ring;
 	unsigned int first;
 	unsigned int tx_flags = 0;
+	int tso, segs = 1;
 	int count = 0;
 	
 	if (enabledForNetif == false) {             // drop the packet.
@@ -2194,12 +2296,24 @@ UInt32 AppleIntelE1000e::outputPacket(mbuf_t skb, void * param)
 		tx_flags |= (vlan << E1000_TX_FLAGS_VLAN_SHIFT);
 	}
 	
-    if (e1000_tx_csum(skb)) {
+	tso = e1000_tso(tx_ring, skb, &segs);
+    if(tso < 0)
+        return kIOReturnOutputDropped;
+    if(tso){
+		tx_flags |= E1000_TX_FLAGS_TSO;
+        if (tso == 4)
+            tx_flags |= E1000_TX_FLAGS_IPV4;
+    } else if (e1000_tx_csum(skb)){
 		tx_flags |= E1000_TX_FLAGS_CSUM;
-	}
+        tx_flags |= E1000_TX_FLAGS_IPV4;
+    }
+	/* Old method was to assume IPv4 packet by default if TSO was enabled.
+	 * 82571 hardware supports TSO capabilities for IPv6 as well...
+	 * no longer assume, we must.
+	 */
 
 	first = tx_ring->next_to_use;
-	count = e1000_tx_map(adapter, skb, first, txMbufCursor);
+	count = e1000_tx_map(adapter, skb, first, txMbufCursor, segs);
 	
 	if (count <= 0) {
 		IOLog("failed to getphysicalsegment in outputPacket.\n");
@@ -2399,18 +2513,9 @@ IOReturn AppleIntelE1000e::getChecksumSupport(UInt32 *checksumMask, UInt32 check
 	} else {
 		UInt32 mask = 0;
 		if( !isOutput ) {
-			mask |= kChecksumTCP;
-#if USE_RX_UDP_CHECKSUM
-			mask |= kChecksumUDP;
-#endif
-#if USE_RX_IP_CHECKSUM
-			mask |= kChecksumIP;
-#endif
+			mask |= kChecksumTCP | kChecksumUDP | kChecksumIP;
 		} else {
-			mask |= kChecksumTCP;
-#if USE_TX_UDP_CHECKSUM
-			mask |= kChecksumUDP;
-#endif
+			mask |= kChecksumTCP | kChecksumUDP;
 #if USE_TX_IP_CHECKSUM
 			mask |= kChecksumIP;
 #endif
@@ -4315,12 +4420,10 @@ void AppleIntelE1000e::e1000_rx_checksum(mbuf_t skb, u32 status_err)
 
 	UInt32 ckMask = kChecksumTCP;
 	UInt32 ckResult = 0;
-#if USE_RX_UDP_CHECKSUM
 	ckMask |= kChecksumUDP;
 	if (status & E1000_RXD_STAT_UDPCS) {
 		ckResult |= kChecksumUDP;
 	}
-#endif
 	if (status & E1000_RXD_STAT_TCPCS) {
 		/* TCP checksum is good */
 		ckResult |= kChecksumTCP;
@@ -4441,7 +4544,6 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 		context_desc->upper_setup.tcp_fields.tucso = hdr_len + offsetof(struct tcphdr, th_sum);
 		cmd |= E1000_TXD_CMD_TCP;
 	}
-#if USE_TX_UDP_CHECKSUM
 	if(	checksumDemanded & kChecksumUDP ){
 		/*
 		 * Start offset for header checksum calculation.
@@ -4451,7 +4553,6 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 		context_desc->upper_setup.tcp_fields.tucss = hdr_len;
 		context_desc->upper_setup.tcp_fields.tucso = hdr_len + offsetof(struct udphdr, uh_sum);
 	}
-#endif
 
 	context_desc->upper_setup.tcp_fields.tucse = 0;
 	context_desc->tcp_seg_setup.data = 0;
@@ -4757,7 +4858,17 @@ int AppleIntelE1000e::getIntOption( int def, const char *name )
 }
 
 UInt32 AppleIntelE1000e::getFeatures() const {
+#ifdef NETIF_F_TSO
+    #ifdef NETIF_F_TSO6
+	return kIONetworkFeatureMultiPages | kIONetworkFeatureHardwareVlan |
+        kIONetworkFeatureTSOIPv4 | kIONetworkFeatureTSOIPv6;
+    #else
+	return kIONetworkFeatureMultiPages | kIONetworkFeatureHardwareVlan |
+        kIONetworkFeatureTSOIPv4;
+    #endif
+#else
 	return kIONetworkFeatureMultiPages | kIONetworkFeatureHardwareVlan;
+#endif
 }
 
 
