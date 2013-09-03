@@ -34,6 +34,8 @@
 #define	IGB_NO_LRO
 #define	HAVE_VLAN_RX_REGISTER
 #define HAVE_NETDEV_VLAN_FEATURES
+#define NETIF_F_TSO
+#define NETIF_F_TSO6
 #include <AvailabilityMacros.h>
 #include <sys/types.h>
 #include <i386/limits.h>

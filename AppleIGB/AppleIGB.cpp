@@ -27,6 +27,21 @@ extern "C" {
 
 #define	RELEASE(x)	{if(x)x->release();x=NULL;}
 
+static inline ip* ip_hdr(mbuf_t skb)
+{
+	return (ip*)mbuf_data(skb);
+}
+
+static inline struct ip6_hdr* ip6_hdr(mbuf_t skb)
+{
+	return (struct ip6_hdr*)mbuf_data(skb);
+}
+
+static tcphdr* tcp_hdr(mbuf_t skb)
+{
+	ip* ip = ip_hdr(skb);
+	return (tcphdr*)(((u8*)ip) + (ip->ip_hl<< 2));
+}
 
 static void* kzalloc(size_t size)
 {
@@ -4028,7 +4043,122 @@ static int igb_tso(struct igb_ring *tx_ring,
 		   struct igb_tx_buffer *first,
 		   u8 *hdr_len)
 {
+#ifdef NETIF_F_TSO
+	struct sk_buff *skb = first->skb;
+	u32 vlan_macip_lens, type_tucmd;
+	u32 mss_l4len_idx, l4len;
+	
+#ifdef	__APPLE__
+	mbuf_tso_request_flags_t request;
+	u_int32_t mssValue;
+	if(mbuf_get_tso_requested(skb, &request, &mssValue) || request == 0 )
 		return 0;
+#else
+	if (skb->ip_summed != CHECKSUM_PARTIAL)
+		return 0;
+	
+	if (!skb_is_gso(skb))
+		return 0;
+
+	if (skb_header_cloned(skb)) {
+		int err = pskb_expand_head(skb, 0, 0, GFP_ATOMIC);
+		if (err)
+			return err;
+	}
+#endif
+
+	/* ADV DTYP TUCMD MKRLOC/ISCSIHEDLEN */
+	type_tucmd = E1000_ADVTXD_TUCMD_L4T_TCP;
+
+#ifdef	__APPLE__
+	struct tcphdr* tcph;
+	int network_header_len;
+	if (request & MBUF_TSO_IPV4) {
+		struct ip *iph = ip_hdr(skb);
+		network_header_len = (iph->ip_hl<< 2);
+		iph->ip_len = 0;
+		iph->ip_sum = 0;
+		tcph = (tcphdr*)((u8*)iph + network_header_len);
+		mbuf_inet_cksum(skb, IPPROTO_TCP, 0, mbuf_pkthdr_len(skb) - network_header_len, &tcph->th_sum);
+		type_tucmd |= E1000_ADVTXD_TUCMD_IPV4;
+		first->tx_flags |= IGB_TX_FLAGS_TSO |
+		IGB_TX_FLAGS_CSUM |
+		IGB_TX_FLAGS_IPV4;
+	} else if (request & MBUF_TSO_IPV6) {
+		struct ip6_hdr *iph = ip6_hdr(skb);
+		network_header_len = sizeof(struct ip6_hdr);
+		iph->ip6_ctlun.ip6_un1.ip6_un1_plen = 0;
+		tcph = (tcphdr*)((u8*)iph + sizeof(struct ip6_hdr));
+		mbuf_inet6_cksum(skb, IPPROTO_TCP, 0, mbuf_pkthdr_len(skb) - network_header_len, &tcph->th_sum);
+		first->tx_flags |= IGB_TX_FLAGS_TSO |
+		IGB_TX_FLAGS_CSUM;
+	}
+	u16 gso_segs = (mbuf_pkthdr_len(skb) + (mssValue-1))/mssValue;
+
+	/* compute header lengths */
+	l4len = tcph->th_off << 2;
+	*hdr_len = ((u8*)tcph-(u8*)mbuf_data(skb)) + l4len;
+	
+	/* update gso size and bytecount with header size */
+	first->gso_segs = gso_segs;
+	first->bytecount += (first->gso_segs - 1) * *hdr_len;
+	
+	/* MSS L4LEN IDX */
+	mss_l4len_idx = l4len << E1000_ADVTXD_L4LEN_SHIFT;
+	mss_l4len_idx |= mssValue << E1000_ADVTXD_MSS_SHIFT;
+	
+	/* VLAN MACLEN IPLEN */
+	vlan_macip_lens = network_header_len;
+	vlan_macip_lens |= (0) << E1000_ADVTXD_MACLEN_SHIFT;
+	vlan_macip_lens |= first->tx_flags & IGB_TX_FLAGS_VLAN_MASK;
+#else /* __APPLE__ */
+	if (first->protocol == __constant_htons(ETH_P_IP)) {
+		struct iphdr *iph = ip_hdr(skb);
+		iph->tot_len = 0;
+		iph->check = 0;
+		tcp_hdr(skb)->check = ~csum_tcpudp_magic(iph->saddr,
+												  iph->daddr, 0,
+												  IPPROTO_TCP,
+												  0);
+		type_tucmd |= E1000_ADVTXD_TUCMD_IPV4;
+		first->tx_flags |= IGB_TX_FLAGS_TSO |
+		IGB_TX_FLAGS_CSUM |
+		IGB_TX_FLAGS_IPV4;
+#ifdef NETIF_F_TSO6
+	} else if (skb_is_gso_v6(skb)) {
+		ipv6_hdr(skb)->payload_len = 0;
+		tcp_hdr(skb)->check = ~csum_ipv6_magic(&ipv6_hdr(skb)->saddr,
+											   &ipv6_hdr(skb)->daddr,
+											   0, IPPROTO_TCP, 0);
+		first->tx_flags |= IGB_TX_FLAGS_TSO |
+		IGB_TX_FLAGS_CSUM;
+#endif
+	}
+	
+	/* compute header lengths */
+	l4len = tcp_hdrlen(skb);
+	*hdr_len = skb_transport_offset(skb) + l4len;
+	
+	/* update gso size and bytecount with header size */
+	first->gso_segs = skb_shinfo(skb)->gso_segs;
+	first->bytecount += (first->gso_segs - 1) * *hdr_len;
+	
+	/* MSS L4LEN IDX */
+	mss_l4len_idx = l4len << E1000_ADVTXD_L4LEN_SHIFT;
+	mss_l4len_idx |= skb_shinfo(skb)->gso_size << E1000_ADVTXD_MSS_SHIFT;
+	
+	/* VLAN MACLEN IPLEN */
+	vlan_macip_lens = skb_network_header_len(skb);
+	vlan_macip_lens |= skb_network_offset(skb) << E1000_ADVTXD_MACLEN_SHIFT;
+	vlan_macip_lens |= first->tx_flags & IGB_TX_FLAGS_VLAN_MASK;
+#endif /* __APPLE__ */
+	
+	igb_tx_ctxtdesc(tx_ring, vlan_macip_lens, type_tucmd, mss_l4len_idx);
+	
+	return 1;
+#else
+	return 0;
+#endif  /* NETIF_F_TSO */
 }
 
 // copy for accessing c++ constants
@@ -9347,7 +9477,17 @@ IOReturn AppleIGB::getPacketFilters(const OSSymbol * group, UInt32 * filters) co
 }
 
 UInt32 AppleIGB::getFeatures() const {
+#ifdef NETIF_F_TSO
+	#ifdef NETIF_F_TSO6
+	return kIONetworkFeatureMultiPages | kIONetworkFeatureHardwareVlan |
+		kIONetworkFeatureTSOIPv4 | kIONetworkFeatureTSOIPv6;
+	#else
+	return kIONetworkFeatureMultiPages | kIONetworkFeatureHardwareVlan |
+		kIONetworkFeatureTSOIPv4;
+	#endif
+#else
 	return kIONetworkFeatureMultiPages | kIONetworkFeatureHardwareVlan;
+#endif
 }
     
     
