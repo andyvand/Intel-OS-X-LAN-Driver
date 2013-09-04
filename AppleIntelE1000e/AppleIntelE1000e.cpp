@@ -24,6 +24,41 @@ extern "C" {
 #define USE_TX_IP_CHECKSUM	0
 #define CAN_RECOVER_STALL	0
 
+#define	NETIF_F_TSO
+#define	NETIF_F_TSO6
+
+/* IPv6 flags are not defined in 10.6 headers. */
+enum {
+	CSUM_TCPIPv6             = 0x0020,
+	CSUM_UDPIPv6             = 0x0040
+};
+
+
+static inline ip* ip_hdr(mbuf_t skb)
+{
+	return (ip*)((u8*)mbuf_data(skb)+ETH_HLEN);
+}
+
+static inline struct tcphdr* tcp_hdr(mbuf_t skb)
+{
+	struct ip* iph = ip_hdr(skb);
+	return (struct tcphdr*)((u8*)iph + (iph->ip_hl << 2));
+}
+
+static inline struct ip6_hdr* ip6_hdr(mbuf_t skb)
+{
+	return (struct ip6_hdr*)((u8*)mbuf_data(skb)+ETH_HLEN);
+}
+
+static inline struct tcphdr* tcp6_hdr(mbuf_t skb)
+{
+	struct ip6_hdr* ip6 = ip6_hdr(skb);
+	while(ip6->ip6_ctlun.ip6_un1.ip6_un1_nxt != IPPROTO_TCP){
+		ip6++;
+	}
+	return (struct tcphdr*)(ip6+1);
+}
+
 #define TBDS_PER_TCB 12
 #define super IOEthernetController
 
@@ -1110,40 +1145,40 @@ static int e1000_tso(struct e1000_ring *tx_ring, struct sk_buff *skb, int* pSegs
     int rc = 0;
     
     mbuf_tso_request_flags_t request;
-    u_int32_t *mssValue;
+    u_int32_t mssValue;
     if(mbuf_get_tso_requested(skb, &request, &mssValue) || request == 0)
 		return 0;
     
-	hdr_len = skb_transport_offset(skb) + tcp_hdrlen(skb);
 	mss = mssValue;
 
     struct tcphdr* tcph;
 	int ip_header_len, nw_header_len;
+	u_int32_t dataLen = mbuf_pkthdr_len(skb);
+	u8* dataAddr = (u8*)mbuf_data(skb);
     if (request & MBUF_TSO_IPV4) {
-		struct ip *iph = (struct ip*)((u8*)mbuf_data(skb)+ETHER_HDR_LEN);
-		ip_header_len = (iph->ip_hl<< 2);
-		nw_header_len = ip_header_len+ETHER_HDR_LEN;
+		struct ip *iph = ip_hdr(skb);
+		tcph = tcp_hdr(skb);
+		nw_header_len = ((u8*)tcph - (u8*)iph);
 		iph->ip_len = 0;
 		iph->ip_sum = 0;
-		tcph = (tcphdr*)((u8*)iph + ip_header_len);
-        hdr_len = network_header_len + (tcph->th_off << 2);
-		mbuf_inet_cksum(skb, IPPROTO_TCP, 0, mbuf_pkthdr_len(skb) - nw_header_len, &tcph->th_sum);
+		mbuf_inet_cksum(skb, IPPROTO_TCP, 0, dataLen - (nw_header_len+ETH_HLEN), &tcph->th_sum);
 		cmd_length = E1000_TXD_CMD_IP;
 		ipcse = ip_header_len - 1;
-        ipcso = (u8*)&(iph->ip_sum) - (u8*)mbuf_data(skb);
+        ipcso = (u8*)&(iph->ip_sum) - dataAddr;
         rc = 4;
 	} else if (request & MBUF_TSO_IPV6) {
-		struct ip6_hdr *iph = (struct ip6_hdr*)((u8*)mbuf_data(skb)+ETHER_HDR_LEN);
-		ip_header_len = sizeof(struct ip6_hdr);
-		nw_header_len = ip_header_len+ETHER_HDR_LEN;
+		struct ip6_hdr *iph = ip6_hdr(skb);
+		tcph = tcp6_hdr(skb);
+		nw_header_len = ((u8*)tcph - (u8*)iph);
 		iph->ip6_ctlun.ip6_un1.ip6_un1_plen = 0;
 		tcph = (tcphdr*)((u8*)iph + sizeof(struct ip6_hdr));
-		mbuf_inet6_cksum(skb, IPPROTO_TCP, 0, mbuf_pkthdr_len(skb) - nw_header_len, &tcph->th_sum);
+		mbuf_inet6_cksum(skb, IPPROTO_TCP, 0, dataLen - (nw_header_len+ETH_HLEN), &tcph->th_sum);
 		ipcse = 0;
         ipcso = 0;
         rc = 6;
 	}
-#ifdef NETIF_F_TSO
+	hdr_len = ETH_HLEN + nw_header_len + (tcph->th_off << 2);
+
     /* TSO Workaround for 82571/2/3 Controllers -- if skb->data
      * points to just header, pull a few bytes of payload from
      * frags into skb->data
@@ -1151,23 +1186,22 @@ static int e1000_tso(struct e1000_ring *tx_ring, struct sk_buff *skb, int* pSegs
     /* we do this workaround for ES2LAN, but it is un-necessary,
      * avoiding it could save a lot of cycles
      */
-    if (mbuf_len(skb) == nw_header_len + (tcph->th_off << 2)) {
-        unsigned int pull_size =  mbuf_pkthdr_len(skb);
+    if (mbuf_len(skb) == hdr_len) {
+        unsigned int pull_size = dataLen - hdr_len;
         if(pull_size > 4)
             pull_size = 4;
-        if (mbuf_pullup(skb, pull_size)) {
+        if (mbuf_pullup(&skb, pull_size)) {
             IOLog("mbuf_pullup failed.\n");
             return -1;
         }
     }
-#endif
-	ipcss = 0;
-	//ipcso = (void *)&(ip_hdr(skb)->check) - (void *)skb->data;
-	tucss = ip_header_len;
-	tucso = (u8*)&(tcph->th_sum) - (u8*)mbuf_data(skb);
+
+	ipcss = ETH_HLEN;
+	tucss = nw_header_len+ETH_HLEN;
+	tucso = (u8*)&(tcph->th_sum) - dataAddr;
     
 	cmd_length |= (E1000_TXD_CMD_DEXT | E1000_TXD_CMD_TSE |
-                   E1000_TXD_CMD_TCP | (mbuf_pkthdr_len(skb) - (hdr_len)));
+                   E1000_TXD_CMD_TCP | dataLen - (hdr_len));
     
 	i = tx_ring->next_to_use;
 	context_desc = E1000_CONTEXT_DESC(*tx_ring, i);
@@ -2516,8 +2550,10 @@ IOReturn AppleIntelE1000e::getChecksumSupport(UInt32 *checksumMask, UInt32 check
 		UInt32 mask = 0;
 		if( !isOutput ) {
 			mask |= kChecksumTCP | kChecksumUDP | kChecksumIP;
+			mask |= CSUM_TCPIPv6|CSUM_UDPIPv6;
 		} else {
 			mask |= kChecksumTCP | kChecksumUDP;
+			mask |= CSUM_TCPIPv6|CSUM_UDPIPv6;
 #if USE_TX_IP_CHECKSUM
 			mask |= kChecksumIP;
 #endif
@@ -4436,27 +4472,40 @@ void AppleIntelE1000e::e1000_rx_checksum(mbuf_t skb, u32 status_err)
 
 bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 {
-#if 1
 	struct e1000_adapter *adapter = &priv_adapter;
 	struct e1000_ring *tx_ring = adapter->tx_ring;
 	struct e1000_context_desc *context_desc;
 	struct e1000_buffer *buffer_info;
-	unsigned int i;
+	unsigned int i, ip_hlen;
 	u32 txd_cmd = 0;
 
 	i = tx_ring->next_to_use;
 	buffer_info = &tx_ring->buffer_info[i];
 	context_desc = E1000_CONTEXT_DESC(*tx_ring, i);
 
+	u8* nw_start = (u8*)mbuf_data(skb)+ETH_HLEN;
 	
 	UInt32 checksumDemanded;
 	getChecksumDemand(skb, kChecksumFamilyTCPIP, &checksumDemanded);
-	if(checksumDemanded & kChecksumTCP){
+	if(checksumDemanded & (kChecksumTCP|kChecksumUDP)){
+		struct ip* ip = (struct ip*)nw_start;
+		ip_hlen = ip->ip_hl * 4;
 		context_desc->lower_setup.ip_config = E1000_TXD_CMD_DEXT | E1000_TXD_DTYP_D;
 		context_desc->upper_setup.tcp_config = E1000_TXD_POPTS_TXSM << 8;
-	} else if(checksumDemanded & kChecksumUDP){
-		context_desc->lower_setup.ip_config = E1000_TXD_CMD_DEXT | E1000_TXD_DTYP_D;
-		context_desc->upper_setup.tcp_config = E1000_TXD_POPTS_TXSM << 8;
+
+		// IP checksum
+		context_desc->lower_setup.ip_fields.ipcss = ETH_HLEN;
+		context_desc->lower_setup.ip_fields.ipcso = ETH_HLEN + offsetof(struct ip, ip_sum);
+		context_desc->lower_setup.ip_fields.ipcse = cpu_to_le16(ETH_HLEN + ip_hlen - 1);
+		
+	} else if(checksumDemanded & (CSUM_TCPIPv6|CSUM_UDPIPv6)){
+		struct ip6_hdr* ip6 = (struct ip6_hdr*)nw_start;
+		u_int8_t nexthdr;
+		do {
+			nexthdr = ip6->ip6_ctlun.ip6_un1.ip6_un1_nxt;
+			ip6++;
+		} while(nexthdr != IPPROTO_TCP && nexthdr != IPPROTO_UDP);
+		ip_hlen = (u8*)ip6 - nw_start;
 	} else {
 		return false;
 	}
@@ -4464,25 +4513,19 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 	/* If we reach this point, the checksum offload context
 	 * needs to be reset.
 	 */
-	context_desc->lower_setup.ip_fields.ipcss = ETHER_HDR_LEN;
-	context_desc->lower_setup.ip_fields.ipcso =
-	ETHER_HDR_LEN + offsetof(struct ip, ip_sum);
-	context_desc->lower_setup.ip_fields.ipcse =
-		cpu_to_le16(ETHER_HDR_LEN + sizeof(struct ip) - 1);
 	
-	context_desc->upper_setup.tcp_fields.tucss =
-	ETHER_HDR_LEN + sizeof(struct ip);
+	context_desc->upper_setup.tcp_fields.tucss = ETH_HLEN + ip_hlen;
 	context_desc->upper_setup.tcp_fields.tucse = cpu_to_le16(0);
 	
-	if (checksumDemanded & kChecksumTCP) {
+	if (checksumDemanded & (kChecksumTCP|CSUM_TCPIPv6)) {
 		context_desc->upper_setup.tcp_fields.tucso =
-		ETHER_HDR_LEN + sizeof(struct ip) +
-		offsetof(struct tcphdr, th_sum);
-		txd_cmd |= E1000_TXD_CMD_TCP;
-	} else {
+			ETH_HLEN + ip_hlen +
+			offsetof(struct tcphdr, th_sum);
+			txd_cmd |= E1000_TXD_CMD_TCP;
+	} else if (checksumDemanded & (kChecksumUDP|CSUM_UDPIPv6)){
 		context_desc->upper_setup.tcp_fields.tucso =
-		ETHER_HDR_LEN + sizeof(struct ip) +
-		offsetof(struct udphdr, uh_sum);
+			ETH_HLEN + ip_hlen +
+			offsetof(struct udphdr, uh_sum);
 	}
 	
 	context_desc->tcp_seg_setup.data = cpu_to_le32(0);
@@ -4494,80 +4537,7 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 	if (i >= tx_ring->count)
 		i = 0;
 	tx_ring->next_to_use = i;
-#else
-	struct e1000_adapter *adapter = &priv_adapter;
-	struct e1000_ring *tx_ring = adapter->tx_ring;
-	struct e1000_context_desc *context_desc;
-	struct e1000_buffer *buffer_info;
-	unsigned int i;
 
-	struct ip *ip = NULL;
-	u32 ip_hlen, hdr_len;
-	int ehdrlen;
-	u32 cmd = E1000_TXD_CMD_DEXT;
-	
-	UInt32 checksumDemanded;
-	getChecksumDemand(skb, kChecksumFamilyTCPIP, &checksumDemanded);
-	if((checksumDemanded & (kChecksumIP|kChecksumTCP|kChecksumUDP)) == 0)
-		return false;
-
-	i = tx_ring->next_to_use;
-	buffer_info = &tx_ring->buffer_info[i];
-	context_desc = E1000_CONTEXT_DESC(*tx_ring, i);
-	
-	// from FreeBSD
-	ehdrlen = ETHER_HDR_LEN;
-	ip = (struct ip *)((u8*)mbuf_data(skb) + ehdrlen);
-	ip_hlen = ip->ip_hl << 2;
-	hdr_len = ehdrlen + ip_hlen;
-
-	context_desc->lower_setup.ip_config = 0;
-#if USE_TX_IP_CHECKSUM
-	if(	checksumDemanded & kChecksumIP ){
-		/*
-		 * Start offset for header checksum calculation.
-		 * End offset for header checksum calculation.
-		 * Offset of place to put the checksum.
-		 */
-		context_desc->lower_setup.ip_fields.ipcss = ehdrlen;
-		context_desc->lower_setup.ip_fields.ipcse = cpu_to_le16(ehdrlen + ip_hlen);
-		context_desc->lower_setup.ip_fields.ipcso = ehdrlen + offsetof(struct ip, ip_sum);
-		cmd |= E1000_TXD_CMD_IP;
-	}
-#endif
-	//context_desc->upper_setup.tcp_config = 0;
-	if(	checksumDemanded & kChecksumTCP ){
-		/*
-		 * Start offset for payload checksum calculation.
-		 * End offset for payload checksum calculation.
-		 * Offset of place to put the checksum.
-		 */
-		context_desc->upper_setup.tcp_fields.tucss = hdr_len;
-		context_desc->upper_setup.tcp_fields.tucso = hdr_len + offsetof(struct tcphdr, th_sum);
-		cmd |= E1000_TXD_CMD_TCP;
-	}
-	if(	checksumDemanded & kChecksumUDP ){
-		/*
-		 * Start offset for header checksum calculation.
-		 * End offset for header checksum calculation.
-		 * Offset of place to put the checksum.
-		 */
-		context_desc->upper_setup.tcp_fields.tucss = hdr_len;
-		context_desc->upper_setup.tcp_fields.tucso = hdr_len + offsetof(struct udphdr, uh_sum);
-	}
-
-	context_desc->upper_setup.tcp_fields.tucse = 0;
-	context_desc->tcp_seg_setup.data = 0;
-	context_desc->cmd_and_length = cpu_to_le32(cmd);
-	
-	buffer_info->next_to_watch = i;
-	
-	i++;
-	if (i >= tx_ring->count)
-		i = 0;
-	tx_ring->next_to_use = i;
-	
-#endif
 	return true;
 }
 
