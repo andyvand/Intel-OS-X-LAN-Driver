@@ -1118,25 +1118,27 @@ static int e1000_tso(struct e1000_ring *tx_ring, struct sk_buff *skb, int* pSegs
 	mss = mssValue;
 
     struct tcphdr* tcph;
-	int ip_header_len;
+	int ip_header_len, nw_header_len;
     if (request & MBUF_TSO_IPV4) {
-		struct ip *iph = (struct ip*)mbuf_data(skb);
+		struct ip *iph = (struct ip*)((u8*)mbuf_data(skb)+ETHER_HDR_LEN);
 		ip_header_len = (iph->ip_hl<< 2);
+		nw_header_len = ip_header_len+ETHER_HDR_LEN;
 		iph->ip_len = 0;
 		iph->ip_sum = 0;
-		tcph = (tcphdr*)((u8*)iph + network_header_len);
+		tcph = (tcphdr*)((u8*)iph + ip_header_len);
         hdr_len = network_header_len + (tcph->th_off << 2);
-		mbuf_inet_cksum(skb, IPPROTO_TCP, 0, mbuf_pkthdr_len(skb) - ip_header_len, &tcph->th_sum);
+		mbuf_inet_cksum(skb, IPPROTO_TCP, 0, mbuf_pkthdr_len(skb) - nw_header_len, &tcph->th_sum);
 		cmd_length = E1000_TXD_CMD_IP;
 		ipcse = ip_header_len - 1;
         ipcso = (u8*)&(iph->ip_sum) - (u8*)mbuf_data(skb);
         rc = 4;
 	} else if (request & MBUF_TSO_IPV6) {
-		struct ip6_hdr *iph = (struct ip6_hdr*)mbuf_data(skb);
+		struct ip6_hdr *iph = (struct ip6_hdr*)((u8*)mbuf_data(skb)+ETHER_HDR_LEN);
 		ip_header_len = sizeof(struct ip6_hdr);
+		nw_header_len = ip_header_len+ETHER_HDR_LEN;
 		iph->ip6_ctlun.ip6_un1.ip6_un1_plen = 0;
 		tcph = (tcphdr*)((u8*)iph + sizeof(struct ip6_hdr));
-		mbuf_inet6_cksum(skb, IPPROTO_TCP, 0, mbuf_pkthdr_len(skb) - network_header_len, &tcph->th_sum);
+		mbuf_inet6_cksum(skb, IPPROTO_TCP, 0, mbuf_pkthdr_len(skb) - nw_header_len, &tcph->th_sum);
 		ipcse = 0;
         ipcso = 0;
         rc = 6;
@@ -1149,7 +1151,7 @@ static int e1000_tso(struct e1000_ring *tx_ring, struct sk_buff *skb, int* pSegs
     /* we do this workaround for ES2LAN, but it is un-necessary,
      * avoiding it could save a lot of cycles
      */
-    if (mbuf_len(skb) == ip_header_len + (tcph->th_off << 2)) {
+    if (mbuf_len(skb) == nw_header_len + (tcph->th_off << 2)) {
         unsigned int pull_size =  mbuf_pkthdr_len(skb);
         if(pull_size > 4)
             pull_size = 4;

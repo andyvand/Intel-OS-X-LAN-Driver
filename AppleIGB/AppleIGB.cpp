@@ -25,22 +25,37 @@ extern "C" {
 #define USE_HW_CSUM 1
 #define CAN_RECOVER_STALL	0
 
+/* IPv6 flags are not defined in 10.6 headers. */
+enum {
+	CSUM_TCPIPv6             = 0x0020,
+	CSUM_UDPIPv6             = 0x0040
+};
+
 #define	RELEASE(x)	{if(x)x->release();x=NULL;}
 
 static inline ip* ip_hdr(mbuf_t skb)
 {
-	return (ip*)mbuf_data(skb);
+	return (ip*)((u8*)mbuf_data(skb)+ETHER_HDR_LEN);
+}
+
+static inline struct tcphdr* tcp_hdr(mbuf_t skb)
+{
+	struct ip* iph = ip_hdr(skb);
+	return (struct tcphdr*)((u8*)iph + (iph->ip_hl << 2));
 }
 
 static inline struct ip6_hdr* ip6_hdr(mbuf_t skb)
 {
-	return (struct ip6_hdr*)mbuf_data(skb);
+	return (struct ip6_hdr*)((u8*)mbuf_data(skb)+ETHER_HDR_LEN);
 }
 
-static tcphdr* tcp_hdr(mbuf_t skb)
+static inline struct tcphdr* tcp6_hdr(mbuf_t skb)
 {
-	ip* ip = ip_hdr(skb);
-	return (tcphdr*)(((u8*)ip) + (ip->ip_hl<< 2));
+	struct ip6_hdr* ip6 = ip6_hdr(skb);
+	while(ip6->ip6_ctlun.ip6_un1.ip6_un1_nxt != IPPROTO_TCP){
+		ip6++;
+	}
+	return (struct tcphdr*)(ip6+1);
 }
 
 static void* kzalloc(size_t size)
@@ -4071,34 +4086,35 @@ static int igb_tso(struct igb_ring *tx_ring,
 	type_tucmd = E1000_ADVTXD_TUCMD_L4T_TCP;
 
 #ifdef	__APPLE__
+	u_int32_t dataLen = mbuf_pkthdr_len(skb);
 	struct tcphdr* tcph;
-	int network_header_len;
+	int nw_header_len;
 	if (request & MBUF_TSO_IPV4) {
 		struct ip *iph = ip_hdr(skb);
-		network_header_len = (iph->ip_hl<< 2);
+		tcph = tcp_hdr(skb);
+		nw_header_len = ((u8*)tcph - (u8*)iph);
 		iph->ip_len = 0;
 		iph->ip_sum = 0;
-		tcph = (tcphdr*)((u8*)iph + network_header_len);
-		mbuf_inet_cksum(skb, IPPROTO_TCP, 0, mbuf_pkthdr_len(skb) - network_header_len, &tcph->th_sum);
+		mbuf_inet_cksum(skb, IPPROTO_TCP, 0, dataLen - (nw_header_len+ETHER_HDR_LEN), &tcph->th_sum);
 		type_tucmd |= E1000_ADVTXD_TUCMD_IPV4;
 		first->tx_flags |= IGB_TX_FLAGS_TSO |
 		IGB_TX_FLAGS_CSUM |
 		IGB_TX_FLAGS_IPV4;
 	} else if (request & MBUF_TSO_IPV6) {
 		struct ip6_hdr *iph = ip6_hdr(skb);
-		network_header_len = sizeof(struct ip6_hdr);
+		tcph = tcp6_hdr(skb);
+		nw_header_len = ((u8*)tcph - (u8*)iph);
 		iph->ip6_ctlun.ip6_un1.ip6_un1_plen = 0;
-		tcph = (tcphdr*)((u8*)iph + sizeof(struct ip6_hdr));
-		mbuf_inet6_cksum(skb, IPPROTO_TCP, 0, mbuf_pkthdr_len(skb) - network_header_len, &tcph->th_sum);
+		mbuf_inet6_cksum(skb, IPPROTO_TCP, 0, dataLen - (nw_header_len+ETHER_HDR_LEN), &tcph->th_sum);
 		first->tx_flags |= IGB_TX_FLAGS_TSO |
 		IGB_TX_FLAGS_CSUM;
 	}
-	u16 gso_segs = (mbuf_pkthdr_len(skb) + (mssValue-1))/mssValue;
+	u16 gso_segs = (dataLen + (mssValue-1))/mssValue;
 
 	/* compute header lengths */
 	l4len = tcph->th_off << 2;
-	*hdr_len = ((u8*)tcph-(u8*)mbuf_data(skb)) + l4len;
-	
+	*hdr_len = ETHER_HDR_LEN + nw_header_len + l4len;
+
 	/* update gso size and bytecount with header size */
 	first->gso_segs = gso_segs;
 	first->bytecount += (first->gso_segs - 1) * *hdr_len;
@@ -4108,8 +4124,8 @@ static int igb_tso(struct igb_ring *tx_ring,
 	mss_l4len_idx |= mssValue << E1000_ADVTXD_MSS_SHIFT;
 	
 	/* VLAN MACLEN IPLEN */
-	vlan_macip_lens = network_header_len;
-	vlan_macip_lens |= (0) << E1000_ADVTXD_MACLEN_SHIFT;
+	vlan_macip_lens = nw_header_len;
+	vlan_macip_lens |= ETHER_HDR_LEN << E1000_ADVTXD_MACLEN_SHIFT;
 	vlan_macip_lens |= first->tx_flags & IGB_TX_FLAGS_VLAN_MASK;
 #else /* __APPLE__ */
 	if (first->protocol == __constant_htons(ETH_P_IP)) {
@@ -4171,10 +4187,9 @@ static void igb_tx_csum(struct igb_ring *tx_ring, struct igb_tx_buffer *first)
 	u32 type_tucmd = 0;
 
 #ifdef __APPLE__
-// #define     DEMAND_IPv6 (IONetworkController::kChecksumTCPIPv6|IONetworkController::kChecksumUDPIPv6)
-// #define     DEMAND_MASK (IONetworkController::kChecksumIP|IONetworkController::kChecksumTCP|IONetworkController::kChecksumUDP)
-#define     DEMAND_IPv6 0x0060
-#define     DEMAND_MASK 0x0067
+#define     DEMAND_IPv6 (CSUM_TCPIPv6|CSUM_UDPIPv6)
+#define     DEMAND_IPv4 (IONetworkController::kChecksumIP|IONetworkController::kChecksumTCP|IONetworkController::kChecksumUDP)
+#define     DEMAND_MASK (DEMAND_IPv6|DEMAND_IPv4)
 
 	UInt32 checksumDemanded;
 	tx_ring->netdev->getChecksumDemand(skb, IONetworkController::kChecksumFamilyTCPIP, &checksumDemanded);
@@ -4191,10 +4206,14 @@ static void igb_tx_csum(struct igb_ring *tx_ring, struct igb_tx_buffer *first)
 		/* Set the ether header length */
 		packet = (u8*)mbuf_data(skb) + ehdrlen;
 
-		if(checksumDemanded & DEMAND_IPv6)		// IPv6
-		{
-			ip_hlen = sizeof(struct ip6_hdr);
-			type_tucmd |= E1000_ADVTXD_TUCMD_IPV6;
+		if(checksumDemanded & DEMAND_IPv6){		// IPv6
+			struct ip6_hdr* ip6 = (struct ip6_hdr*)packet;
+			u_int8_t nexthdr;
+			do {
+				nexthdr = ip6->ip6_ctlun.ip6_un1.ip6_un1_nxt;
+				ip6++;
+			} while(nexthdr != IPPROTO_TCP && nexthdr != IPPROTO_UDP);
+			ip_hlen = (u8*)ip6 - packet;
 		} else {
 			struct ip *ip = (struct ip *)packet;
 			ip_hlen = ip->ip_hl << 2;
@@ -4206,9 +4225,13 @@ static void igb_tx_csum(struct igb_ring *tx_ring, struct igb_tx_buffer *first)
 		
 		if(checksumDemanded & IONetworkController::kChecksumTCP){
 			type_tucmd |= E1000_ADVTXD_TUCMD_L4T_TCP;
-			struct tcphdr* tcph = (struct tcphdr*)(packet + ip_hlen);
+			struct tcphdr* tcph = tcp_hdr(skb);
 			mss_l4len_idx = (tcph->th_off << 2) << E1000_ADVTXD_L4LEN_SHIFT;
-		} else if(checksumDemanded & IONetworkController::kChecksumUDP){
+		} else if(checksumDemanded & CSUM_TCPIPv6){
+			type_tucmd |= E1000_ADVTXD_TUCMD_L4T_TCP;
+			struct tcphdr* tcph = tcp6_hdr(skb);
+			mss_l4len_idx = (tcph->th_off << 2) << E1000_ADVTXD_L4LEN_SHIFT;
+		} else if(checksumDemanded & (IONetworkController::kChecksumUDP|CSUM_UDPIPv6)){
 			mss_l4len_idx = sizeof(struct udphdr) << E1000_ADVTXD_L4LEN_SHIFT;
 		}
 		
@@ -4332,7 +4355,7 @@ static void igb_tx_olinfo_status(struct igb_ring *tx_ring,
 	tx_desc->read.olinfo_status = cpu_to_le32(olinfo_status);
 }
 
-static void igb_tx_map(struct igb_ring *tx_ring,
+static bool igb_tx_map(struct igb_ring *tx_ring,
 		       struct igb_tx_buffer *first,
 		       const u8 hdr_len)
 {
@@ -4341,12 +4364,21 @@ static void igb_tx_map(struct igb_ring *tx_ring,
 	union e1000_adv_tx_desc *tx_desc;
 	dma_addr_t dma;
 #ifdef __APPLE__
-	UInt32 k,count;
+	UInt32 k,count,frags;
 	struct IOPhysicalSegment vec[MAX_SKB_FRAGS];
-	count = tx_ring->netdev->txCursor()->getPhysicalSegmentsWithCoalesce(skb, vec, MAX_SKB_FRAGS);
-	if(count == 0)
-		return;
+	frags = tx_ring->netdev->txCursor()->getPhysicalSegmentsWithCoalesce(skb, vec, MAX_SKB_FRAGS);
+	if(frags == 0)
+		return FALSE;
 
+	// check real count
+	count = 0;
+	for (k = 0; k < frags; k++){
+		count += (vec[k].length + (IGB_MAX_DATA_PER_TXD-1))/IGB_MAX_DATA_PER_TXD;
+	}
+	if (igb_desc_unused(tx_ring) < count + 3)
+		return FALSE;
+	
+	
 	unsigned int size;
 #else	// __APPLE__
 	unsigned int data_len, size;
@@ -4405,7 +4437,7 @@ static void igb_tx_map(struct igb_ring *tx_ring,
 		}
 		
 #ifdef __APPLE__
-		if(k >= count)
+		if(k >= frags)
 			break;
 #else
 		if (likely(!data_len))
@@ -4442,7 +4474,7 @@ static void igb_tx_map(struct igb_ring *tx_ring,
 
 #ifndef __APPLE__
 	netdev_tx_sent_queue(txring_txq(tx_ring), first->bytecount);
-#endif /* CONFIG_BQL */
+#endif
 
 	/* set the timestamp */
 	first->time_stamp = jiffies;
@@ -4472,8 +4504,8 @@ static void igb_tx_map(struct igb_ring *tx_ring,
 	 * at a time, it syncronizes IO on IA64/Altix systems */
 	mmiowb();
 
-	return;
-
+	return TRUE;
+#ifndef __APPLE__
 dma_error:
 	IOLog( "TX DMA map failed\n");
 
@@ -4489,6 +4521,8 @@ dma_error:
 	}
 
 	tx_ring->next_to_use = i;
+	return FALSE;
+#endif
 }
 
 static int __igb_maybe_stop_tx(struct igb_ring *tx_ring, const u16 size)
@@ -6501,8 +6535,11 @@ static inline void igb_rx_checksum(struct igb_ring *ring,
 	if (igb_test_staterr(rx_desc, E1000_RXD_STAT_IPCS)){
         flag |= IONetworkController::kChecksumIP;
     }
-	if (igb_test_staterr(rx_desc, E1000_RXD_STAT_TCPCS)){
-        flag |= IONetworkController::kChecksumTCP|IONetworkController::kChecksumUDP;
+	if (igb_test_staterr(rx_desc, (E1000_RXD_STAT_TCPCS))){
+        flag |= IONetworkController::kChecksumTCP | CSUM_TCPIPv6;
+    }
+	if (igb_test_staterr(rx_desc, (E1000_RXD_STAT_UDPCS))){
+        flag |= IONetworkController::kChecksumUDP | CSUM_UDPIPv6;
     }
     if(flag)
         ring->netdev->rxChecksumOK(skb, flag);
@@ -8871,7 +8908,8 @@ UInt32 AppleIGB::outputPacket(mbuf_t skb, void * param)
         } else if (!tso)
             igb_tx_csum(tx_ring, first);
 
-        igb_tx_map(tx_ring, first, hdr_len);
+        if(!igb_tx_map(tx_ring, first, hdr_len))
+			return kIOReturnOutputDropped;
 
 		/* Make sure there is space in the ring for the next send. */
 		//igb_maybe_stop_tx(tx_ring, MAX_SKB_FRAGS + 4);
@@ -9104,10 +9142,14 @@ IOReturn AppleIGB::getChecksumSupport(UInt32 *checksumMask, UInt32 checksumFamil
 		return kIOReturnUnsupported;
 	}
 #if USE_HW_CSUM
+	/*
+	 * kChecksumTCPIPv6 = 0x0020,
+	 * kChecksumUDPIPv6 = 0x0040,
+	 */
 	if( !isOutput ) {
-		*checksumMask = kChecksumTCP | kChecksumUDP | kChecksumIP;
+		*checksumMask = kChecksumTCP | kChecksumUDP | kChecksumIP | CSUM_TCPIPv6 | CSUM_UDPIPv6;
 	} else {
-		*checksumMask = kChecksumTCP | kChecksumUDP;
+		*checksumMask = kChecksumTCP | kChecksumUDP | CSUM_TCPIPv6 | CSUM_UDPIPv6;
 	}
 #endif
     return kIOReturnSuccess;
