@@ -59,7 +59,7 @@ static inline struct tcphdr* tcp6_hdr(mbuf_t skb)
 	return (struct tcphdr*)(ip6+1);
 }
 
-#define TBDS_PER_TCB 12
+#define TBDS_PER_TCB 32
 #define super IOEthernetController
 
 #define E1000_TX_FLAGS_CSUM		0x00000001
@@ -1133,7 +1133,8 @@ void e1000e_write_itr(struct e1000_adapter *adapter, u32 itr)
 #define E1000_TX_FLAGS_VLAN_MASK	0xffff0000
 #define E1000_TX_FLAGS_VLAN_SHIFT	16
 
-static int e1000_tso(struct e1000_ring *tx_ring, struct sk_buff *skb, int* pSegs)
+static int e1000_tso(struct e1000_ring *tx_ring, struct sk_buff *skb,
+                     int* pSegs, int* pHdrLen)
 {
 #ifdef NETIF_F_TSO
 	struct e1000_context_desc *context_desc;
@@ -1145,14 +1146,13 @@ static int e1000_tso(struct e1000_ring *tx_ring, struct sk_buff *skb, int* pSegs
     int rc = 0;
     
     mbuf_tso_request_flags_t request;
-    u_int32_t mssValue;
-    if(mbuf_get_tso_requested(skb, &request, &mssValue) || request == 0)
+    u_int32_t value;
+    if(mbuf_get_tso_requested(skb, &request, &value) || (request & (MBUF_TSO_IPV4|MBUF_TSO_IPV6)) == 0)
 		return 0;
-    
-	mss = mssValue;
+    mss = value;
 
     struct tcphdr* tcph;
-	int ip_header_len, nw_header_len;
+	int nw_header_len;
 	u_int32_t dataLen = mbuf_pkthdr_len(skb);
 	u8* dataAddr = (u8*)mbuf_data(skb);
     if (request & MBUF_TSO_IPV4) {
@@ -1163,7 +1163,7 @@ static int e1000_tso(struct e1000_ring *tx_ring, struct sk_buff *skb, int* pSegs
 		iph->ip_sum = 0;
 		mbuf_inet_cksum(skb, IPPROTO_TCP, 0, dataLen - (nw_header_len+ETH_HLEN), &tcph->th_sum);
 		cmd_length = E1000_TXD_CMD_IP;
-		ipcse = ip_header_len - 1;
+		ipcse = (u8*)tcph - dataAddr - 1;
         ipcso = (u8*)&(iph->ip_sum) - dataAddr;
         rc = 4;
 	} else if (request & MBUF_TSO_IPV6) {
@@ -1171,13 +1171,12 @@ static int e1000_tso(struct e1000_ring *tx_ring, struct sk_buff *skb, int* pSegs
 		tcph = tcp6_hdr(skb);
 		nw_header_len = ((u8*)tcph - (u8*)iph);
 		iph->ip6_ctlun.ip6_un1.ip6_un1_plen = 0;
-		tcph = (tcphdr*)((u8*)iph + sizeof(struct ip6_hdr));
 		mbuf_inet6_cksum(skb, IPPROTO_TCP, 0, dataLen - (nw_header_len+ETH_HLEN), &tcph->th_sum);
 		ipcse = 0;
         ipcso = 0;
         rc = 6;
 	}
-	hdr_len = ETH_HLEN + nw_header_len + (tcph->th_off << 2);
+	hdr_len = (u8*)tcph - dataAddr + (tcph->th_off * 4);
 
     /* TSO Workaround for 82571/2/3 Controllers -- if skb->data
      * points to just header, pull a few bytes of payload from
@@ -1187,9 +1186,7 @@ static int e1000_tso(struct e1000_ring *tx_ring, struct sk_buff *skb, int* pSegs
      * avoiding it could save a lot of cycles
      */
     if (mbuf_len(skb) == hdr_len) {
-        unsigned int pull_size = dataLen - hdr_len;
-        if(pull_size > 4)
-            pull_size = 4;
+        unsigned int pull_size = 4;
         if (mbuf_pullup(&skb, pull_size)) {
             IOLog("mbuf_pullup failed.\n");
             return -1;
@@ -1197,11 +1194,11 @@ static int e1000_tso(struct e1000_ring *tx_ring, struct sk_buff *skb, int* pSegs
     }
 
 	ipcss = ETH_HLEN;
-	tucss = nw_header_len+ETH_HLEN;
+	tucss = (u8*)tcph - dataAddr;
 	tucso = (u8*)&(tcph->th_sum) - dataAddr;
     
 	cmd_length |= (E1000_TXD_CMD_DEXT | E1000_TXD_CMD_TSE |
-                   E1000_TXD_CMD_TCP | dataLen - (hdr_len));
+                   E1000_TXD_CMD_TCP | (dataLen - (hdr_len)));
     
 	i = tx_ring->next_to_use;
 	context_desc = E1000_CONTEXT_DESC(*tx_ring, i);
@@ -1225,44 +1222,63 @@ static int e1000_tso(struct e1000_ring *tx_ring, struct sk_buff *skb, int* pSegs
 		i = 0;
 	tx_ring->next_to_use = i;
 
-    *pSegs = (mbuf_pkthdr_len(skb) + (mssValue-1))/mssValue;
+    *pSegs = (dataLen + (mss-1))/mss;
+    *pHdrLen = hdr_len;
 
-	return 1;
+	return rc;
 #else /* NETIF_F_TSO */
 	return 0;
 #endif /* NETIF_F_TSO */
 }
 
-static int e1000_tx_map(struct e1000_adapter *adapter, mbuf_t skb, unsigned int first,
-                        IOMbufNaturalMemoryCursor * txMbufCursor, int segs )
+static int e1000_tx_map(struct e1000_adapter *adapter, mbuf_t skb,
+                        unsigned int first,unsigned int max_per_txd,
+                        IOMbufNaturalMemoryCursor * txMbufCursor,
+                        int segs, int hdrLen )
 {
 	struct e1000_ring *tx_ring = adapter->tx_ring;
 	struct e1000_buffer *buffer_info;
-	unsigned int count = 0, i;
+	unsigned int count = 0, i, len, size, offset;
 	unsigned int f, bytecount;
 
-	unsigned int nr_frags;
+	unsigned int nr_frags, nBlocks;
 	IOPhysicalSegment tx_segments[TBDS_PER_TCB];
 	nr_frags = txMbufCursor->getPhysicalSegmentsWithCoalesce(skb, &tx_segments[0], TBDS_PER_TCB);
+	if (nr_frags == 0 )
+		return -1;
 
-	
+    nBlocks = 0;
+    if(segs > 1) // TSO
+        nBlocks += 1;
+    for(f = 0; f < nr_frags; f++){
+        nBlocks += (tx_segments[f].length + (max_per_txd-1))/max_per_txd;
+    }
+	if ( e1000_desc_unused(adapter->tx_ring) < nBlocks+2)
+		return -1;
+
 	i = tx_ring->next_to_use;
 	
 	bytecount = 0;
 	for(f = 0; f < nr_frags; f++) {
 		buffer_info = &tx_ring->buffer_info[i];
-		buffer_info->length = tx_segments[f].length;
-		buffer_info->time_stamp = jiffies();
-		buffer_info->next_to_watch = i;
-		bytecount += tx_segments[f].length;
-		buffer_info->dma = tx_segments[f].location;
-		buffer_info->mapped_as_page = false;
+        len = tx_segments[f].length;
+        offset = 0;
+        while( len > 0){
+			size = min(len, max_per_txd);
+            buffer_info->length = size;
+            buffer_info->time_stamp = jiffies();
+            buffer_info->next_to_watch = i;
+            buffer_info->dma = tx_segments[f].location + offset;
+            buffer_info->mapped_as_page = false;
+            
+			len -= size;
+			offset += size;
+            count++;
 
-		count++;
-		
-		i++;
-		if (i == tx_ring->count)
-			i = 0;
+            i++;
+            if (i == tx_ring->count)
+                i = 0;
+        }
 	}
 	
 	if (i == 0)
@@ -1271,7 +1287,7 @@ static int e1000_tx_map(struct e1000_adapter *adapter, mbuf_t skb, unsigned int 
 		i--;
 	
 	/* multiply data chunks by size of headers */
-	//bytecount = ((segs - 1) * mbuf_pkthdr_len(skb)) +mbuf_len(skb);
+	bytecount = ((segs - 1) * hdrLen) +mbuf_pkthdr_len(skb);
 
 	tx_ring->buffer_info[i].skb = skb;
 	tx_ring->buffer_info[i].segs = segs;
@@ -2301,7 +2317,7 @@ UInt32 AppleIntelE1000e::outputPacket(mbuf_t skb, void * param)
 	struct e1000_ring *tx_ring = adapter->tx_ring;
 	unsigned int first;
 	unsigned int tx_flags = 0;
-	int tso, segs = 1;
+	int tso, segs = 1, hdrLen = 0;
 	int count = 0;
 	
 	if (enabledForNetif == false) {             // drop the packet.
@@ -2331,32 +2347,33 @@ UInt32 AppleIntelE1000e::outputPacket(mbuf_t skb, void * param)
 		tx_flags |= E1000_TX_FLAGS_VLAN;
 		tx_flags |= (vlan << E1000_TX_FLAGS_VLAN_SHIFT);
 	}
+
+	first = tx_ring->next_to_use;
 	
-	tso = e1000_tso(tx_ring, skb, &segs);
+	tso = e1000_tso(tx_ring, skb, &segs, &hdrLen);
     if(tso < 0)
         return kIOReturnOutputDropped;
     if(tso){
 		tx_flags |= E1000_TX_FLAGS_TSO;
         if (tso == 4)
             tx_flags |= E1000_TX_FLAGS_IPV4;
-    } else if (e1000_tx_csum(skb)){
+    } else if (e1000_tx_csum(skb, &tso)){
 		tx_flags |= E1000_TX_FLAGS_CSUM;
-        tx_flags |= E1000_TX_FLAGS_IPV4;
+        if (tso == 4)
+            tx_flags |= E1000_TX_FLAGS_IPV4;
     }
 	/* Old method was to assume IPv4 packet by default if TSO was enabled.
 	 * 82571 hardware supports TSO capabilities for IPv6 as well...
 	 * no longer assume, we must.
 	 */
 
-	first = tx_ring->next_to_use;
-	count = e1000_tx_map(adapter, skb, first, txMbufCursor, segs);
+	count = e1000_tx_map(adapter, skb, first, adapter->tx_fifo_limit,
+                         txMbufCursor, segs, hdrLen);
 	
 	if (count <= 0) {
 		IOLog("failed to getphysicalsegment in outputPacket.\n");
 		return kIOReturnOutputDropped;
 	}
-#ifdef HAVE_HW_TIME_STAMP
-#endif
 
 	e1000_tx_queue(tx_ring, tx_flags, count);
 	
@@ -2391,50 +2408,14 @@ const OSString * AppleIntelE1000e::newModelString() const
 
 IOReturn AppleIntelE1000e::selectMedium(const IONetworkMedium * medium)
 {
-	e_dbg("IOReturn AppleIntelE1000e::selectMedium(const IONetworkMedium * medium).\n");
-	bool link;
-	e1000_adapter *adapter = &priv_adapter;
-	
-	link = e1000e_setup_copper_link(&adapter->hw);
-	
-	if (OSDynamicCast(IONetworkMedium, medium) == 0) {
-		// Defaults to Auto.
+    if(medium == NULL)
 		medium = mediumTable[MEDIUM_INDEX_AUTO];
-	}
-	
-	
-	if (link) {
-		adapter->hw.mac.ops.get_link_up_info(&adapter->hw,
-											&adapter->link_speed,
-											&adapter->link_duplex);
-		switch(adapter->link_speed) {
-			case SPEED_1000:
-				medium = mediumTable[MEDIUM_INDEX_1000FD];
-				break;
-			case SPEED_100:
-				if (adapter->link_duplex == FULL_DUPLEX) {
-					medium = mediumTable[MEDIUM_INDEX_100FD];
-				} else {
-					medium = mediumTable[MEDIUM_INDEX_100HD];
-				}
-				break;
-			case SPEED_10:
-				if (adapter->link_duplex == FULL_DUPLEX) {
-					medium = mediumTable[MEDIUM_INDEX_10FD];
-				} else {
-					medium = mediumTable[MEDIUM_INDEX_10HD];
-				}
-				break;
-			default:
-				break;
-		}
-	}
-	
-	if (medium) {
-		if (!setCurrentMedium(medium)) {
-			e_dbg("setCurrentMedium error.\n");
-		}
-	}
+	e_dbg("IOReturn AppleIntelE1000e::selectMedium(%lld,%x).\n",medium->getSpeed(),medium->getFlags());
+
+    if (!setCurrentMedium(medium)) {
+        e_dbg("setCurrentMedium error.\n");
+        medium = NULL;
+    }
 	
 	return ( medium ? kIOReturnSuccess : kIOReturnIOError );
 }
@@ -4470,7 +4451,7 @@ void AppleIntelE1000e::e1000_rx_checksum(mbuf_t skb, u32 status_err)
 }
 
 
-bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
+bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb, int* ipv)
 {
 	struct e1000_adapter *adapter = &priv_adapter;
 	struct e1000_ring *tx_ring = adapter->tx_ring;
@@ -4485,6 +4466,7 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 
 	u8* nw_start = (u8*)mbuf_data(skb)+ETH_HLEN;
 	
+    *ipv = 0;
 	UInt32 checksumDemanded;
 	getChecksumDemand(skb, kChecksumFamilyTCPIP, &checksumDemanded);
 	if(checksumDemanded & (kChecksumTCP|kChecksumUDP)){
@@ -4498,6 +4480,7 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 		context_desc->lower_setup.ip_fields.ipcso = ETH_HLEN + offsetof(struct ip, ip_sum);
 		context_desc->lower_setup.ip_fields.ipcse = cpu_to_le16(ETH_HLEN + ip_hlen - 1);
 		
+        *ipv = 4;
 	} else if(checksumDemanded & (CSUM_TCPIPv6|CSUM_UDPIPv6)){
 		struct ip6_hdr* ip6 = (struct ip6_hdr*)nw_start;
 		u_int8_t nexthdr;
@@ -4506,6 +4489,8 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 			ip6++;
 		} while(nexthdr != IPPROTO_TCP && nexthdr != IPPROTO_UDP);
 		ip_hlen = (u8*)ip6 - nw_start;
+
+        *ipv = 6;
 	} else {
 		return false;
 	}
