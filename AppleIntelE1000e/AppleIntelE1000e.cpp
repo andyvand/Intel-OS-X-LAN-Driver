@@ -1643,7 +1643,7 @@ static bool e1000e_has_link(struct e1000_adapter *adapter)
 /////////////////
 
 
-OSDefineMetaClassAndStructors(AppleIntelE1000e, super);
+OSDefineMetaClassAndStructors(AppleIntelE1000e, super)
 
 
 void AppleIntelE1000e::free()
@@ -2410,14 +2410,72 @@ IOReturn AppleIntelE1000e::selectMedium(const IONetworkMedium * medium)
 {
     if(medium == NULL)
 		medium = mediumTable[MEDIUM_INDEX_AUTO];
-	e_dbg("IOReturn AppleIntelE1000e::selectMedium(%lld,%x).\n",medium->getSpeed(),medium->getFlags());
+    IOMediumType type = medium->getType();
+	e_dbg("IOReturn AppleIntelE1000e::selectMedium(%x,%lld).\n",type,medium->getSpeed());
 
-    if (!setCurrentMedium(medium)) {
-        e_dbg("setCurrentMedium error.\n");
-        medium = NULL;
+    e1000_adapter *adapter = &priv_adapter;
+
+#define ADVERTISED_1000baseT_Full       (1 << 5)
+#define ADVERTISED_Autoneg              (1 << 6)
+#define ADVERTISED_TP                   (1 << 7)
+#define ADVERTISED_FIBRE                (1 << 10)
+    
+    if(type == kIOMediumEthernetAuto){ /* auto negotation */
+        struct e1000_hw* hw = &adapter->hw;
+		hw->mac.autoneg = 1;
+		if (hw->phy.media_type == e1000_media_type_fiber)
+			hw->phy.autoneg_advertised = ADVERTISED_1000baseT_Full |
+            ADVERTISED_FIBRE | ADVERTISED_Autoneg;
+		else
+			hw->phy.autoneg_advertised = ADVERTISED_1000baseT_Full |
+            ADVERTISED_TP | ADVERTISED_Autoneg;
+		if (adapter->fc_autoneg)
+			hw->fc.requested_mode = e1000_fc_default;
+    } else {
+        struct e1000_mac_info *mac = &adapter->hw.mac;
+        /* Fiber NICs only allow 1000 gbps Full duplex */
+        if (adapter->hw.phy.media_type == e1000_media_type_fiber &&
+            type != (kIOMediumEthernet1000BaseT | kIOMediumOptionFullDuplex)) {
+            return kIOReturnIOError;
+        }
+        
+        mac->autoneg = 0;
+        switch (type) {
+            case kIOMediumEthernet10BaseT | kIOMediumOptionHalfDuplex:
+                mac->forced_speed_duplex = ADVERTISE_10_HALF;
+                break;
+            case kIOMediumEthernet10BaseT | kIOMediumOptionFullDuplex:
+                mac->forced_speed_duplex = ADVERTISE_10_FULL;
+                break;
+            case kIOMediumEthernet100BaseTX | kIOMediumOptionHalfDuplex:
+                mac->forced_speed_duplex = ADVERTISE_100_HALF;
+                break;
+            case kIOMediumEthernet100BaseTX | kIOMediumOptionFullDuplex:
+                mac->forced_speed_duplex = ADVERTISE_100_FULL;
+                break;
+            case kIOMediumEthernet1000BaseT | kIOMediumOptionFullDuplex:
+                mac->autoneg = 1;
+                adapter->hw.phy.autoneg_advertised = ADVERTISE_1000_FULL;
+                break;
+            default:
+                return kIOReturnIOError;
+        }
+        
+        /* clear MDI, MDI(-X) override is only allowed when autoneg enabled */
+        adapter->hw.phy.mdix = AUTO_ALL_MODES;
+    
     }
-	
-	return ( medium ? kIOReturnSuccess : kIOReturnIOError );
+
+	/* reset the link */
+	if (enabledForNetif) {
+		e1000e_down(true);
+		e1000e_up();
+	} else {
+		e1000e_reset(adapter);
+	}
+    
+    setCurrentMedium(medium);
+	return kIOReturnSuccess;
 }
 
 bool AppleIntelE1000e::configureInterface(IONetworkInterface * interface)
