@@ -7409,57 +7409,6 @@ static void igb_restore_vlan(struct igb_adapter *adapter)
 #endif
 #endif  // __APPLE__
 }
-
-int igb_set_spd_dplx(struct igb_adapter *adapter, u16 spddplx)
-{
-	struct e1000_mac_info *mac = &adapter->hw.mac;
-
-	mac->autoneg = 0;
-
-	/*
-	 * SerDes device's only allow 2.5/1000 gbps Full duplex
-	 * and 100Mbps Full duplex for 100baseFx sfp
-	 */
-	if (adapter->hw.phy.media_type == e1000_media_type_internal_serdes) {
-		switch (spddplx) {
-			case SPEED_10 + DUPLEX_HALF:
-			case SPEED_10 + DUPLEX_FULL:
-			case SPEED_100 + DUPLEX_HALF:
-				IOLog("Unsupported Speed/Duplex configuration\n");
-				return -EINVAL;
-			default:
-				break;
-		}
-	}
-
-	switch (spddplx) {
-	case SPEED_10 + DUPLEX_HALF:
-		mac->forced_speed_duplex = ADVERTISE_10_HALF;
-		break;
-	case SPEED_10 + DUPLEX_FULL:
-		mac->forced_speed_duplex = ADVERTISE_10_FULL;
-		break;
-	case SPEED_100 + DUPLEX_HALF:
-		mac->forced_speed_duplex = ADVERTISE_100_HALF;
-		break;
-	case SPEED_100 + DUPLEX_FULL:
-		mac->forced_speed_duplex = ADVERTISE_100_FULL;
-		break;
-	case SPEED_1000 + DUPLEX_FULL:
-		mac->autoneg = 1;
-		adapter->hw.phy.autoneg_advertised = ADVERTISE_1000_FULL;
-		break;
-	case SPEED_1000 + DUPLEX_HALF: /* not supported */
-	default:
-		IOLog( "Unsupported Speed/Duplex configuration\n");
-		return -EINVAL;
-	}
-
-	/* clear MDI, MDI(-X) override is only allowed when autoneg enabled */
-	adapter->hw.phy.mdix = AUTO_ALL_MODES;
-
-	return 0;
-}
 	
 #ifndef	__APPLE__
 static int __igb_shutdown(struct pci_dev *pdev, bool *enable_wake,
@@ -8978,53 +8927,104 @@ const OSString * AppleIGB::newModelString() const
 	return OSString::withCString("Unknown");
 }
 
+#define ADVERTISED_100baseT_Full        (1 << 3)
+#define ADVERTISED_1000baseT_Full       (1 << 5)
+#define ADVERTISED_Autoneg              (1 << 6)
+#define ADVERTISED_TP                   (1 << 7)
+#define ADVERTISED_FIBRE                (1 << 10)
+#define ADVERTISED_2500baseX_Full       (1 << 15)
 IOReturn AppleIGB::selectMedium(const IONetworkMedium * medium)
 {
-	bool link;
-	igb_adapter *adapter = &priv_adapter;
-	
-	//link = e1000e_setup_copper_link(&adapter->hw);
-	
-	if (OSDynamicCast(IONetworkMedium, medium) == 0) {
-		// Defaults to Auto.
+    if(medium == NULL)
 		medium = mediumTable[MEDIUM_INDEX_AUTO];
-	}
+    IOMediumType type = medium->getType();
+
+	igb_adapter *adapter = &priv_adapter;
+	struct e1000_hw *hw = &adapter->hw;
 	
-	
-	if (link) {
-		adapter->hw.mac.ops.get_link_up_info(&adapter->hw,
-											&adapter->link_speed,
-											&adapter->link_duplex);
-		switch(adapter->link_speed) {
-			case SPEED_1000:
-				medium = mediumTable[MEDIUM_INDEX_1000FD];
+    if(type == kIOMediumEthernetAuto){ /* auto negotation */
+		hw->mac.autoneg = 1;
+		if (hw->phy.media_type == e1000_media_type_fiber) {
+			hw->phy.autoneg_advertised = ADVERTISED_1000baseT_Full |
+			ADVERTISED_FIBRE |
+			ADVERTISED_Autoneg;
+			switch (adapter->link_speed) {
+				case SPEED_2500:
+					hw->phy.autoneg_advertised =
+					ADVERTISED_2500baseX_Full;
+					break;
+				case SPEED_1000:
+					hw->phy.autoneg_advertised =
+					ADVERTISED_1000baseT_Full;
+					break;
+				case SPEED_100:
+					hw->phy.autoneg_advertised =
+					ADVERTISED_100baseT_Full;
+					break;
+				default:
+					break;
+			}
+		} else {
+			hw->phy.autoneg_advertised = ADVERTISED_1000baseT_Full |
+			ADVERTISED_TP |
+			ADVERTISED_Autoneg;
+		}
+	} else {
+		struct e1000_mac_info *mac = &adapter->hw.mac;
+		
+		mac->autoneg = 0;
+		
+		/*
+		 * SerDes device's only allow 2.5/1000 gbps Full duplex
+		 * and 100Mbps Full duplex for 100baseFx sfp
+		 */
+		if (hw->phy.media_type == e1000_media_type_internal_serdes) {
+			switch (type) {
+				case kIOMediumEthernet10BaseT | kIOMediumOptionHalfDuplex:
+				case kIOMediumEthernet10BaseT | kIOMediumOptionFullDuplex:
+				case kIOMediumEthernet100BaseTX | kIOMediumOptionHalfDuplex:
+					IOLog("Unsupported Speed/Duplex configuration\n");
+					return kIOReturnIOError;
+				default:
+					break;
+			}
+		}
+		
+		switch (type) {
+			case kIOMediumEthernet10BaseT | kIOMediumOptionHalfDuplex:
+				mac->forced_speed_duplex = ADVERTISE_10_HALF;
 				break;
-			case SPEED_100:
-				if (adapter->link_duplex == FULL_DUPLEX) {
-					medium = mediumTable[MEDIUM_INDEX_100FD];
-				} else {
-					medium = mediumTable[MEDIUM_INDEX_100HD];
-				}
+			case kIOMediumEthernet10BaseT | kIOMediumOptionFullDuplex:
+				mac->forced_speed_duplex = ADVERTISE_10_FULL;
 				break;
-			case SPEED_10:
-				if (adapter->link_duplex == FULL_DUPLEX) {
-					medium = mediumTable[MEDIUM_INDEX_10FD];
-				} else {
-					medium = mediumTable[MEDIUM_INDEX_10HD];
-				}
+			case kIOMediumEthernet100BaseTX | kIOMediumOptionHalfDuplex:
+				mac->forced_speed_duplex = ADVERTISE_100_HALF;
+				break;
+			case kIOMediumEthernet100BaseTX | kIOMediumOptionFullDuplex:
+				mac->forced_speed_duplex = ADVERTISE_100_FULL;
+				break;
+			case kIOMediumEthernet1000BaseT | kIOMediumOptionFullDuplex:
+				mac->autoneg = 1;
+				hw->phy.autoneg_advertised = ADVERTISE_1000_FULL;
 				break;
 			default:
-				break;
+				IOLog( "Unsupported Speed/Duplex configuration\n");
+				return kIOReturnIOError;
 		}
+		
+		/* clear MDI, MDI(-X) override is only allowed when autoneg enabled */
+		hw->phy.mdix = AUTO_ALL_MODES;
 	}
-	
-	if (medium) {
-		if (!setCurrentMedium(medium)) {
-			IOLog("AppleIGB::setCurrentMedium error.\n");
-		}
+	/* reset the link */
+	if (running()){
+		igb_down(adapter);
+		igb_up(adapter);
 	}
-	
-	return ( medium ? kIOReturnSuccess : kIOReturnIOError );
+	else
+		igb_reset(adapter);
+    
+    setCurrentMedium(medium);
+	return kIOReturnSuccess;
 }
 
 bool AppleIGB::configureInterface(IONetworkInterface * interface)
