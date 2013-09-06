@@ -17,11 +17,11 @@
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.4.14</string>
+	<string>2.5.4</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>2.4.14</string>
+	<string>2.5.4</string>
 	<key>IOKitPersonalities</key>
 	<dict>
 		<key>I21X</key>
@@ -31,7 +31,7 @@
 			<key>IOClass</key>
 			<string>${PRODUCT_NAME}</string>
 			<key>IOPCIMatch</key>
-			<string>0x153a8086 0x153b8086 0x15598086 0x155a8086</string>
+			<string>0x153a8086 0x153b8086 0x15598086 0x155a8086 0x15a08086 0x15a18086 0x15a28086 0x15a38086</string>
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
 		</dict>
