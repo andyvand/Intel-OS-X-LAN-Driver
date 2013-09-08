@@ -1144,7 +1144,7 @@ static int e1000_tso(struct e1000_ring *tx_ring, struct sk_buff *skb,
 	u16 ipcse = 0, mss;
 	u8 ipcss, ipcso, tucss, tucso, hdr_len;
     int rc = 0;
-    
+
     mbuf_tso_request_flags_t request;
     u_int32_t value;
     if(mbuf_get_tso_requested(skb, &request, &value) || (request & (MBUF_TSO_IPV4|MBUF_TSO_IPV6)) == 0)
@@ -1152,30 +1152,33 @@ static int e1000_tso(struct e1000_ring *tx_ring, struct sk_buff *skb,
     mss = value;
 
     struct tcphdr* tcph;
-	int nw_header_len;
-	u_int32_t dataLen = mbuf_pkthdr_len(skb);
+	int ip_hlen;
+	u_int16_t csum;
+	u_int32_t skbLen = mbuf_pkthdr_len(skb);
 	u8* dataAddr = (u8*)mbuf_data(skb);
     if (request & MBUF_TSO_IPV4) {
 		struct ip *iph = ip_hdr(skb);
 		tcph = tcp_hdr(skb);
-		nw_header_len = ((u8*)tcph - (u8*)iph);
+		ip_hlen = ((u8*)tcph - (u8*)iph);
 		iph->ip_len = 0;
 		iph->ip_sum = 0;
-		mbuf_inet_cksum(skb, IPPROTO_TCP, 0, dataLen - (nw_header_len+ETH_HLEN), &tcph->th_sum);
+		if(mbuf_inet_cksum(skb, IPPROTO_TCP, (ip_hlen+ETH_HLEN), skbLen - (ip_hlen+ETH_HLEN), &csum))
+			e_dbg("mbuf_inet_cksum failed.\n");
 		cmd_length = E1000_TXD_CMD_IP;
-		ipcse = (u8*)tcph - dataAddr - 1;
-        ipcso = (u8*)&(iph->ip_sum) - dataAddr;
+		ipcse = ETH_HLEN + ip_hlen - 1;
+        ipcso = ETH_HLEN + offsetof(struct ip, ip_sum);
         rc = 4;
 	} else if (request & MBUF_TSO_IPV6) {
 		struct ip6_hdr *iph = ip6_hdr(skb);
 		tcph = tcp6_hdr(skb);
-		nw_header_len = ((u8*)tcph - (u8*)iph);
+		ip_hlen = ((u8*)tcph - (u8*)iph);
 		iph->ip6_ctlun.ip6_un1.ip6_un1_plen = 0;
-		mbuf_inet6_cksum(skb, IPPROTO_TCP, 0, dataLen - (nw_header_len+ETH_HLEN), &tcph->th_sum);
+		mbuf_inet6_cksum(skb, IPPROTO_TCP, (ip_hlen+ETH_HLEN), skbLen - (ip_hlen+ETH_HLEN), &csum);
 		ipcse = 0;
         ipcso = 0;
         rc = 6;
 	}
+	tcph->th_sum = ~csum;
 	hdr_len = (u8*)tcph - dataAddr + (tcph->th_off * 4);
 
     /* TSO Workaround for 82571/2/3 Controllers -- if skb->data
@@ -1194,11 +1197,11 @@ static int e1000_tso(struct e1000_ring *tx_ring, struct sk_buff *skb,
     }
 
 	ipcss = ETH_HLEN;
-	tucss = (u8*)tcph - dataAddr;
-	tucso = (u8*)&(tcph->th_sum) - dataAddr;
+	tucss = ETH_HLEN + ip_hlen;
+	tucso = ETH_HLEN + ip_hlen + offsetof(struct tcphdr, th_sum);
     
 	cmd_length |= (E1000_TXD_CMD_DEXT | E1000_TXD_CMD_TSE |
-                   E1000_TXD_CMD_TCP | (dataLen - (hdr_len)));
+                   E1000_TXD_CMD_TCP | (skbLen - (hdr_len)));
     
 	i = tx_ring->next_to_use;
 	context_desc = E1000_CONTEXT_DESC(*tx_ring, i);
@@ -1222,9 +1225,14 @@ static int e1000_tso(struct e1000_ring *tx_ring, struct sk_buff *skb,
 		i = 0;
 	tx_ring->next_to_use = i;
 
-    *pSegs = (dataLen + (mss-1))/mss;
+    *pSegs = ((skbLen - hdr_len) + (mss-1))/mss;
     *pHdrLen = hdr_len;
 
+	e_dbg("e1000_tso: skbLen=%d, hdr_len=%d(%d,%d), mss=%d, segs=%d, rc=%d\n",
+		  (int)skbLen, (int)hdr_len,
+		  (int)ip_hlen, (int)(tcph->th_off * 4),
+		  (int)mss, *pSegs,
+		  rc);
 	return rc;
 #else /* NETIF_F_TSO */
 	return 0;
@@ -1248,43 +1256,38 @@ static int e1000_tx_map(struct e1000_adapter *adapter, mbuf_t skb,
 		return -1;
 
     nBlocks = 0;
-    if(segs > 1) // TSO
-        nBlocks += 1;
     for(f = 0; f < nr_frags; f++){
         nBlocks += (tx_segments[f].length + (max_per_txd-1))/max_per_txd;
     }
 	if ( e1000_desc_unused(adapter->tx_ring) < nBlocks+2)
 		return -1;
 
-	i = tx_ring->next_to_use;
-	
+	i = tx_ring->next_to_use - 1; // incremented at loop top
+
 	bytecount = 0;
 	for(f = 0; f < nr_frags; f++) {
-		buffer_info = &tx_ring->buffer_info[i];
         len = tx_segments[f].length;
         offset = 0;
-        while( len > 0){
+
+        while(len){
+            i++;
+            if (i == tx_ring->count)
+                i = 0;
+
+			buffer_info = &tx_ring->buffer_info[i];
 			size = min(len, max_per_txd);
+
             buffer_info->length = size;
             buffer_info->time_stamp = jiffies();
             buffer_info->next_to_watch = i;
             buffer_info->dma = tx_segments[f].location + offset;
-            buffer_info->mapped_as_page = false;
             
 			len -= size;
 			offset += size;
             count++;
 
-            i++;
-            if (i == tx_ring->count)
-                i = 0;
         }
 	}
-	
-	if (i == 0)
-		i = tx_ring->count - 1;
-	else
-		i--;
 	
 	/* multiply data chunks by size of headers */
 	bytecount = ((segs - 1) * hdrLen) +mbuf_pkthdr_len(skb);
@@ -1342,8 +1345,7 @@ static void e1000_tx_queue(struct e1000_ring *tx_ring, int tx_flags, int count)
 		buffer_info = &tx_ring->buffer_info[i];
 		tx_desc = E1000_TX_DESC(*tx_ring, i);
 		tx_desc->buffer_addr = cpu_to_le64(buffer_info->dma);
-		tx_desc->lower.data =
-		cpu_to_le32(txd_lower | buffer_info->length);
+		tx_desc->lower.data = cpu_to_le32(txd_lower | buffer_info->length);
 		tx_desc->upper.data = cpu_to_le32(txd_upper);
 		
 		i++;
@@ -2373,6 +2375,8 @@ UInt32 AppleIntelE1000e::outputPacket(mbuf_t skb, void * param)
 	
 	if (count <= 0) {
 		IOLog("failed to getphysicalsegment in outputPacket.\n");
+		tx_ring->buffer_info[first].time_stamp = 0;
+		tx_ring->next_to_use = first;
 		return kIOReturnOutputDropped;
 	}
 
@@ -4566,7 +4570,7 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb, int* ipv)
 	struct e1000_context_desc *context_desc;
 	struct e1000_buffer *buffer_info;
 	unsigned int i, ip_hlen;
-	u32 txd_cmd = 0;
+	u32 cmd_len = E1000_TXD_CMD_DEXT;
 
 	i = tx_ring->next_to_use;
 	buffer_info = &tx_ring->buffer_info[i];
@@ -4614,7 +4618,7 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb, int* ipv)
 		context_desc->upper_setup.tcp_fields.tucso =
 			ETH_HLEN + ip_hlen +
 			offsetof(struct tcphdr, th_sum);
-			txd_cmd |= E1000_TXD_CMD_TCP;
+			cmd_len |= E1000_TXD_CMD_TCP;
 	} else if (checksumDemanded & (kChecksumUDP|CSUM_UDPIPv6)){
 		context_desc->upper_setup.tcp_fields.tucso =
 			ETH_HLEN + ip_hlen +
@@ -4622,7 +4626,7 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb, int* ipv)
 	}
 	
 	context_desc->tcp_seg_setup.data = cpu_to_le32(0);
-	context_desc->cmd_and_length = cpu_to_le32(adapter->txd_cmd | E1000_TXD_CMD_DEXT);
+	context_desc->cmd_and_length = cpu_to_le32(cmd_len);
 
 	buffer_info->next_to_watch = i;
 	
