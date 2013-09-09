@@ -25,6 +25,9 @@ extern "C" {
 #define USE_HW_CSUM 1
 #define CAN_RECOVER_STALL	0
 
+#define NETIF_F_TSO
+#define NETIF_F_TSO6
+
 /* IPv6 flags are not defined in 10.6 headers. */
 enum {
 	CSUM_TCPIPv6             = 0x0020,
@@ -4054,6 +4057,90 @@ void igb_tx_ctxtdesc(struct igb_ring *tx_ring, u32 vlan_macip_lens,
 	context_desc->mss_l4len_idx	= cpu_to_le32(mss_l4len_idx);
 }
 
+#ifdef __APPLE__
+// copy from bsd/netinet/in_cksum.c
+union s_util {
+	char    c[2];
+	u_short s;
+};
+
+union l_util {
+	u_int16_t s[2];
+	u_int32_t l;
+};
+
+union q_util {
+	u_int16_t s[4];
+	u_int32_t l[2];
+	u_int64_t q;
+};
+	
+#define ADDCARRY(x)  (x > 65535 ? x -= 65535 : x)
+#define REDUCE16													\
+{																	\
+q_util.q = sum;														\
+l_util.l = q_util.s[0] + q_util.s[1] + q_util.s[2] + q_util.s[3];	\
+sum = l_util.s[0] + l_util.s[1];									\
+ADDCARRY(sum);														\
+}
+	
+static inline u_short
+in_pseudo(u_int a, u_int b, u_int c)
+{
+	u_int64_t sum;
+	union q_util q_util;
+	union l_util l_util;
+	
+	sum = (u_int64_t) a + b + c;
+	REDUCE16;
+	return (sum);
+}
+
+// copy from bsd/netinet6/in6_cksum.c
+	
+static inline u_short
+in_pseudo6(struct ip6_hdr *ip6, int nxt, u_int32_t len)
+{
+	u_int16_t *w;
+	int sum = 0;
+	union {
+		u_int16_t phs[4];
+		struct {
+			u_int32_t	ph_len;
+			u_int8_t	ph_zero[3];
+			u_int8_t	ph_nxt;
+		} ph __attribute__((__packed__));
+	} uph;
+	
+	bzero(&uph, sizeof (uph));
+	
+	/*
+	 * First create IP6 pseudo header and calculate a summary.
+	 */
+	w = (u_int16_t *)&ip6->ip6_src;
+	uph.ph.ph_len = htonl(len);
+	uph.ph.ph_nxt = nxt;
+	
+	/* IPv6 source address */
+	sum += w[0];
+	if (!IN6_IS_SCOPE_LINKLOCAL(&ip6->ip6_src))
+		sum += w[1];
+	sum += w[2]; sum += w[3]; sum += w[4]; sum += w[5];
+	sum += w[6]; sum += w[7];
+	/* IPv6 destination address */
+	sum += w[8];
+	if (!IN6_IS_SCOPE_LINKLOCAL(&ip6->ip6_dst))
+		sum += w[9];
+	sum += w[10]; sum += w[11]; sum += w[12]; sum += w[13];
+	sum += w[14]; sum += w[15];
+	/* Payload length and upper layer identifier */
+	sum += uph.phs[0];  sum += uph.phs[1];
+	sum += uph.phs[2];  sum += uph.phs[3];
+	
+	return (u_short)sum;
+}
+#endif
+
 static int igb_tso(struct igb_ring *tx_ring,
 		   struct igb_tx_buffer *first,
 		   u8 *hdr_len)
@@ -4088,14 +4175,15 @@ static int igb_tso(struct igb_ring *tx_ring,
 #ifdef	__APPLE__
 	u_int32_t dataLen = mbuf_pkthdr_len(skb);
 	struct tcphdr* tcph;
-	int nw_header_len;
+	int ip_len;
 	if (request & MBUF_TSO_IPV4) {
 		struct ip *iph = ip_hdr(skb);
 		tcph = tcp_hdr(skb);
-		nw_header_len = ((u8*)tcph - (u8*)iph);
+		ip_len = ((u8*)tcph - (u8*)iph);
 		iph->ip_len = 0;
 		iph->ip_sum = 0;
-		mbuf_inet_cksum(skb, IPPROTO_TCP, 0, dataLen - (nw_header_len+ETHER_HDR_LEN), &tcph->th_sum);
+		tcph->th_sum = in_pseudo(iph->ip_src.s_addr, iph->ip_dst.s_addr,
+						 htonl(IPPROTO_TCP));
 		type_tucmd |= E1000_ADVTXD_TUCMD_IPV4;
 		first->tx_flags |= IGB_TX_FLAGS_TSO |
 		IGB_TX_FLAGS_CSUM |
@@ -4103,17 +4191,18 @@ static int igb_tso(struct igb_ring *tx_ring,
 	} else if (request & MBUF_TSO_IPV6) {
 		struct ip6_hdr *iph = ip6_hdr(skb);
 		tcph = tcp6_hdr(skb);
-		nw_header_len = ((u8*)tcph - (u8*)iph);
+		ip_len = ((u8*)tcph - (u8*)iph);
 		iph->ip6_ctlun.ip6_un1.ip6_un1_plen = 0;
-		mbuf_inet6_cksum(skb, IPPROTO_TCP, 0, dataLen - (nw_header_len+ETHER_HDR_LEN), &tcph->th_sum);
+		tcph->th_sum = in_pseudo6(iph, IPPROTO_TCP, 0);
 		first->tx_flags |= IGB_TX_FLAGS_TSO |
 		IGB_TX_FLAGS_CSUM;
 	}
-	u16 gso_segs = (dataLen + (mssValue-1))/mssValue;
 
 	/* compute header lengths */
 	l4len = tcph->th_off << 2;
-	*hdr_len = ETHER_HDR_LEN + nw_header_len + l4len;
+	*hdr_len = ETHER_HDR_LEN + ip_len + l4len;
+
+	u16 gso_segs = ((dataLen - *hdr_len) + (mssValue-1))/mssValue;
 
 	/* update gso size and bytecount with header size */
 	first->gso_segs = gso_segs;
@@ -4124,7 +4213,7 @@ static int igb_tso(struct igb_ring *tx_ring,
 	mss_l4len_idx |= mssValue << E1000_ADVTXD_MSS_SHIFT;
 	
 	/* VLAN MACLEN IPLEN */
-	vlan_macip_lens = nw_header_len;
+	vlan_macip_lens = ip_len;
 	vlan_macip_lens |= ETHER_HDR_LEN << E1000_ADVTXD_MACLEN_SHIFT;
 	vlan_macip_lens |= first->tx_flags & IGB_TX_FLAGS_VLAN_MASK;
 #else /* __APPLE__ */
