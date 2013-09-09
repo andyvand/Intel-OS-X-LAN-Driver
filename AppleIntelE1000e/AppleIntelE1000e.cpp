@@ -42,7 +42,7 @@ static inline ip* ip_hdr(mbuf_t skb)
 static inline struct tcphdr* tcp_hdr(mbuf_t skb)
 {
 	struct ip* iph = ip_hdr(skb);
-	return (struct tcphdr*)((u8*)iph + (iph->ip_hl << 2));
+	return (struct tcphdr*)((u8*)iph + (iph->ip_hl * 4));
 }
 
 static inline struct ip6_hdr* ip6_hdr(mbuf_t skb)
@@ -1133,6 +1133,88 @@ void e1000e_write_itr(struct e1000_adapter *adapter, u32 itr)
 #define E1000_TX_FLAGS_VLAN_MASK	0xffff0000
 #define E1000_TX_FLAGS_VLAN_SHIFT	16
 
+// copy from bsd/netinet/in_cksum.c
+union s_util {
+	char    c[2];
+	u_short s;
+};
+
+union l_util {
+	u_int16_t s[2];
+	u_int32_t l;
+};
+
+union q_util {
+	u_int16_t s[4];
+	u_int32_t l[2];
+	u_int64_t q;
+};
+
+#define ADDCARRY(x)  (x > 65535 ? x -= 65535 : x)
+#define REDUCE16													\
+{																	\
+q_util.q = sum;														\
+l_util.l = q_util.s[0] + q_util.s[1] + q_util.s[2] + q_util.s[3];	\
+sum = l_util.s[0] + l_util.s[1];									\
+ADDCARRY(sum);														\
+}
+
+static inline u_short
+in_pseudo(u_int a, u_int b, u_int c)
+{
+	u_int64_t sum;
+	union q_util q_util;
+	union l_util l_util;
+	
+	sum = (u_int64_t) a + b + c;
+	REDUCE16;
+	return (sum);
+}
+
+// copy from bsd/netinet6/in6_cksum.c
+
+static inline u_short
+in_pseudo6(struct ip6_hdr *ip6, int nxt, u_int32_t len)
+{
+	u_int16_t *w;
+	int sum = 0;
+	union {
+		u_int16_t phs[4];
+		struct {
+			u_int32_t	ph_len;
+			u_int8_t	ph_zero[3];
+			u_int8_t	ph_nxt;
+		} ph __attribute__((__packed__));
+	} uph;
+
+	bzero(&uph, sizeof (uph));
+	
+	/*
+	 * First create IP6 pseudo header and calculate a summary.
+	 */
+	w = (u_int16_t *)&ip6->ip6_src;
+	uph.ph.ph_len = htonl(len);
+	uph.ph.ph_nxt = nxt;
+	
+	/* IPv6 source address */
+	sum += w[0];
+	if (!IN6_IS_SCOPE_LINKLOCAL(&ip6->ip6_src))
+		sum += w[1];
+	sum += w[2]; sum += w[3]; sum += w[4]; sum += w[5];
+	sum += w[6]; sum += w[7];
+	/* IPv6 destination address */
+	sum += w[8];
+	if (!IN6_IS_SCOPE_LINKLOCAL(&ip6->ip6_dst))
+		sum += w[9];
+	sum += w[10]; sum += w[11]; sum += w[12]; sum += w[13];
+	sum += w[14]; sum += w[15];
+	/* Payload length and upper layer identifier */
+	sum += uph.phs[0];  sum += uph.phs[1];
+	sum += uph.phs[2];  sum += uph.phs[3];
+	
+	return (u_short)sum;
+}
+
 static int e1000_tso(struct e1000_ring *tx_ring, struct sk_buff *skb,
                      int* pSegs, int* pHdrLen)
 {
@@ -1162,8 +1244,8 @@ static int e1000_tso(struct e1000_ring *tx_ring, struct sk_buff *skb,
 		ip_hlen = ((u8*)tcph - (u8*)iph);
 		iph->ip_len = 0;
 		iph->ip_sum = 0;
-		if(mbuf_inet_cksum(skb, IPPROTO_TCP, (ip_hlen+ETH_HLEN), skbLen - (ip_hlen+ETH_HLEN), &csum))
-			e_dbg("mbuf_inet_cksum failed.\n");
+		csum = in_pseudo(iph->ip_src.s_addr, iph->ip_dst.s_addr,
+						 htonl(IPPROTO_TCP));
 		cmd_length = E1000_TXD_CMD_IP;
 		ipcse = ETH_HLEN + ip_hlen - 1;
         ipcso = ETH_HLEN + offsetof(struct ip, ip_sum);
@@ -1173,12 +1255,12 @@ static int e1000_tso(struct e1000_ring *tx_ring, struct sk_buff *skb,
 		tcph = tcp6_hdr(skb);
 		ip_hlen = ((u8*)tcph - (u8*)iph);
 		iph->ip6_ctlun.ip6_un1.ip6_un1_plen = 0;
-		mbuf_inet6_cksum(skb, IPPROTO_TCP, (ip_hlen+ETH_HLEN), skbLen - (ip_hlen+ETH_HLEN), &csum);
+		csum = in_pseudo6(iph, IPPROTO_TCP, 0);
 		ipcse = 0;
         ipcso = 0;
         rc = 6;
 	}
-	tcph->th_sum = ~csum;
+	tcph->th_sum = csum;
 	hdr_len = (u8*)tcph - dataAddr + (tcph->th_off * 4);
 
     /* TSO Workaround for 82571/2/3 Controllers -- if skb->data
