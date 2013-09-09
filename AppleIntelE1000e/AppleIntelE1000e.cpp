@@ -1839,6 +1839,30 @@ void AppleIntelE1000e::stop(IOService* provider)
 	super::stop(provider);
 }
 
+
+bool AppleIntelE1000e::getBoolOption(const char *name, bool defVal)
+{
+	OSBoolean* rc = OSDynamicCast( OSBoolean, getProperty(name));
+	if( rc ){
+		return (rc == kOSBooleanTrue );
+	}
+	return defVal;
+}
+
+int AppleIntelE1000e::getIntOption(const char *name, int defVal, int maxVal, int minVal )
+{
+	int val = defVal;
+	OSNumber* numObj = OSDynamicCast( OSNumber, getProperty(name) );
+	if ( numObj ){
+		val = (int)numObj->unsigned32BitValue();
+		if( val < minVal )
+			val = minVal;
+		else if(val > maxVal )
+			val = maxVal;
+	}
+	return val;
+}
+
 bool AppleIntelE1000e::start(IOService* provider)
 {
 	e_dbg("AppleIntelE1000e::start(IOService * provider)\n");
@@ -1862,6 +1886,11 @@ bool AppleIntelE1000e::start(IOService* provider)
 	if (pciDevice->open(this) == false)
 		return false;
 	
+#ifdef NETIF_F_TSO
+	useTSO = getBoolOption("TSO", TRUE);
+#else
+	useTSO = FALSE;
+#endif
 	do {
 		if(!initEventSources(provider)){
 			break;
@@ -5079,17 +5108,10 @@ int AppleIntelE1000e::getIntOption( int def, const char *name )
 }
 
 UInt32 AppleIntelE1000e::getFeatures() const {
-#ifdef NETIF_F_TSO
-    #ifdef NETIF_F_TSO6
-	return kIONetworkFeatureMultiPages | kIONetworkFeatureHardwareVlan |
-        kIONetworkFeatureTSOIPv4 | kIONetworkFeatureTSOIPv6;
-    #else
-	return kIONetworkFeatureMultiPages | kIONetworkFeatureHardwareVlan |
-        kIONetworkFeatureTSOIPv4;
-    #endif
-#else
-	return kIONetworkFeatureMultiPages | kIONetworkFeatureHardwareVlan;
-#endif
+	UInt32 f = kIONetworkFeatureMultiPages | kIONetworkFeatureHardwareVlan;
+	if(useTSO)
+		f |= kIONetworkFeatureTSOIPv4 | kIONetworkFeatureTSOIPv6;
+	return f;
 }
 
 

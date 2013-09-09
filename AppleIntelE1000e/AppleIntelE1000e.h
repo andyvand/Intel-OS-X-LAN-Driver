@@ -126,6 +126,7 @@ private:
 	bool promiscusMode;
 	bool multicastMode;
 	bool stalled;
+	bool useTSO;
 	UInt32 mcCount;
 	UInt32 preLinkStatus;
 	UInt32 powerState;
@@ -172,6 +173,8 @@ private:
 	
 	int __e1000_shutdown(bool *enable_wake, bool runtime);
 
+	bool getBoolOption(const char *name, bool defVal);
+	int getIntOption(const char *name, int defVal, int maxVal, int minVal );
 private:
 	bool clean_rx_irq();
 	void alloc_rx_buf(int cleaned_count);
