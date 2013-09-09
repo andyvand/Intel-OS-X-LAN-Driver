@@ -1408,7 +1408,7 @@ static int e1000_setup_tx_resources(struct e1000_adapter *adapter,
 		
 		bzero(tx_ring->desc, tx_ring->size);
 	} else {
-	setup_tx_desc_die:
+setup_tx_desc_die:
 		IOFreePageable(tx_ring->buffer_info,size);
 		DPRINTK(PROBE, ERR,
 				"Unable to allocate memory for the transmit descriptor ring (IOBufferMemoryDescriptor) %u\n", tx_ring->size);
@@ -1818,16 +1818,17 @@ static void e1000_configure_rx(struct e1000_adapter *adapter)
 static void e1000_free_tx_resources(struct e1000_adapter *adapter,
                                     struct e1000_tx_ring *tx_ring)
 {
-	//IOPCIDevice* pdev = adapter->pdev;
-
 	e1000_clean_tx_ring(adapter, tx_ring);
 
-	IOFreePageable(tx_ring->buffer_info,sizeof(struct e1000_buffer) * tx_ring->count);
-	tx_ring->buffer_info = NULL;
-
-	tx_ring->pool->complete();
-	tx_ring->pool->release();
-	tx_ring->desc = NULL;
+	if(tx_ring->buffer_info){
+		IOFreePageable(tx_ring->buffer_info,sizeof(struct e1000_buffer) * tx_ring->count);
+		tx_ring->buffer_info = NULL;
+	}
+	if(tx_ring->pool){
+		tx_ring->pool->complete();
+		tx_ring->pool->release();
+		tx_ring->pool = NULL;
+	}
 }
 
 /**
@@ -1919,16 +1920,17 @@ static void e1000_clean_all_tx_rings(struct e1000_adapter *adapter)
 static void e1000_free_rx_resources(struct e1000_adapter *adapter,
                                     struct e1000_rx_ring *rx_ring)
 {
-	//IOPCIDevice* pdev = adapter->pdev;
-
 	e1000_clean_rx_ring(adapter, rx_ring);
 
-	IOFreePageable(rx_ring->buffer_info, sizeof(struct e1000_rx_buffer) * rx_ring->count);
-	rx_ring->buffer_info = NULL;
-	
-	rx_ring->pool->complete();
-	rx_ring->pool->release();
-	rx_ring->desc = NULL;
+	if(rx_ring->buffer_info){
+		IOFreePageable(rx_ring->buffer_info, sizeof(struct e1000_rx_buffer) * rx_ring->count);
+		rx_ring->buffer_info = NULL;
+	}
+	if(rx_ring->pool){
+		rx_ring->pool->complete();
+		rx_ring->pool->release();
+		rx_ring->pool = NULL;
+	}
 }
 
 /**
@@ -5776,15 +5778,61 @@ const OSString * AppleIntelE1000::newVendorString() const
 
 const OSString * AppleIntelE1000::newModelString() const
 {
-	E1000_DBG("const OSString * AppleIntelE1000::newModelString() const.\n");
-	return OSString::withCString(getName());
+	static struct  {
+		UInt16 id;
+		const char* name;
+	} decieModelNames[] = 
+	{
+		{ E1000_DEV_ID_82542, "82542"},
+		{ E1000_DEV_ID_82543GC_FIBER, "82543GC Fiber"},
+		{ E1000_DEV_ID_82543GC_COPPER, "82543 Copper"},
+		{ E1000_DEV_ID_82544EI_COPPER, "82544EI Copper"},
+		{ E1000_DEV_ID_82544EI_FIBER, "82544EI Fiber"},
+		{ E1000_DEV_ID_82544GC_COPPER, "82544GC Copper"},
+		{ E1000_DEV_ID_82544GC_LOM, "82544 LOM"},
+		{ E1000_DEV_ID_82540EM, "82540EM"},
+		{ E1000_DEV_ID_82545EM_COPPER, "82545EM Copper"},
+		{ E1000_DEV_ID_82546EB_COPPER, "82546EB Copper"},
+		{ E1000_DEV_ID_82545EM_FIBER, "82545EM Fiber"},
+		{ E1000_DEV_ID_82546EB_FIBER, "82546EB Fiber"},
+		{ E1000_DEV_ID_82541EI, "82541EI"},
+		{ E1000_DEV_ID_82541ER_LOM, "82541ER LOM"},
+		{ E1000_DEV_ID_82540EM_LOM, "82540EM LOM"},
+		{ E1000_DEV_ID_82540EP_LOM, "82540EP LOM"},
+		{ E1000_DEV_ID_82540EP, "82540EP"},
+		{ E1000_DEV_ID_82541EI_MOBILE, "82541EI Mobile"},
+		{ E1000_DEV_ID_82547EI, "82547EI"},
+		{ E1000_DEV_ID_82547EI_MOBILE, "82547EI Mobile"},
+		{ E1000_DEV_ID_82546EB_QUAD_COPPER, "82546EB Quad Copper"},
+		{ E1000_DEV_ID_82540EP_LP, "82540EP LP"},
+		{ E1000_DEV_ID_82545GM_COPPER, "82545GM Copper"},
+		{ E1000_DEV_ID_82545GM_FIBER, "82545GM Fiber"},
+		{ E1000_DEV_ID_82545GM_SERDES, "82545GM SerDes"},
+		{ E1000_DEV_ID_82547GI, "82547GI"},
+		{ E1000_DEV_ID_82541GI, "82541GI"},
+		{ E1000_DEV_ID_82541GI_MOBILE, "82541GI Mobile"},
+		{ E1000_DEV_ID_82541ER, "82541ER"},
+		{ E1000_DEV_ID_82546GB_COPPER, "82546GB Copper"},
+		{ E1000_DEV_ID_82546GB_FIBER, "82546GB Fiber"},
+		{ E1000_DEV_ID_82546GB_SERDES, "82546GB SerDes"},
+		{ E1000_DEV_ID_82541GI_LF, "82541GI LF"},
+		{ E1000_DEV_ID_82546GB_PCIE, "82546GB PCIE"},
+		{ E1000_DEV_ID_82546GB_QUAD_COPPER, "82546GB Quad Copper"},
+		{ E1000_DEV_ID_82546GB_QUAD_COPPER_KSP3, "82546GB Quad Copper KSP3"},
+	};
+	int k;
+	for( k = 0; k < sizeof(decieModelNames)/sizeof(decieModelNames[0]); k++){
+		if(adapter.hw.device_id == decieModelNames[k].id )
+			return OSString::withCString(decieModelNames[k].name);
+	}
+	return OSString::withCString("Unknown");
 }
 
 IOReturn AppleIntelE1000::selectMedium(const IONetworkMedium * medium)
 {
 	E1000_DBG("IOReturn AppleIntelE1000::selectMedium(const IONetworkMedium * medium).\n");
 	
-	if (OSDynamicCast(IONetworkMedium, medium) == 0) {
+	if (medium == 0) {
 		// Defaults to Auto.
 		medium = mediumTable[MEDIUM_INDEX_AUTO];
 	}
@@ -5802,10 +5850,8 @@ IOReturn AppleIntelE1000::selectMedium(const IONetworkMedium * medium)
 	}
 	e1000_set_spd_dplx(&adapter, speed_duplex);
 	
-	if (medium) {
-		if (!setCurrentMedium(medium)) {
-			E1000_DBG("setCurrentMedium error.\n");
-		}
+	if (!setCurrentMedium(medium)) {
+		E1000_DBG("setCurrentMedium error.\n");
 	}
 	
 	return ( medium ? kIOReturnSuccess : kIOReturnIOError );
@@ -5965,9 +6011,9 @@ IOReturn AppleIntelE1000::getChecksumSupport(UInt32 *checksumMask, UInt32 checks
 		*checksumMask = 0;
 		if( ! isOutput ) {
 #if	USE_RX_UDP_CHECKSUM
-			*checksumMask = kChecksumTCP;
-#else
 			*checksumMask = kChecksumIP | kChecksumTCP | kChecksumUDP;
+#else
+			*checksumMask = kChecksumTCP;
 #endif
 		} else {
 			*checksumMask = kChecksumTCP | kChecksumUDP;
