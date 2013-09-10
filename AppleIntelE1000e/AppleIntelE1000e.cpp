@@ -2229,6 +2229,9 @@ IOReturn AppleIntelE1000e::enable(IONetworkInterface * netif)
 	if (adapter->hw.mac.type == e1000_pch2lan)
         ;
 #endif
+	setLinkStatus( kIONetworkLinkValid );	// Valid sans kIONetworkLinkActive
+	preLinkStatus = 0;
+
     /* From here on the code is the same as e1000e_up() */
 	e1000e_up();
 
