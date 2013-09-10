@@ -2031,7 +2031,7 @@ bool AppleIntelE1000e::start(IOService* provider)
 		adapter->fc_autoneg = true;
 		adapter->hw.fc.requested_mode = e1000_fc_default;
 		adapter->hw.fc.current_mode = e1000_fc_default;
-		adapter->hw.phy.autoneg_advertised = 0x2f;
+		adapter->hw.phy.autoneg_advertised = ADVERTISED_Default;
 		
 		/* ring size defaults */
 		adapter->rx_ring->count = E1000_DEFAULT_RXD;
@@ -2546,43 +2546,43 @@ const OSString * AppleIntelE1000e::newModelString() const
 		{ E1000_DEV_ID_80003ES2LAN_COPPER_SPT, "80003ES2LAN Copper(SPT)"},
 		{ E1000_DEV_ID_80003ES2LAN_SERDES_DPT, "80003ES2LAN SerDes(DPT)"},
 		{ E1000_DEV_ID_80003ES2LAN_SERDES_SPT, "80003ES2LAN SerDes(SPT)"},
-		{ E1000_DEV_ID_ICH8_IFE, "ICH8 IFE"},
-		{ E1000_DEV_ID_ICH8_IFE_G, "ICH8 IFE(G)"},
-		{ E1000_DEV_ID_ICH8_IFE_GT, "ICH8 IFE(GT)"},
-		{ E1000_DEV_ID_ICH8_IGP_AMT, "ICH8 IGP(AMT)"},
-		{ E1000_DEV_ID_ICH8_IGP_C, "ICH8 IGP(C)"},
-		{ E1000_DEV_ID_ICH8_IGP_M, "ICH8 IGP(M)"},
-		{ E1000_DEV_ID_ICH8_IGP_M_AMT, "ICH8 IGP(M) AMT"},
-		{ E1000_DEV_ID_ICH8_82567V_3, "ICH8 82567V3"},
-		{ E1000_DEV_ID_ICH9_IFE, "ICH9 IFE"},
-		{ E1000_DEV_ID_ICH9_IFE_G, "ICH9 IFE(G)"},
-		{ E1000_DEV_ID_ICH9_IFE_GT, "ICH9 IFE(GT)"},
-		{ E1000_DEV_ID_ICH9_IGP_AMT, "ICH9 IGP(AMT)"},
-		{ E1000_DEV_ID_ICH9_IGP_C, "ICH9 IGP(C)"},
-		{ E1000_DEV_ID_ICH9_BM, "ICH9 BM"},
-		{ E1000_DEV_ID_ICH9_IGP_M, "ICH9 IGP(M)"},
-		{ E1000_DEV_ID_ICH9_IGP_M_AMT, "ICH9 IGM(M) AMT"},
-		{ E1000_DEV_ID_ICH9_IGP_M_V, "ICH9 M(V)"},
-		{ E1000_DEV_ID_ICH10_R_BM_LM, "ICH10R BM(LM)"},
-		{ E1000_DEV_ID_ICH10_R_BM_LF, "ICH10R BM(LF)"},
-		{ E1000_DEV_ID_ICH10_R_BM_V, "ICH10R BM(V)"},
-		{ E1000_DEV_ID_ICH10_D_BM_LM, "ICH10D BM(LM)"},
-		{ E1000_DEV_ID_ICH10_D_BM_LF, "ICH10D BM(LF)"},
-		{ E1000_DEV_ID_ICH10_D_BM_V, "ICH10D BM(V)"},
-		{ E1000_DEV_ID_PCH_M_HV_LM, "PCH-M HV(LM)"},
-		{ E1000_DEV_ID_PCH_M_HV_LC, "PCH-M HV(LC)"},
-		{ E1000_DEV_ID_PCH_D_HV_DM, "PCH-M HV(DM)"},
-		{ E1000_DEV_ID_PCH_D_HV_DC, "PCH-M HV(DC)"},
-		{ E1000_DEV_ID_PCH2_LV_LM, "PCH2-M LV(LM)"},
-		{ E1000_DEV_ID_PCH2_LV_V, "PCH2-M LV(V)"},
-		{ E1000_DEV_ID_PCH_LPT_I217_LM, "I217 LM"},
-		{ E1000_DEV_ID_PCH_LPT_I217_V, "I217 V"},
-		{ E1000_DEV_ID_PCH_LPTLP_I218_LM, "I218 LM"},
-		{ E1000_DEV_ID_PCH_LPTLP_I218_V, "I218 V"},
-		{ E1000_DEV_ID_PCH_I218_LM2, "I218 LM2"},
-		{ E1000_DEV_ID_PCH_I218_V2, "I218 V2"},
-		{ E1000_DEV_ID_PCH_I218_LM3, "I218 LM3"},
-		{ E1000_DEV_ID_PCH_I218_V3, "I218 V3"},
+		{ E1000_DEV_ID_ICH8_IFE, "82562V"},
+		{ E1000_DEV_ID_ICH8_IFE_G, "82562G"},
+		{ E1000_DEV_ID_ICH8_IFE_GT, "82562GT"},
+		{ E1000_DEV_ID_ICH8_IGP_AMT, "82566DM"},
+		{ E1000_DEV_ID_ICH8_IGP_C, "82566DC"},
+		{ E1000_DEV_ID_ICH8_IGP_M, "82566MC"},
+		{ E1000_DEV_ID_ICH8_IGP_M_AMT, "82566MM"},
+		{ E1000_DEV_ID_ICH8_82567V_3, "82567V3"},
+		{ E1000_DEV_ID_ICH9_IFE, "82562V2"},
+		{ E1000_DEV_ID_ICH9_IFE_G, "82562G2"},
+		{ E1000_DEV_ID_ICH9_IFE_GT, "82562GT2"},
+		{ E1000_DEV_ID_ICH9_IGP_AMT, "82566DM2"},
+		{ E1000_DEV_ID_ICH9_IGP_C, "82566DC2"},
+		{ E1000_DEV_ID_ICH9_BM, "82567LM4"},
+		{ E1000_DEV_ID_ICH9_IGP_M, "82567LF"},
+		{ E1000_DEV_ID_ICH9_IGP_M_AMT, "82567LM"},
+		{ E1000_DEV_ID_ICH9_IGP_M_V, "82567V"},
+		{ E1000_DEV_ID_ICH10_R_BM_LM, "82567LM2"},
+		{ E1000_DEV_ID_ICH10_R_BM_LF, "82567LF2"},
+		{ E1000_DEV_ID_ICH10_R_BM_V, "82567V2"},
+		{ E1000_DEV_ID_ICH10_D_BM_LM, "82567LM3"},
+		{ E1000_DEV_ID_ICH10_D_BM_LF, "82567LF3"},
+		{ E1000_DEV_ID_ICH10_D_BM_V, "82567V4"},
+		{ E1000_DEV_ID_PCH_M_HV_LM, "82578LM"},
+		{ E1000_DEV_ID_PCH_M_HV_LC, "82578LC"},
+		{ E1000_DEV_ID_PCH_D_HV_DM, "82578DM"},
+		{ E1000_DEV_ID_PCH_D_HV_DC, "82578DC"},
+		{ E1000_DEV_ID_PCH2_LV_LM, "82579LM"},
+		{ E1000_DEV_ID_PCH2_LV_V, "82579V"},
+		{ E1000_DEV_ID_PCH_LPT_I217_LM, "I217LM"},
+		{ E1000_DEV_ID_PCH_LPT_I217_V, "I217V"},
+		{ E1000_DEV_ID_PCH_LPTLP_I218_LM, "I218LM"},
+		{ E1000_DEV_ID_PCH_LPTLP_I218_V, "I218V"},
+		{ E1000_DEV_ID_PCH_I218_LM2, "I218LM2"},
+		{ E1000_DEV_ID_PCH_I218_V2, "I218V2"},
+		{ E1000_DEV_ID_PCH_I218_LM3, "I218LM3"},
+		{ E1000_DEV_ID_PCH_I218_V3, "I218V3"},
 	};
 	int k;
 	for( k = 0; k < sizeof(decieModelNames)/sizeof(decieModelNames[0]); k++){
@@ -2601,11 +2601,6 @@ IOReturn AppleIntelE1000e::selectMedium(const IONetworkMedium * medium)
 
     e1000_adapter *adapter = &priv_adapter;
 
-#define ADVERTISED_1000baseT_Full       (1 << 5)
-#define ADVERTISED_Autoneg              (1 << 6)
-#define ADVERTISED_TP                   (1 << 7)
-#define ADVERTISED_FIBRE                (1 << 10)
-    
     if(type == kIOMediumEthernetAuto){ /* auto negotation */
         struct e1000_hw* hw = &adapter->hw;
 		hw->mac.autoneg = 1;
@@ -2613,8 +2608,7 @@ IOReturn AppleIntelE1000e::selectMedium(const IONetworkMedium * medium)
 			hw->phy.autoneg_advertised = ADVERTISED_1000baseT_Full |
             ADVERTISED_FIBRE | ADVERTISED_Autoneg;
 		else
-			hw->phy.autoneg_advertised = ADVERTISED_1000baseT_Full |
-            ADVERTISED_TP | ADVERTISED_Autoneg;
+			hw->phy.autoneg_advertised = ADVERTISED_Default;
 		if (adapter->fc_autoneg)
 			hw->fc.requested_mode = e1000_fc_default;
     } else {

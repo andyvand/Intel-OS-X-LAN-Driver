@@ -9054,7 +9054,7 @@ IOReturn AppleIGB::selectMedium(const IONetworkMedium * medium)
 					break;
 			}
 		} else {
-			hw->phy.autoneg_advertised = ADVERTISED_1000baseT_Full |
+			hw->phy.autoneg_advertised = E1000_ALL_SPEED_DUPLEX |
 			ADVERTISED_TP |
 			ADVERTISED_Autoneg;
 		}

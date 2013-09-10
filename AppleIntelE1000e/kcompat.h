@@ -146,6 +146,26 @@ struct work_struct {
 	void *wq_data;
 	struct timer_list timer;
 };
+
+#define ADVERTISED_10baseT_Half         (1 << 0)
+#define ADVERTISED_10baseT_Full         (1 << 1)
+#define ADVERTISED_100baseT_Half        (1 << 2)
+#define ADVERTISED_100baseT_Full        (1 << 3)
+#define ADVERTISED_1000baseT_Half       (1 << 4)
+#define ADVERTISED_1000baseT_Full       (1 << 5)
+#define ADVERTISED_Autoneg              (1 << 6)
+#define ADVERTISED_TP                   (1 << 7)
+#define ADVERTISED_MII                  (1 << 9)
+#define ADVERTISED_FIBRE                (1 << 10)
+#define ADVERTISED_10000baseT_Full      (1 << 12)
+#define ADVERTISED_2500baseX_Full       (1 << 15)
+
+#define	ADVERTISED_Default	(\
+	ADVERTISED_10baseT_Half|ADVERTISED_10baseT_Full|\
+	ADVERTISED_100baseT_Full|ADVERTISED_100baseT_Half|\
+	ADVERTISED_1000baseT_Full|\
+	ADVERTISED_Autoneg|ADVERTISED_TP|ADVERTISED_MII)
+
 #define SPEED_10    10
 #define SPEED_100   100
 #define SPEED_1000  1000
