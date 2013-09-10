@@ -5434,7 +5434,7 @@ UInt32 AppleIntelE1000::getFeatures() const
 #ifdef NETIF_F_TSO
 	if ((adapter.hw.mac.type >= e1000_82544) &&
 		(adapter.hw.mac.type != e1000_82547)) {
-		f |= kIONetworkFeatureTSOIPv4;
+		f |= kIONetworkFeatureTSOIPv4|kIONetworkFeatureTSOIPv6;
 	}
 #endif
 	return f;
