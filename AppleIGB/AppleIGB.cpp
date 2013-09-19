@@ -9569,8 +9569,9 @@ IOReturn AppleIGB::getMinPacketSize (UInt32 *minSize) const {
 
 IOReturn AppleIGB::setMaxPacketSize (UInt32 maxSize){
 	IOLog("AppleIGB::setMaxPacketSize(%d)\n",(int)maxSize);
-	if(maxSize != _mtu){
-        _mtu = maxSize  - (ETH_HLEN + ETH_FCS_LEN);
+	UInt32 newMtu = maxSize  - (ETH_HLEN + ETH_FCS_LEN);
+	if(newMtu != _mtu){
+        _mtu = newMtu;
         igb_change_mtu(this,_mtu);
 
         RELEASE(txMbufCursor);
