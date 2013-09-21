@@ -8982,6 +8982,16 @@ const OSString * AppleIGB::newModelString() const
 		const char* name;
 	} decieModelNames[] = 
 	{
+		{ E1000_DEV_ID_I354_BACKPLANE_1GBPS, "i354" },
+		{ E1000_DEV_ID_I354_SGMII, "i354 SGMII" },
+		{ E1000_DEV_ID_I354_BACKPLANE_2_5GBPS, "i354 2.5G" },
+		{ E1000_DEV_ID_I210_COPPER, "i210 Copper" },
+		{ E1000_DEV_ID_I210_FIBER, "i210 Fiber" },
+		{ E1000_DEV_ID_I210_SERDES, "i210 SerDes" },
+		{ E1000_DEV_ID_I210_SGMII, "i210 SGMII" },
+		{ E1000_DEV_ID_I210_COPPER_FLASHLESS, "i210 Copper" },
+		{ E1000_DEV_ID_I210_SERDES_FLASHLESS, "i210 SerDes" },
+		{ E1000_DEV_ID_I211_COPPER, "i211 Copper" },
 		{ E1000_DEV_ID_I350_COPPER, "i350 Copper"},
 		{ E1000_DEV_ID_I350_FIBER, "i350 Fiber"},
 		{ E1000_DEV_ID_I350_SERDES, "i350 SerDes"},
