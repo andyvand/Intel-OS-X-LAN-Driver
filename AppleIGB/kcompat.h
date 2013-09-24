@@ -78,6 +78,7 @@ typedef __uint8_t u8;
 #define dma_unmap_len(PTR, LEN_NAME)             ((PTR)->LEN_NAME)
 #define dma_unmap_len_set(PTR, LEN_NAME, VAL)    (((PTR)->LEN_NAME) = (VAL))
 
+
 struct net_device_stats {
 	unsigned long	rx_packets;				/* total packets received       */
 	unsigned long	tx_packets;				/* total packets transmitted    */

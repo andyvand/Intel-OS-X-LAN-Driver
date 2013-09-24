@@ -112,6 +112,7 @@ private:
 	
 	bool enabledForNetif;
 	bool bQueueStopped;
+	bool bSuspended;
 	UInt32 iff_flags;
 	UInt32 _features;
 	UInt32 preLinkStatus;

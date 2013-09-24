@@ -7576,7 +7576,7 @@ static int __igb_shutdown(struct pci_dev *pdev, bool *enable_wake,
 #ifdef HAVE_SYSTEM_SLEEP_PM_OPS
 static int igb_suspend(IOPCIDevice *pdev, pm_message_t state)
 #else
-	static int igb_suspend(struct pci_dev *pdev, pm_message_t state)
+static int igb_suspend(struct pci_dev *pdev, pm_message_t state)
 #endif /* HAVE_SYSTEM_SLEEP_PM_OPS */
 {
 #ifdef HAVE_SYSTEM_SLEEP_PM_OPS
@@ -7600,9 +7600,9 @@ static int igb_suspend(IOPCIDevice *pdev, pm_message_t state)
 }
 
 #ifdef HAVE_SYSTEM_SLEEP_PM_OPS
-	static int igb_resume(struct device *dev)
+static int igb_resume(struct device *dev)
 #else
-	static int igb_resume(struct pci_dev *pdev)
+static int igb_resume(struct pci_dev *pdev)
 #endif /* HAVE_SYSTEM_SLEEP_PM_OPS */
 {
 #ifdef HAVE_SYSTEM_SLEEP_PM_OPS
@@ -7654,42 +7654,42 @@ static int igb_suspend(IOPCIDevice *pdev, pm_message_t state)
 }
 #ifdef CONFIG_PM_RUNTIME
 #ifdef HAVE_SYSTEM_SLEEP_PM_OPS
-	static int igb_runtime_idle(struct device *dev)
-	{
-		struct pci_dev *pdev = to_pci_dev(dev);
-		struct net_device *netdev = pci_get_drvdata(pdev);
-		struct igb_adapter *adapter = netdev_priv(netdev);
-		
-		if (!igb_has_link(adapter))
-			pm_schedule_suspend(dev, MSEC_PER_SEC * 5);
-		
-		return -EBUSY;
+static int igb_runtime_idle(struct device *dev)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+	struct net_device *netdev = pci_get_drvdata(pdev);
+	struct igb_adapter *adapter = netdev_priv(netdev);
+	
+	if (!igb_has_link(adapter))
+		pm_schedule_suspend(dev, MSEC_PER_SEC * 5);
+	
+	return -EBUSY;
+}
+
+static int igb_runtime_suspend(struct device *dev)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+	int retval;
+	bool wake;
+	
+	retval = __igb_shutdown(pdev, &wake, 1);
+	if (retval)
+		return retval;
+	
+	if (wake) {
+		pci_prepare_to_sleep(pdev);
+	} else {
+		pci_wake_from_d3(pdev, false);
+		pci_set_power_state(pdev, PCI_D3hot);
 	}
 	
-	static int igb_runtime_suspend(struct device *dev)
-	{
-		struct pci_dev *pdev = to_pci_dev(dev);
-		int retval;
-		bool wake;
-		
-		retval = __igb_shutdown(pdev, &wake, 1);
-		if (retval)
-			return retval;
-		
-		if (wake) {
-			pci_prepare_to_sleep(pdev);
-		} else {
-			pci_wake_from_d3(pdev, false);
-			pci_set_power_state(pdev, PCI_D3hot);
-		}
-		
-		return 0;
-	}
+	return 0;
+}
 	
-	static int igb_runtime_resume(struct device *dev)
-	{
-		return igb_resume(dev);
-	}
+static int igb_runtime_resume(struct device *dev)
+{
+	return igb_resume(dev);
+}
 #endif /* HAVE_SYSTEM_SLEEP_PM_OPS */
 #endif /* CONFIG_PM_RUNTIME */
 #endif	/* CONFIG_PM */
@@ -8192,20 +8192,13 @@ OSDefineMetaClassAndStructors(AppleIGB, super);
 
 void AppleIGB::free()
 {
-	RELEASE(workLoop);
-	RELEASE(csrPCIAddress);
-	RELEASE(pdev);
-
 	RELEASE(mediumDict);
-	
-	RELEASE(txMbufCursor);
 	
 	super::free();
 }
 
 bool AppleIGB::init(OSDictionary *properties)
 {
-	
 	if (super::init(properties) == false) 
 		return false;
 		
@@ -8223,12 +8216,31 @@ bool AppleIGB::init(OSDictionary *properties)
 	txMbufCursor = NULL;
 
 	_mtu = 1500;
+
+	mediumDict = OSDictionary::withCapacity(MEDIUM_INDEX_COUNT + 1);
+	if (mediumDict == NULL) {
+		return false;
+	}
+
+	addNetworkMedium(kIOMediumEthernetAuto, 0, MEDIUM_INDEX_AUTO);
+	addNetworkMedium(kIOMediumEthernet10BaseT | kIOMediumOptionHalfDuplex,
+					 10 * MBit, MEDIUM_INDEX_10HD);
+	addNetworkMedium(kIOMediumEthernet10BaseT | kIOMediumOptionFullDuplex,
+					 10 * MBit, MEDIUM_INDEX_10FD);
+	addNetworkMedium(kIOMediumEthernet100BaseTX | kIOMediumOptionHalfDuplex,
+					 100 * MBit, MEDIUM_INDEX_100HD);
+	addNetworkMedium(kIOMediumEthernet100BaseTX | kIOMediumOptionFullDuplex,
+					 100 * MBit, MEDIUM_INDEX_100FD);
+	addNetworkMedium(kIOMediumEthernet1000BaseT | kIOMediumOptionFullDuplex,
+					 1000 * MBit, MEDIUM_INDEX_1000FD);
+
 	return true;
 }
 
 // follows after igb_remove()
 void AppleIGB::stop(IOService* provider)
 {
+	DEBUGOUT("stop()\n");
 	struct igb_adapter *adapter = &priv_adapter;
 
 #ifdef HAVE_I2C_SUPPORT
@@ -8260,6 +8272,7 @@ void AppleIGB::stop(IOService* provider)
 			workLoop->removeEventSource(interruptSource);
 			RELEASE(interruptSource);
 		}
+		RELEASE(workLoop);
 	}
 	set_bit(__IGB_DOWN, &adapter->state);
 
@@ -8282,7 +8295,9 @@ void AppleIGB::stop(IOService* provider)
 	igb_clear_interrupt_scheme(adapter);
 	igb_reset_sriov_capability(adapter);
 	
-#if	0
+#if	1
+	RELEASE(csrPCIAddress);
+#else
 	iounmap(hw->hw_addr);
 	if (hw->flash_address)
 		iounmap(hw->flash_address);
@@ -8291,13 +8306,15 @@ void AppleIGB::stop(IOService* provider)
 #endif
 	kfree(adapter->mac_table, sizeof(struct igb_mac_addr)* adapter->hw.mac.rar_entry_count);
 	kfree(adapter->shadow_vfta, sizeof(u32) * E1000_VFTA_ENTRIES);
-#if	0
+#if	1
+	RELEASE(pdev);
+#else
 	free_netdev(netdev);
 	
 	pci_disable_pcie_error_reporting(pdev);
 	
 	pci_disable_device(pdev);
-#endif	
+#endif
 	
 	super::stop(provider);
 }
@@ -8306,6 +8323,7 @@ void AppleIGB::stop(IOService* provider)
 // igb_probe
 bool AppleIGB::start(IOService* provider)
 {
+	DEBUGOUT("start()\n");
     bool success = false;
 	
 	struct igb_adapter *adapter = &priv_adapter;
@@ -8522,8 +8540,6 @@ bool AppleIGB::start(IOService* provider)
 		if (adapter->flags & IGB_FLAG_DETECT_BAD_DMA)
 			adapter->dma_err_task = dmaErrSource;
 		adapter->reset_task = resetSource;
-		
-		txMbufCursor = IOMbufNaturalMemoryCursor::withSpecification(_mtu + ETH_HLEN + ETH_FCS_LEN, MAX_SKB_FRAGS);
 		
 		/* Initialize link properties that are user-changeable */
 		adapter->fc_autoneg = true;
@@ -8803,23 +8819,6 @@ bool AppleIGB::initEventSources( IOService* provider )
 	interruptSource->enable();
 	
 	
-	mediumDict = OSDictionary::withCapacity(MEDIUM_INDEX_COUNT + 1);
-	if (mediumDict == NULL) {
-		return false;
-	}
-
-	addNetworkMedium(kIOMediumEthernetAuto, 0, MEDIUM_INDEX_AUTO);
-	addNetworkMedium(kIOMediumEthernet10BaseT | kIOMediumOptionHalfDuplex,
-					 10 * MBit, MEDIUM_INDEX_10HD);
-	addNetworkMedium(kIOMediumEthernet10BaseT | kIOMediumOptionFullDuplex,
-					 10 * MBit, MEDIUM_INDEX_10FD);
-	addNetworkMedium(kIOMediumEthernet100BaseTX | kIOMediumOptionHalfDuplex,
-					 100 * MBit, MEDIUM_INDEX_100HD);
-	addNetworkMedium(kIOMediumEthernet100BaseTX | kIOMediumOptionFullDuplex,
-					 100 * MBit, MEDIUM_INDEX_100FD);
-	addNetworkMedium(kIOMediumEthernet1000BaseT | kIOMediumOptionFullDuplex,
-					 1000 * MBit, MEDIUM_INDEX_1000FD);
-	
 	if (!publishMediumDictionary(mediumDict)) {
 		return false;
 	}
@@ -8830,6 +8829,7 @@ bool AppleIGB::initEventSources( IOService* provider )
 //---------------------------------------------------------------------------
 IOReturn AppleIGB::enable(IONetworkInterface * netif)
 {
+	DEBUGOUT("enable()\n");
 	if(!enabledForNetif){
 		pdev->open(this);
 		
@@ -8852,6 +8852,7 @@ IOReturn AppleIGB::enable(IONetworkInterface * netif)
 
 IOReturn AppleIGB::disable(IONetworkInterface * netif)
 {
+	DEBUGOUT("disable()\n");
 	if(enabledForNetif){
 		enabledForNetif = false;
 
@@ -9553,10 +9554,22 @@ IOReturn AppleIGB::registerWithPolicyMaker ( IOService * policyMaker )
 IOReturn AppleIGB::setPowerState( unsigned long powerStateOrdinal,
 								IOService *policyMaker )
 {
+	DEBUGOUT1("setPowerState(%d)\n",(int)powerStateOrdinal);
 	if (powerState == powerStateOrdinal)
 		return IOPMAckImplied;
 	powerState = powerStateOrdinal;
 
+	if(powerStateOrdinal == 0){ // SUSPEND/SHUTDOWN
+		DEBUGOUT("suspend start.\n");
+		// ???
+		DEBUGOUT("suspend end.\n");
+		bSuspended = TRUE;
+	} else if(bSuspended) { // WAKE
+		DEBUGOUT("resume start.\n");
+		// ???
+		DEBUGOUT("resume end.\n");
+		bSuspended = FALSE;
+	}
 	/* acknowledge the completion of our power state change */
     return IOPMAckImplied;
 }
@@ -9583,10 +9596,6 @@ IOReturn AppleIGB::setMaxPacketSize (UInt32 maxSize){
 	if(newMtu != _mtu){
         _mtu = newMtu;
         igb_change_mtu(this,_mtu);
-
-        RELEASE(txMbufCursor);
-
-        txMbufCursor = IOMbufNaturalMemoryCursor::withSpecification(maxSize, MAX_SKB_FRAGS);
 	}
 	return kIOReturnSuccess;
 }
@@ -9642,6 +9651,7 @@ UInt32 AppleIGB::getFeatures() const {
 void AppleIGB::startTxQueue()
 {
 	IOLog("AppleIGB::startTxQueue()\n");
+	txMbufCursor = IOMbufNaturalMemoryCursor::withSpecification(_mtu + ETH_HLEN + ETH_FCS_LEN, MAX_SKB_FRAGS);
 	transmitQueue->start();
 	bQueueStopped = false;
 }
@@ -9649,9 +9659,10 @@ void AppleIGB::startTxQueue()
 void AppleIGB::stopTxQueue()
 {
 	IOLog("AppleIGB::stopTxQueue()\n");
+	bQueueStopped = true;
 	transmitQueue->stop();
 	transmitQueue->flush();
-	bQueueStopped = true;
+	RELEASE(txMbufCursor);
 }
 
 void AppleIGB::rxChecksumOK( mbuf_t skb, UInt32 flag )
