@@ -8196,7 +8196,7 @@ void AppleIGB::free()
 	
 	super::free();
 }
-
+		
 bool AppleIGB::init(OSDictionary *properties)
 {
 	if (super::init(properties) == false) 
@@ -8214,6 +8214,7 @@ bool AppleIGB::init(OSDictionary *properties)
 	transmitQueue = NULL;
 	preLinkStatus = 0;
 	txMbufCursor = NULL;
+	bSuspended = FALSE;
 
 	_mtu = 1500;
 
@@ -8238,18 +8239,62 @@ bool AppleIGB::init(OSDictionary *properties)
 }
 
 // follows after igb_remove()
-void AppleIGB::stop(IOService* provider)
+void AppleIGB::igb_remove()
 {
-	DEBUGOUT("stop()\n");
 	struct igb_adapter *adapter = &priv_adapter;
-
+	
 #ifdef HAVE_I2C_SUPPORT
 	igb_remove_i2c(adapter);
 #endif /* HAVE_I2C_SUPPORT */
 #ifdef HAVE_PTP_1588_CLOCK
 	igb_ptp_stop(adapter);
 #endif /* HAVE_PTP_1588_CLOCK */
+	
+	set_bit(__IGB_DOWN, &adapter->state);
+	
+#ifdef IGB_DCA
+	if (adapter->flags & IGB_FLAG_DCA_ENABLED) {
+		IOLog("DCA disabled\n");
+		dca_remove_requester(&pdev->dev);
+		adapter->flags &= ~IGB_FLAG_DCA_ENABLED;
+		E1000_WRITE_REG(hw, E1000_DCA_CTRL, E1000_DCA_CTRL_DCA_DISABLE);
+	}
+#endif
+	
+	/* Release control of h/w to f/w.  If f/w is AMT enabled, this
+	 * would have already happened in close and is redundant. */
+	igb_release_hw_control(adapter);
+#if	0
+	unregister_netdev(netdev);
+#endif
+	
+	igb_clear_interrupt_scheme(adapter);
+	igb_reset_sriov_capability(adapter);
+	
+#if	1
+	RELEASE(csrPCIAddress);
+#else
+	iounmap(hw->hw_addr);
+	if (hw->flash_address)
+		iounmap(hw->flash_address);
+	pci_release_selected_regions(pdev,
+	                             pci_select_bars(pdev, IORESOURCE_MEM));
+#endif
+	kfree(adapter->mac_table, sizeof(struct igb_mac_addr)* adapter->hw.mac.rar_entry_count);
+	kfree(adapter->shadow_vfta, sizeof(u32) * E1000_VFTA_ENTRIES);
+#if	1
+#else
+	free_netdev(netdev);
+	
+	pci_disable_pcie_error_reporting(pdev);
+	
+	pci_disable_device(pdev);
+#endif
+}
 
+void AppleIGB::stop(IOService* provider)
+{
+	DEBUGOUT("stop()\n");
 	detachInterface(netif);
 	RELEASE(netif);
 	/* flush_scheduled work may reschedule our watchdog task, so
@@ -8274,58 +8319,19 @@ void AppleIGB::stop(IOService* provider)
 		}
 		RELEASE(workLoop);
 	}
-	set_bit(__IGB_DOWN, &adapter->state);
 
-#ifdef IGB_DCA
-	if (adapter->flags & IGB_FLAG_DCA_ENABLED) {
-		IOLog("DCA disabled\n");
-		dca_remove_requester(&pdev->dev);
-		adapter->flags &= ~IGB_FLAG_DCA_ENABLED;
-		E1000_WRITE_REG(hw, E1000_DCA_CTRL, E1000_DCA_CTRL_DCA_DISABLE);
-	}
-#endif
+	igb_remove();
 
-	/* Release control of h/w to f/w.  If f/w is AMT enabled, this
-	 * would have already happened in close and is redundant. */
-	igb_release_hw_control(adapter);
-#if	0
-	unregister_netdev(netdev);
-#endif
-	
-	igb_clear_interrupt_scheme(adapter);
-	igb_reset_sriov_capability(adapter);
-	
-#if	1
-	RELEASE(csrPCIAddress);
-#else
-	iounmap(hw->hw_addr);
-	if (hw->flash_address)
-		iounmap(hw->flash_address);
-	pci_release_selected_regions(pdev,
-	                             pci_select_bars(pdev, IORESOURCE_MEM));
-#endif
-	kfree(adapter->mac_table, sizeof(struct igb_mac_addr)* adapter->hw.mac.rar_entry_count);
-	kfree(adapter->shadow_vfta, sizeof(u32) * E1000_VFTA_ENTRIES);
-#if	1
 	RELEASE(pdev);
-#else
-	free_netdev(netdev);
-	
-	pci_disable_pcie_error_reporting(pdev);
-	
-	pci_disable_device(pdev);
-#endif
-	
+
 	super::stop(provider);
 }
 
 	
 // igb_probe
-bool AppleIGB::start(IOService* provider)
+bool AppleIGB::igb_probe()
 {
-	DEBUGOUT("start()\n");
     bool success = false;
-	
 	struct igb_adapter *adapter = &priv_adapter;
 	struct e1000_hw *hw = &adapter->hw;
 	u16 eeprom_data = 0;
@@ -8335,22 +8341,7 @@ bool AppleIGB::start(IOService* provider)
 	static SInt8 global_quad_port_a; /* global quad port a indication */
 	static SInt8 cards_found;
 	
-	if (super::start(provider) == false) {
-		return false;
-	}
 
-	pdev = OSDynamicCast(IOPCIDevice, provider);
-	if (pdev == NULL)
-		return false;
-	
-	pdev->retain();
-	if (pdev->open(this) == false)
-		return false;
-	
-	if(!initEventSources(provider)){
-		return false;
-	}
-	
 	csrPCIAddress = pdev->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress0);
 	if (csrPCIAddress == NULL) {
 		return false;
@@ -8368,7 +8359,7 @@ bool AppleIGB::start(IOService* provider)
 		
 		// pdev->setMemoryEnable(true);
 	}
-
+	
 	do {
 #ifndef HAVE_ASPM_QUIRKS
 		/* 82575 requires that the pci-e link partner disable the L0s state */
@@ -8376,7 +8367,7 @@ bool AppleIGB::start(IOService* provider)
 			case E1000_DEV_ID_82575EB_COPPER:
 			case E1000_DEV_ID_82575EB_FIBER_SERDES:
 			case E1000_DEV_ID_82575GB_QUAD_COPPER:
-				// I do not know how to implement this. 
+				// I do not know how to implement this.
 				// pci_disable_link_state(pdev, PCIE_LINK_STATE_L0S);
 			default:
 				break;
@@ -8429,7 +8420,7 @@ bool AppleIGB::start(IOService* provider)
 #endif
 		
 		//strncpy(netdev->name, pci_name(pdev), sizeof(netdev->name) - 1);
-
+		
 		adapter->bd_number = OSIncrementAtomic8(&cards_found);
 		
 		/* setup the private structure */
@@ -8438,7 +8429,7 @@ bool AppleIGB::start(IOService* provider)
 			goto err_sw_init;
 		
 		e1000_get_bus_info(hw);
-
+		
 		hw->phy.autoneg_wait_to_complete = FALSE;
 		hw->mac.adaptive_ifs = FALSE;
 		
@@ -8475,10 +8466,10 @@ bool AppleIGB::start(IOService* provider)
 		NETIF_F_HW_VLAN_RX |
 		NETIF_F_HW_VLAN_TX;
 #endif
-
+		
         if (hw->mac.type >= e1000_82576)
             _features |= NETIF_F_SCTP_CSUM;
-
+		
 #ifdef HAVE_NDO_SET_FEATURES
 		/* copy netdev features into list of user selectable features */
 		netdev->hw_features |= _features;
@@ -8502,7 +8493,7 @@ bool AppleIGB::start(IOService* provider)
 		if (adapter->dmac != IGB_DMAC_DISABLE)
 			IOLog("DMA Coalescing is enabled..\n");
 #endif
-
+		
 		/* before reading the NVM, reset the controller to put the device in a
 		 * known good starting state */
 		e1000_reset_hw(hw);
@@ -8531,11 +8522,11 @@ bool AppleIGB::start(IOService* provider)
 		
 		/* get firmware version for ethtool -i */
 		igb_set_fw_version(adapter);
-
+		
         /* Check if Media Autosense is enabled */
         if (hw->mac.type == e1000_82580)
             igb_init_mas(adapter);
-
+		
 		adapter->watchdog_task = watchdogSource;
 		if (adapter->flags & IGB_FLAG_DETECT_BAD_DMA)
 			adapter->dma_err_task = dmaErrSource;
@@ -8570,35 +8561,35 @@ bool AppleIGB::start(IOService* provider)
 		 * the eeprom may be wrong or the board simply won't support wake on
 		 * lan on a particular port */
 		switch (pdev->configRead16(kIOPCIConfigDeviceID)) {
-		case E1000_DEV_ID_82575GB_QUAD_COPPER:
-			adapter->flags &= ~IGB_FLAG_WOL_SUPPORTED;
-			break;
-		case E1000_DEV_ID_82575EB_FIBER_SERDES:
-		case E1000_DEV_ID_82576_FIBER:
-		case E1000_DEV_ID_82576_SERDES:
-			/* Wake events only supported on port A for dual fiber
-			 * regardless of eeprom setting */
-			if (E1000_READ_REG(hw, E1000_STATUS) & E1000_STATUS_FUNC_1)
+			case E1000_DEV_ID_82575GB_QUAD_COPPER:
 				adapter->flags &= ~IGB_FLAG_WOL_SUPPORTED;
-			break;
-		case E1000_DEV_ID_82576_QUAD_COPPER:
-		case E1000_DEV_ID_82576_QUAD_COPPER_ET2:
-			/* if quad port adapter, disable WoL on all but port A */
-			if (global_quad_port_a != 0)
-				adapter->flags &= ~IGB_FLAG_WOL_SUPPORTED;
-			else
-				adapter->flags |= IGB_FLAG_QUAD_PORT_A;
-			/* Reset for multiple quad port adapters */
-			if (++global_quad_port_a == 4)
-				global_quad_port_a = 0;
-			break;
-		default:
-			/* If the device can't wake, don't set software support */
+				break;
+			case E1000_DEV_ID_82575EB_FIBER_SERDES:
+			case E1000_DEV_ID_82576_FIBER:
+			case E1000_DEV_ID_82576_SERDES:
+				/* Wake events only supported on port A for dual fiber
+				 * regardless of eeprom setting */
+				if (E1000_READ_REG(hw, E1000_STATUS) & E1000_STATUS_FUNC_1)
+					adapter->flags &= ~IGB_FLAG_WOL_SUPPORTED;
+				break;
+			case E1000_DEV_ID_82576_QUAD_COPPER:
+			case E1000_DEV_ID_82576_QUAD_COPPER_ET2:
+				/* if quad port adapter, disable WoL on all but port A */
+				if (global_quad_port_a != 0)
+					adapter->flags &= ~IGB_FLAG_WOL_SUPPORTED;
+				else
+					adapter->flags |= IGB_FLAG_QUAD_PORT_A;
+				/* Reset for multiple quad port adapters */
+				if (++global_quad_port_a == 4)
+					global_quad_port_a = 0;
+				break;
+			default:
+				/* If the device can't wake, don't set software support */
 #if	0
-			if (!device_can_wakeup(&adapter->pdev->dev))
-				adapter->flags &= ~IGB_FLAG_WOL_SUPPORTED;
+				if (!device_can_wakeup(&adapter->pdev->dev))
+					adapter->flags &= ~IGB_FLAG_WOL_SUPPORTED;
 #endif
-			break;
+				break;
 		}
 		
 		/* initialize the wol settings based on the eeprom settings */
@@ -8612,14 +8603,14 @@ bool AppleIGB::start(IOService* provider)
 			adapter->flags |= IGB_FLAG_WOL_SUPPORTED;
 			adapter->wol = 0;
 		}
-
+		
 		device_set_wakeup_enable(pci_dev_to_dev(adapter->pdev),
-					adapter->flags & IGB_FLAG_WOL_SUPPORTED);
+								 adapter->flags & IGB_FLAG_WOL_SUPPORTED);
 #endif
 		/* reset the hardware with the new settings */
 		igb_reset(adapter);
         adapter->devrc = 0;
-
+		
 #ifdef HAVE_I2C_SUPPORT
 		/* Init the I2C interface */
 		err = igb_init_i2c(adapter);
@@ -8628,7 +8619,7 @@ bool AppleIGB::start(IOService* provider)
 			goto err_eeprom;
 		}
 #endif /* HAVE_I2C_SUPPORT */
-
+		
 		/* let the f/w know that the h/w is now under the control of the
 		 * driver. */
 		igb_get_hw_control(adapter);
@@ -8667,7 +8658,7 @@ bool AppleIGB::start(IOService* provider)
 			  hw->mac.addr[3],hw->mac.addr[4],hw->mac.addr[5]);
 		ret_val = e1000_read_pba_string(hw, pba_str, E1000_PBANUM_LENGTH);
 		IOLog("PBA No: %s\n", ret_val ? "Unknown": (char*)pba_str);
-
+		
 		/* Initialize the thermal sensor on i350 devices. */
 		if (hw->mac.type == e1000_i350) {
 			if (hw->bus.func == 0) {
@@ -8686,7 +8677,7 @@ bool AppleIGB::start(IOService* provider)
 		} else {
 			adapter->ets = false;
 		}
-
+		
 		if (hw->phy.media_type == e1000_media_type_copper) {
 			switch (hw->mac.type) {
 				case e1000_i350:
@@ -8735,34 +8726,50 @@ bool AppleIGB::start(IOService* provider)
 	err_eeprom:
 		if (!e1000_check_reset_block(hw))
 			e1000_phy_hw_reset(hw);
-
+		
 	err_sw_init:
 		igb_clear_interrupt_scheme(adapter);
 		igb_reset_sriov_capability(adapter);
 		RELEASE(csrPCIAddress);	// iounmap(hw->hw_addr);
 	} while(false);
+	
+	
+	return success;
+}
+		
 
+bool AppleIGB::start(IOService* provider)
+{
+	DEBUGOUT("start()\n");
+	
+	if (super::start(provider) == false) {
+		return false;
+	}
+
+	pdev = OSDynamicCast(IOPCIDevice, provider);
+	if (pdev == NULL)
+		return false;
+	
+	pdev->retain();
+	if (pdev->open(this) == false)
+		return false;
+	
+	if(!initEventSources(provider))
+		return false;
+	
+	if(!igb_probe())
+		return false;
 
 	// Close our provider, it will be re-opened on demand when
 	// our enable() is called by a client.
 	pdev->close(this);
 	
-	do {
-		if ( false == success )
-			break;
-		
-		success = false;
+	// Allocate and attach an IOEthernetInterface instance.
+	if (attachInterface((IONetworkInterface**)&netif, false) == false)
+		return false;
 
-		// Allocate and attach an IOEthernetInterface instance.
-		if (attachInterface((IONetworkInterface**)&netif, false) == false) {
-			break;
-		}
-
-		netif->registerService();
-		success = true;
-	} while(false);
-
-	return success;
+	netif->registerService();
+	return true;
 }
 
 #ifdef HAVE_I2C_SUPPORT

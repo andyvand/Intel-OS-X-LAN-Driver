@@ -150,6 +150,8 @@ private:
 
 	bool initEventSources( IOService* provider );
 
+	bool igb_probe();
+	void igb_remove();
 
 public:
 	static void interruptHandler(OSObject * target,
