@@ -22,7 +22,7 @@ extern "C" {
 #include "AppleIGB.h"
 
 
-#define USE_HW_CSUM 1
+#define USE_HW_UDPCSUM 1
 #define CAN_RECOVER_STALL	0
 
 #define NETIF_F_TSO
@@ -9248,7 +9248,6 @@ IOReturn AppleIGB::getChecksumSupport(UInt32 *checksumMask, UInt32 checksumFamil
 		IOLog("AppleIGB: Operating system wants information for unknown checksum family.\n");
 		return kIOReturnUnsupported;
 	}
-#if USE_HW_CSUM
 	/*
 	 * kChecksumTCPIPv6 = 0x0020,
 	 * kChecksumUDPIPv6 = 0x0040,
@@ -9256,9 +9255,12 @@ IOReturn AppleIGB::getChecksumSupport(UInt32 *checksumMask, UInt32 checksumFamil
 	if( !isOutput ) {
 		*checksumMask = kChecksumTCP | kChecksumUDP | kChecksumIP | CSUM_TCPIPv6 | CSUM_UDPIPv6;
 	} else {
+#if USE_HW_UDPCSUM
 		*checksumMask = kChecksumTCP | kChecksumUDP | CSUM_TCPIPv6 | CSUM_UDPIPv6;
-	}
+#else
+		*checksumMask = kChecksumTCP | CSUM_TCPIPv6;
 #endif
+	}
     return kIOReturnSuccess;
 }
 
@@ -9674,9 +9676,7 @@ void AppleIGB::stopTxQueue()
 
 void AppleIGB::rxChecksumOK( mbuf_t skb, UInt32 flag )
 {
-#if USE_HW_CSUM
 	setChecksumResult(skb, kChecksumFamilyTCPIP, flag, flag );
-#endif
 }
 	
 bool AppleIGB::carrier()
