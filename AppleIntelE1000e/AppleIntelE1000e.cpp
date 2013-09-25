@@ -21,7 +21,7 @@ extern "C" {
 
 #include "AppleIntelE1000e.h"
 
-#define USE_TX_IP_CHECKSUM	0
+#define USE_UDPCSUM	0
 #define CAN_RECOVER_STALL	0
 
 #define	NETIF_F_TSO
@@ -2472,17 +2472,17 @@ UInt32 AppleIntelE1000e::outputPacket(mbuf_t skb, void * param)
         return kIOReturnOutputDropped;
     if(tso){
 		tx_flags |= E1000_TX_FLAGS_TSO;
-        if (tso == 4)
-            tx_flags |= E1000_TX_FLAGS_IPV4;
-    } else if (e1000_tx_csum(skb, &tso)){
+    } else if (e1000_tx_csum(skb)){
 		tx_flags |= E1000_TX_FLAGS_CSUM;
-        if (tso == 4)
-            tx_flags |= E1000_TX_FLAGS_IPV4;
     }
 	/* Old method was to assume IPv4 packet by default if TSO was enabled.
 	 * 82571 hardware supports TSO capabilities for IPv6 as well...
 	 * no longer assume, we must.
 	 */
+	ether_header* eh = (ether_header*)mbuf_data(skb);
+	if(eh->ether_type == htons(ETH_P_IP)){
+		tx_flags |= E1000_TX_FLAGS_IPV4;
+	}
 
 	count = e1000_tx_map(adapter, skb, first, adapter->tx_fifo_limit,
                          txMbufCursor, segs, hdrLen);
@@ -2771,13 +2771,12 @@ IOReturn AppleIntelE1000e::getChecksumSupport(UInt32 *checksumMask, UInt32 check
 	} else {
 		UInt32 mask = 0;
 		if( !isOutput ) {
-			mask |= kChecksumTCP | kChecksumUDP | kChecksumIP;
-			mask |= CSUM_TCPIPv6|CSUM_UDPIPv6;
+			mask = kChecksumTCP | kChecksumUDP | kChecksumIP | CSUM_TCPIPv6|CSUM_UDPIPv6;
 		} else {
-			mask |= kChecksumTCP | kChecksumUDP;
-			mask |= CSUM_TCPIPv6|CSUM_UDPIPv6;
-#if USE_TX_IP_CHECKSUM
-			mask |= kChecksumIP;
+#if USE_UDPCSUM
+			mask = kChecksumTCP | kChecksumUDP | CSUM_TCPIPv6|CSUM_UDPIPv6;
+#else
+			mask = kChecksumTCP | CSUM_TCPIPv6;
 #endif
 		}
 		*checksumMask = mask;
@@ -4741,7 +4740,7 @@ void AppleIntelE1000e::e1000_rx_checksum(mbuf_t skb, u32 status_err)
 }
 
 
-bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb, int* ipv)
+bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 {
 	struct e1000_adapter *adapter = &priv_adapter;
 	struct e1000_ring *tx_ring = adapter->tx_ring;
@@ -4749,6 +4748,7 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb, int* ipv)
 	struct e1000_buffer *buffer_info;
 	unsigned int i, ip_hlen;
 	u32 cmd_len = E1000_TXD_CMD_DEXT;
+	u_int8_t protocol = 0;
 
 	i = tx_ring->next_to_use;
 	buffer_info = &tx_ring->buffer_info[i];
@@ -4756,54 +4756,39 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb, int* ipv)
 
 	u8* nw_start = (u8*)mbuf_data(skb)+ETH_HLEN;
 	
-    *ipv = 0;
 	UInt32 checksumDemanded;
 	getChecksumDemand(skb, kChecksumFamilyTCPIP, &checksumDemanded);
 	if(checksumDemanded & (kChecksumTCP|kChecksumUDP)){
 		struct ip* ip = (struct ip*)nw_start;
+		protocol = ip->ip_p;
 		ip_hlen = ip->ip_hl * 4;
-		context_desc->lower_setup.ip_config = E1000_TXD_CMD_DEXT | E1000_TXD_DTYP_D;
-		context_desc->upper_setup.tcp_config = E1000_TXD_POPTS_TXSM << 8;
-
-		// IP checksum
-		context_desc->lower_setup.ip_fields.ipcss = ETH_HLEN;
-		context_desc->lower_setup.ip_fields.ipcso = ETH_HLEN + offsetof(struct ip, ip_sum);
-		context_desc->lower_setup.ip_fields.ipcse = cpu_to_le16(ETH_HLEN + ip_hlen - 1);
-		
-        *ipv = 4;
 	} else if(checksumDemanded & (CSUM_TCPIPv6|CSUM_UDPIPv6)){
 		struct ip6_hdr* ip6 = (struct ip6_hdr*)nw_start;
-		u_int8_t nexthdr;
 		do {
-			nexthdr = ip6->ip6_ctlun.ip6_un1.ip6_un1_nxt;
+			protocol = ip6->ip6_ctlun.ip6_un1.ip6_un1_nxt;
 			ip6++;
-		} while(nexthdr != IPPROTO_TCP && nexthdr != IPPROTO_UDP);
+		} while(protocol != IPPROTO_TCP && protocol != IPPROTO_UDP);
 		ip_hlen = (u8*)ip6 - nw_start;
-
-        *ipv = 6;
 	} else {
 		return false;
 	}
+	context_desc->lower_setup.ip_config = 0;
 
-	/* If we reach this point, the checksum offload context
-	 * needs to be reset.
-	 */
-	
 	context_desc->upper_setup.tcp_fields.tucss = ETH_HLEN + ip_hlen;
-	context_desc->upper_setup.tcp_fields.tucse = cpu_to_le16(0);
+	context_desc->upper_setup.tcp_fields.tucse = 0;
 	
-	if (checksumDemanded & (kChecksumTCP|CSUM_TCPIPv6)) {
+	if (protocol == IPPROTO_TCP) {
 		context_desc->upper_setup.tcp_fields.tucso =
 			ETH_HLEN + ip_hlen +
 			offsetof(struct tcphdr, th_sum);
 			cmd_len |= E1000_TXD_CMD_TCP;
-	} else if (checksumDemanded & (kChecksumUDP|CSUM_UDPIPv6)){
+	} else { // protocol == IPPROTO_UDP
 		context_desc->upper_setup.tcp_fields.tucso =
 			ETH_HLEN + ip_hlen +
 			offsetof(struct udphdr, uh_sum);
 	}
 	
-	context_desc->tcp_seg_setup.data = cpu_to_le32(0);
+	context_desc->tcp_seg_setup.data = 0;
 	context_desc->cmd_and_length = cpu_to_le32(cmd_len);
 
 	buffer_info->next_to_watch = i;

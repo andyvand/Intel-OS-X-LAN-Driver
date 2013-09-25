@@ -179,6 +179,8 @@ struct work_struct {
 #define ETH_FRAME_LEN	1514		/* Max. octets in frame sans FCS */
 #define ETH_FCS_LEN		4			/* Octets in the FCS             */
 
+#define ETH_P_IP        0x0800
+
 #define VLAN_HLEN		4			/* The additional bytes (on top of the Ethernet header) that VLAN requires. */
 #define VLAN_ETH_ALEN	6			/* Octets in one ethernet addr   */
 #define VLAN_ETH_HLEN	18			/* Total octets in header.       */

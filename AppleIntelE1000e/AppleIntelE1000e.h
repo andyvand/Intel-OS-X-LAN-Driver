@@ -163,7 +163,7 @@ private:
 	void e1000_init_manageability_pt();
 	void e1000_configure_tx();
 	void e1000e_set_rx_mode();
-	bool e1000_tx_csum(mbuf_t skb, int* ipv);
+	bool e1000_tx_csum(mbuf_t skb);
 	void e1000_rx_checksum(mbuf_t skb, u32 status);
 	void e1000_receive_skb(mbuf_t skb, u32 length, u32 staterr, __le16 vlan);
 	void e1000_configure();
