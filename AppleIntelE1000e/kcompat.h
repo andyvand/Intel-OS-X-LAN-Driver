@@ -180,6 +180,7 @@ struct work_struct {
 #define ETH_FCS_LEN		4			/* Octets in the FCS             */
 
 #define ETH_P_IP        0x0800
+#define ETH_P_IPV6      0x86DD
 
 #define VLAN_HLEN		4			/* The additional bytes (on top of the Ethernet header) that VLAN requires. */
 #define VLAN_ETH_ALEN	6			/* Octets in one ethernet addr   */

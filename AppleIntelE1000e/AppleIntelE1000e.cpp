@@ -1124,15 +1124,6 @@ void e1000e_write_itr(struct e1000_adapter *adapter, u32 itr)
 	}
 }
 
-#define E1000_TX_FLAGS_CSUM		0x00000001
-#define E1000_TX_FLAGS_VLAN		0x00000002
-#define E1000_TX_FLAGS_TSO		0x00000004
-#define E1000_TX_FLAGS_IPV4		0x00000008
-#define E1000_TX_FLAGS_NO_FCS		0x00000010
-#define E1000_TX_FLAGS_HWTSTAMP		0x00000020
-#define E1000_TX_FLAGS_VLAN_MASK	0xffff0000
-#define E1000_TX_FLAGS_VLAN_SHIFT	16
-
 // copy from bsd/netinet/in_cksum.c
 union s_util {
 	char    c[2];
@@ -2774,7 +2765,7 @@ IOReturn AppleIntelE1000e::getChecksumSupport(UInt32 *checksumMask, UInt32 check
 			mask = kChecksumTCP | kChecksumUDP | kChecksumIP | CSUM_TCPIPv6|CSUM_UDPIPv6;
 		} else {
 #if USE_UDPCSUM
-			mask = kChecksumTCP | kChecksumUDP | CSUM_TCPIPv6|CSUM_UDPIPv6;
+			mask = kChecksumTCP | kChecksumUDP | CSUM_TCPIPv6| CSUM_UDPIPv6;
 #else
 			mask = kChecksumTCP | CSUM_TCPIPv6;
 #endif
@@ -4748,16 +4739,13 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 	struct e1000_buffer *buffer_info;
 	unsigned int i, ip_hlen;
 	u32 cmd_len = E1000_TXD_CMD_DEXT;
-	u_int8_t protocol = 0;
-
-	i = tx_ring->next_to_use;
-	buffer_info = &tx_ring->buffer_info[i];
-	context_desc = E1000_CONTEXT_DESC(*tx_ring, i);
+	u_int8_t protocol = 0, transport_offset = 0;
 
 	u8* nw_start = (u8*)mbuf_data(skb)+ETH_HLEN;
 	
 	UInt32 checksumDemanded;
 	getChecksumDemand(skb, kChecksumFamilyTCPIP, &checksumDemanded);
+
 	if(checksumDemanded & (kChecksumTCP|kChecksumUDP)){
 		struct ip* ip = (struct ip*)nw_start;
 		protocol = ip->ip_p;
@@ -4772,22 +4760,23 @@ bool AppleIntelE1000e::e1000_tx_csum(mbuf_t skb)
 	} else {
 		return false;
 	}
+	if (protocol == IPPROTO_TCP) {
+		transport_offset = offsetof(struct tcphdr, th_sum);
+		cmd_len |= E1000_TXD_CMD_TCP;
+	} else { // protocol == IPPROTO_UDP
+		transport_offset = offsetof(struct udphdr, uh_sum);
+	}
+
+	i = tx_ring->next_to_use;
+	buffer_info = &tx_ring->buffer_info[i];
+	context_desc = E1000_CONTEXT_DESC(*tx_ring, i);
+
 	context_desc->lower_setup.ip_config = 0;
 
 	context_desc->upper_setup.tcp_fields.tucss = ETH_HLEN + ip_hlen;
 	context_desc->upper_setup.tcp_fields.tucse = 0;
-	
-	if (protocol == IPPROTO_TCP) {
-		context_desc->upper_setup.tcp_fields.tucso =
-			ETH_HLEN + ip_hlen +
-			offsetof(struct tcphdr, th_sum);
-			cmd_len |= E1000_TXD_CMD_TCP;
-	} else { // protocol == IPPROTO_UDP
-		context_desc->upper_setup.tcp_fields.tucso =
-			ETH_HLEN + ip_hlen +
-			offsetof(struct udphdr, uh_sum);
-	}
-	
+	context_desc->upper_setup.tcp_fields.tucso = ETH_HLEN + ip_hlen + transport_offset;
+		
 	context_desc->tcp_seg_setup.data = 0;
 	context_desc->cmd_and_length = cpu_to_le32(cmd_len);
 
