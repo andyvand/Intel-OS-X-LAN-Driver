@@ -22,7 +22,7 @@ extern "C" {
 #include "AppleIGB.h"
 
 
-#define USE_HW_UDPCSUM 1
+#define USE_HW_UDPCSUM 0
 #define CAN_RECOVER_STALL	0
 
 #define NETIF_F_TSO
@@ -8881,6 +8881,9 @@ UInt32 AppleIGB::outputPacket(mbuf_t skb, void * param)
 	if (enabledForNetif == false) {             // drop the packet.
 		return kIOReturnOutputDropped;
 	}
+	if(txMbufCursor == NULL){
+		return kIOReturnOutputDropped;
+	}
 
 	if (test_bit(__IGB_DOWN, &adapter->state)) {
 		freePacket(skb);
@@ -8907,13 +8910,7 @@ UInt32 AppleIGB::outputPacket(mbuf_t skb, void * param)
 		if (igb_maybe_stop_tx(tx_ring, MAX_SKB_FRAGS + 3)) {
             /* this is a hard error */
 			//IOLog("igb_maybe_stop_tx() returns TRUE\n");
-#if CAN_RECOVER_STALL
-			rc = kIOReturnOutputStall;
-			bQueueStopped = true;
-			watchdogSource->setTimeoutMS(100);
-#else
 			rc = kIOReturnOutputDropped;
-#endif
 			break;
         }
         /* record the location of the first descriptor for this packet */
@@ -9662,13 +9659,11 @@ void AppleIGB::startTxQueue()
 	IOLog("AppleIGB::startTxQueue()\n");
 	txMbufCursor = IOMbufNaturalMemoryCursor::withSpecification(_mtu + ETH_HLEN + ETH_FCS_LEN, MAX_SKB_FRAGS);
 	transmitQueue->start();
-	bQueueStopped = false;
 }
 
 void AppleIGB::stopTxQueue()
 {
 	IOLog("AppleIGB::stopTxQueue()\n");
-	bQueueStopped = true;
 	transmitQueue->stop();
 	transmitQueue->flush();
 	RELEASE(txMbufCursor);
