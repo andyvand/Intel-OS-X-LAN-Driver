@@ -2403,16 +2403,6 @@ void AppleIntelE1000e::e1000e_down(bool reset)
 	 */
 }
 
-void e1000e_reinit_locked(struct e1000_adapter *adapter)
-{
-	might_sleep();
-	while (test_and_set_bit(__E1000_RESETTING, &adapter->state))
-		usleep_range(1000, 2000);
-	e1000e_down(adapter, true);
-	e1000e_up(adapter);
-	clear_bit(__E1000_RESETTING, &adapter->state);
-}
-
 #ifdef HAVE_HW_TIME_STAMP
 /**
  * e1000e_cyclecounter_read - read raw cycle counter (used by time counter)
@@ -4328,14 +4318,18 @@ void AppleIntelE1000e::doReset()
 		//e1000e_dump(adapter);
 		e_err("Reset adapter unexpectedly\n");
 	}
-	e1000e_reinit_locked(adapter);
+	might_sleep();
+	while (test_and_set_bit(__E1000_RESETTING, &adapter->state))
+		usleep_range(1000, 2000);
+	e1000e_down(true);
+	e1000e_up();
+	clear_bit(__E1000_RESETTING, &adapter->state);
 }
 
 void AppleIntelE1000e::resetHandler(OSObject * target, IOTimerEventSource * src)
 {
-	//e_dbg("void AppleIntelE1000e::timeoutHandler(OSObject * target, IOTimerEventSource * src)\n");
 	AppleIntelE1000e* me = (AppleIntelE1000e*) target;
-	me->timeoutOccurred(src);
+	me->doReset();
 	
 }
 
