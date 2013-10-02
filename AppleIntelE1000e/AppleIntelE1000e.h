@@ -111,7 +111,8 @@ private:
 	
 	IOInterruptEventSource * interruptSource;
 	IOTimerEventSource * watchdogSource;
-	
+	IOTimerEventSource * resetSource;
+
 	IOEthernetInterface * netif;
 	IONetworkStats * netStats;
 	IOEthernetStats * etherStats;
@@ -139,6 +140,8 @@ private:
 private:
 	void interruptOccurred(IOInterruptEventSource * src);
 	void timeoutOccurred(IOTimerEventSource* src);
+	void doReset();
+
 	bool addNetworkMedium(UInt32 type, UInt32 bps, UInt32 index);
 
 	bool initEventSources( IOService* provider );
@@ -187,6 +190,7 @@ public:
 	
 	
 	static void timeoutHandler(OSObject * target, IOTimerEventSource * src);
+	static void resetHandler(OSObject * target, IOTimerEventSource * src);
 };
 
 

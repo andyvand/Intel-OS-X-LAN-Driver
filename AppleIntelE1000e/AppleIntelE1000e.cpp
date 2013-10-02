@@ -92,6 +92,14 @@ static void release_mutex(){
 	}
 }
 
+static void schedule_work(work_struct* p)
+{
+	e_dbg("Work scheduled.\n");
+	IOTimerEventSource* task = (IOTimerEventSource*)p->src;
+	task->setTimeoutMS(0);
+}
+
+
 static uint32_t jiffies()
 {
 #if defined(MAC_OS_X_VERSION_10_6)
@@ -1727,10 +1735,7 @@ void AppleIntelE1000e::free()
 	e_dbg("void AppleIntelE1000e::free()\n");
 	
 	RELEASE(netif);
-	RELEASE(interruptSource);
-	RELEASE(watchdogSource);
 	
-	RELEASE(workLoop);
 	RELEASE(pciDevice);
 	RELEASE(mediumDict);
 	
@@ -1755,7 +1760,7 @@ bool AppleIntelE1000e::init(OSDictionary *properties)
 		return false;
 		
 	enabledForNetif = false;
-	
+
 	pciDevice = NULL;
 	mediumDict = NULL;
 	csrPCIAddress = NULL;
@@ -1795,12 +1800,18 @@ void AppleIntelE1000e::stop(IOService* provider)
 			watchdogSource->release();
 			watchdogSource = NULL;
 		}
-		
+		if (resetSource) {
+			workLoop->removeEventSource(resetSource);
+			resetSource->release();
+			resetSource = NULL;
+		}
+
 		if (interruptSource) {
 			workLoop->removeEventSource(interruptSource);
 			interruptSource->release();
 			interruptSource = NULL;
 		}
+		RELEASE(workLoop);
 	}
 #ifdef HAVE_HW_TIME_STAMP
 	if (adapter->flags & FLAG_HAS_HW_TIMESTAMP) {
@@ -2164,7 +2175,14 @@ bool AppleIntelE1000e::initEventSources( IOService* provider )
 		e_dbg("watchdogSource create failed.\n");
 		return false;
 	}
-	
+
+	resetSource = IOTimerEventSource::timerEventSource(this, &AppleIntelE1000e::resetHandler );
+	if (!watchdogSource || (myWorkLoop->addEventSource(watchdogSource) != kIOReturnSuccess)) {
+		e_dbg("watchdogSource create failed.\n");
+		return false;
+	}
+	priv_adapter.reset_task.src = resetSource;
+
 	mediumDict = OSDictionary::withCapacity(MEDIUM_INDEX_COUNT + 1);
 	if (mediumDict == NULL) {
 		e_dbg("mediumDict .\n");
@@ -2385,7 +2403,6 @@ void AppleIntelE1000e::e1000e_down(bool reset)
 	 */
 }
 
-#if 0
 void e1000e_reinit_locked(struct e1000_adapter *adapter)
 {
 	might_sleep();
@@ -2395,7 +2412,6 @@ void e1000e_reinit_locked(struct e1000_adapter *adapter)
 	e1000e_up(adapter);
 	clear_bit(__E1000_RESETTING, &adapter->state);
 }
-#endif
 
 #ifdef HAVE_HW_TIME_STAMP
 /**
@@ -2845,7 +2861,7 @@ void AppleIntelE1000e::interruptOccurred(IOInterruptEventSource * src)
 		E1000_PBECCSTS_UNCORR_ERR_CNT_SHIFT;
 		
 		/* Do the reset outside of interrupt context */
-		schedule_work(&adapter->reset_task);
+		resetSource->setTimeoutMS(0);
 		
 		/* return immediately since reset is imminent */
 		return;
@@ -4221,7 +4237,7 @@ link_up:
 
 	/* If reset is necessary, do it outside of interrupt context. */
 	if (adapter->flags & FLAG_RESTART_NOW) {
-		schedule_work(&adapter->reset_task);
+		resetSource->setTimeoutMS(0);
 		/* return immediately since reset is imminent */
 		return;
 	}
@@ -4301,6 +4317,27 @@ void AppleIntelE1000e::timeoutHandler(OSObject * target, IOTimerEventSource * sr
 	
 }
 
+void AppleIntelE1000e::doReset()
+{
+	e1000_adapter *adapter = &priv_adapter;
+	/* don't run the task if already down */
+	if (test_bit(__E1000_DOWN, &adapter->state))
+		return;
+
+	if (!(adapter->flags & FLAG_RESTART_NOW)) {
+		//e1000e_dump(adapter);
+		e_err("Reset adapter unexpectedly\n");
+	}
+	e1000e_reinit_locked(adapter);
+}
+
+void AppleIntelE1000e::resetHandler(OSObject * target, IOTimerEventSource * src)
+{
+	//e_dbg("void AppleIntelE1000e::timeoutHandler(OSObject * target, IOTimerEventSource * src)\n");
+	AppleIntelE1000e* me = (AppleIntelE1000e*) target;
+	me->timeoutOccurred(src);
+	
+}
 
 void AppleIntelE1000e::e1000e_set_rx_mode()
 {

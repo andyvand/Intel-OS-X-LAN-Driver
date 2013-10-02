@@ -139,12 +139,7 @@ struct timer_list {
 };
 
 struct work_struct {
-	unsigned long pending;
-	struct list_head entry;
-	void (*func)(void *);
-	void *data;
-	void *wq_data;
-	struct timer_list timer;
+	void* src; // IOTimerEventSrc
 };
 
 #define ADVERTISED_10baseT_Half         (1 << 0)
@@ -382,12 +377,12 @@ static inline unsigned int _kc_ether_crc_le(int length, unsigned char *data)
 /*****************************************************************************/
 #define msleep(x)	IOSleep(x)
 #define udelay(x)	IODelay(x)
+#define might_sleep()
 
 #define mdelay(x)	for(int i = 0; i < x; i++ )udelay(1000)
 #define DIV_ROUND_UP(n,d) (((n) + (d) - 1) / (d))
 #define usleep_range(min, max)	msleep(DIV_ROUND_UP(min, 1000))
 
-#define schedule_work(a)
 
 /*****************************************************************************/
 
