@@ -1889,7 +1889,7 @@ bool AppleIntelE1000e::start(IOService* provider)
 		return false;
 	
 #ifdef NETIF_F_TSO
-	useTSO = getBoolOption("TSO", TRUE);
+	useTSO = getBoolOption("NETIF_F_TSO", TRUE);
 #else
 	useTSO = FALSE;
 #endif
@@ -2036,8 +2036,9 @@ bool AppleIntelE1000e::start(IOService* provider)
 		adapter->hw.phy.autoneg_advertised = ADVERTISED_Default;
 		
 		/* ring size defaults */
-		adapter->rx_ring->count = E1000_DEFAULT_RXD;
-		adapter->tx_ring->count = E1000_DEFAULT_TXD;
+		adapter->rx_ring->count = getIntOption("E1000_DEFAULT_RXD", E1000_DEFAULT_RXD, E1000_MAX_RXD, E1000_MIN_RXD);
+		adapter->tx_ring->count = getIntOption("E1000_DEFAULT_TXD", E1000_DEFAULT_TXD, E1000_MAX_TXD, E1000_MIN_TXD);
+		e_info("AppleIntelE1000e:rx = %d, tx = %d\n", (int)adapter->rx_ring->count, (int)adapter->tx_ring->count);
 		
 		/* Initial Wake on LAN setting - If APM wake is enabled in
 		 * the EEPROM, enable the ACPI Magic Packet filter
@@ -3770,11 +3771,11 @@ void AppleIntelE1000e::e1000_print_hw_hang()
 	      phy_status, phy_1000t_status, phy_ext_status, pci_status);
 #if	0
 	e1000e_dump(adapter);
+#endif
 
 	/* Suggest workaround for known h/w issue */
 	if ((hw->mac.type == e1000_pchlan) && (er32(CTRL) & E1000_CTRL_TFCE))
 		e_err("Try turning off Tx pause (flow control) via ethtool\n");
-#endif
 }
 
 #ifdef HAVE_HW_TIME_STAMP
@@ -5099,15 +5100,6 @@ void AppleIntelE1000e::alloc_rx_buf(int cleaned_count)
 }
 
 
-int AppleIntelE1000e::getIntOption( int def, const char *name )
-{
-	int val = def;
-	OSNumber* numObj = OSDynamicCast( OSNumber, getProperty(name) );
-	if ( numObj ){
-		val = (int)numObj->unsigned32BitValue();
-	}
-	return val;
-}
 
 UInt32 AppleIntelE1000e::getFeatures() const {
 	UInt32 f = kIONetworkFeatureMultiPages | kIONetworkFeatureHardwareVlan;
@@ -5133,5 +5125,3 @@ extern "C" {
 		return (u16)pos;
 	}
 }
-
-

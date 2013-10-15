@@ -181,7 +181,6 @@ private:
 private:
 	bool clean_rx_irq();
 	void alloc_rx_buf(int cleaned_count);
-	int getIntOption( int def, const char *name );
 
 public:
 	static void interruptHandler(OSObject * target,
