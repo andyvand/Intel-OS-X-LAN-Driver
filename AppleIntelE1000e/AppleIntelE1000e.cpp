@@ -767,7 +767,12 @@ void e1000e_reset(struct e1000_adapter *adapter)
 	 */
 	if (adapter->flags & FLAG_HAS_AMT)
 		e1000e_get_hw_control(adapter);
+#ifdef DYNAMIC_LTR_SUPPORT
 	
+	adapter->c10_pba_bytes = er32(PBA) & 0x1F;
+	adapter->c10_pba_bytes <<= 10;
+#endif /* DYNAMIC_LTR_SUPPORT */
+
 	ew32(WUC, 0);
 	if (adapter->flags2 & FLAG2_HAS_PHY_WAKEUP)
 		e1e_wphy(&adapter->hw, BM_WUC, 0);
@@ -812,9 +817,10 @@ void e1000e_reset(struct e1000_adapter *adapter)
 			return;
 		}
 		
-		e1000_write_emi_reg_locked(hw, adv_addr,
-					   hw->dev_spec.ich8lan.eee_disable ?
-					   0 : adapter->eee_advert);
+		/* Set EEE advertising to either default or
+		 * whatever the user has defined using ethtool
+		 */
+		e1000_write_emi_reg_locked(hw, adv_addr, adapter->eee_advert);
 		
 		hw->phy.ops.release(hw);
 	}
@@ -981,6 +987,31 @@ static void e1000e_update_tdt_wa(struct e1000_ring *tx_ring, unsigned int i)
 		schedule_work(&adapter->reset_task);
 	}
 }
+
+#ifdef DYNAMIC_LTR_SUPPORT
+
+static void e1000e_check_ltr_demote(struct e1000_adapter *adapter,
+									unsigned int current_rx_bytes)
+{
+	struct e1000_hw *hw = &adapter->hw;
+	u32 mpc;
+	
+	mpc = er32(MPC);
+	adapter->c10_mpc_count += mpc;
+	adapter->c10_rx_bytes += current_rx_bytes;
+	
+	/* If not already demoted and either a missed packet or
+	 * have received bytes enough to have filled the RX_PBA
+	 * then demote LTR
+	 */
+	if (!adapter->c10_demote_ltr &&
+	    (mpc || (current_rx_bytes > adapter->c10_pba_bytes))) {
+		adapter->c10_demote_ltr = true;
+		e1000_demote_ltr(hw, adapter->c10_demote_ltr, true);
+	}
+}
+#endif /* DYNAMIC_LTR_SUPPORT */
+
 
 /**
  * e1000_update_itr - update the dynamic ITR value based on statistics
@@ -1618,6 +1649,32 @@ release:
 	return retval;
 }
 
+static void e1000e_flush_lpic(struct pci_dev *pdev)
+{
+#ifndef __APPLE__
+	struct net_device *netdev = pci_get_drvdata(pdev);
+	struct e1000_adapter *adapter = netdev_priv(netdev);
+	struct e1000_hw *hw = &adapter->hw;
+	u32 ret_val;
+	
+	pm_runtime_get_sync((netdev_to_dev(netdev))->parent);
+	
+	ret_val = hw->phy.ops.acquire(hw);
+	if (ret_val)
+		goto fl_out;
+	
+	pr_info("EEE TX LPI TIMER: %08X\n",
+			er32(LPIC) >> E1000_LPIC_LPIET_SHIFT);
+	
+	hw->phy.ops.release(hw);
+	
+fl_out:
+	pm_runtime_put_sync(netdev->dev.parent);
+	
+	return;
+#endif
+}
+
 static void e1000e_downshift_workaround(struct e1000_adapter *adapter)
 {
 	if (test_bit(__E1000_DOWN, &adapter->state))
@@ -2073,8 +2130,24 @@ bool AppleIntelE1000e::start(IOService* provider)
 		
 		/* initialize the wol settings based on the eeprom settings */
 		adapter->wol = adapter->eeprom_wol;
-		e_info("AppleIntelE1000e:WOL = %d\n", (int)adapter->wol);
-		//device_set_wakeup_enable(&adapter->pdev->dev, adapter->wol);
+#ifdef DYNAMIC_LTR_SUPPORT
+		
+		/* initialize the DYNAMIC_LTR_SUPPORT variables */
+		adapter->c10_mpc_count = 0;
+		adapter->c10_rx_bytes = 0;
+		/* bottom 5 bits of PBA holds RXA in KBytes */
+		adapter->c10_pba_bytes = er32(PBA) & 0x1F;
+		adapter->c10_pba_bytes <<= 10;
+		if ((hw->adapter->pdev->device == E1000_DEV_ID_PCH_I218_LM3) ||
+			(hw->adapter->pdev->device == E1000_DEV_ID_PCH_I218_V3))
+			adapter->c10_demote_ltr = false;
+		else
+			adapter->c10_demote_ltr = true;
+#endif /* DYNAMIC_LTR_SUPPORT */
+		/* make sure adapter isn't asleep if manageability is enabled */
+		if (adapter->wol || (adapter->flags & FLAG_MNG_PT_ENABLED) ||
+			(hw->mac.ops.check_mng_mode(hw)))
+			/*device_wakeup_enable(pci_dev_to_dev(pdev))*/;
 		
 		/* save off EEPROM version number */
 		e1000_read_nvm(&adapter->hw, 5, 1, &adapter->eeprom_vers);
@@ -2349,6 +2422,11 @@ void AppleIntelE1000e::e1000e_down(bool reset)
 	 */
 	set_bit(__E1000_DOWN, &adapter->state);
 	
+#ifdef DYNAMIC_LTR_SUPPORT
+	adapter->c10_demote_ltr = false;
+	e1000_demote_ltr(hw, false, false);
+#endif /* DYNAMIC_LTR_SUPPORT */
+	
 	/* disable receives in the hardware */
 	rctl = er32(RCTL);
 	if (!(adapter->flags2 & FLAG2_NO_DISABLE_RX))
@@ -2419,7 +2497,32 @@ static cycle_t e1000e_cyclecounter_read(const struct cyclecounter *cc)
 	/* latch SYSTIMH on read of SYSTIML */
 	systim = (cycle_t)er32(SYSTIML);
 	systim |= (cycle_t)er32(SYSTIMH) << 32;
-	
+
+	if ((hw->mac.type == e1000_82574) || (hw->mac.type == e1000_82583)) {
+		u64 incvalue, time_delta, rem, temp;
+		int i;
+		
+		/* errata for 82574/82583 possible bad bits read from SYSTIMH/L
+		 * check to see that the time is incrementing at a reasonable
+		 * rate and is a multiple of incvalue
+		 */
+		incvalue = er32(TIMINCA) & E1000_TIMINCA_INCVALUE_MASK;
+		for (i = 0; i < E1000_MAX_82574_SYSTIM_REREADS; i++) {
+			/* latch SYSTIMH on read of SYSTIML */
+			systim_next = (cycle_t)er32(SYSTIML);
+			systim_next |= (cycle_t)er32(SYSTIMH) << 32;
+			
+			time_delta = systim_next - systim;
+			temp = time_delta;
+			rem = do_div(temp, incvalue);
+			
+			systim = systim_next;
+			
+			if ((time_delta < E1000_82574_SYSTIM_EPSILON) &&
+			    (rem == 0))
+				break;
+		}
+	}
 	return systim;
 }
 #endif /* HAVE_HW_TIME_STAMP */
@@ -3581,6 +3684,9 @@ next_desc:
 	if (cleaned_count)
 		this->alloc_rx_buf(cleaned_count);
 
+#ifdef DYNAMIC_LTR_SUPPORT
+	e1000e_check_ltr_demote(adapter, total_rx_bytes);
+#endif /* DYNAMIC_LTR_SUPPORT */
 	adapter->total_rx_bytes += total_rx_bytes;
 	adapter->total_rx_packets += total_rx_packets;
 
@@ -3685,7 +3791,11 @@ bool AppleIntelE1000e::e1000_clean_jumbo_rx_irq()
 	cleaned_count = e1000_desc_unused(rx_ring);
 	if (cleaned_count)
 		this->alloc_rx_buf(cleaned_count);
-	
+
+#ifdef DYNAMIC_LTR_SUPPORT
+	e1000e_check_ltr_demote(adapter, total_rx_bytes);
+#endif /* DYNAMIC_LTR_SUPPORT */
+
 	adapter->total_rx_bytes += total_rx_bytes;
 	adapter->total_rx_packets += total_rx_packets;
 #ifdef HAVE_NDO_GET_STATS64
@@ -3953,7 +4063,7 @@ void AppleIntelE1000e::e1000_clean_tx_ring()
 		e1000_put_txbuf(buffer_info);
 	}
 	
-#ifdef CONFIG_BQL
+#ifndef __APPLE__
 	netdev_reset_queue(adapter->netdev);
 #endif
 	size = sizeof(struct e1000_buffer) * tx_ring->count;
@@ -3965,7 +4075,7 @@ void AppleIntelE1000e::e1000_clean_tx_ring()
 	tx_ring->next_to_clean = 0;
 	
 	writel(0, tx_ring->head);
-	if (tx_ring->adapter->flags2 & FLAG2_PCIM2PCI_ARBITER_WA)
+	if (adapter->flags2 & FLAG2_PCIM2PCI_ARBITER_WA)
 		e1000e_update_tdt_wa(tx_ring, 0);
 	else
 		writel(0, tx_ring->tail);
@@ -4087,7 +4197,7 @@ void AppleIntelE1000e::e1000_clean_rx_ring()
 	adapter->flags2 &= ~FLAG2_IS_DISCARDING;
 	
 	writel(0, rx_ring->head);
-	if (rx_ring->adapter->flags2 & FLAG2_PCIM2PCI_ARBITER_WA)
+	if (adapter->flags2 & FLAG2_PCIM2PCI_ARBITER_WA)
 		e1000e_update_rdt_wa(rx_ring, 0);
 	else
 		writel(0, rx_ring->tail);
@@ -4106,7 +4216,19 @@ void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 	struct e1000_phy_info *phy = &adapter->hw.phy;
 	struct e1000_hw *hw = &adapter->hw;
 	UInt32 link, tctl;
-	
+#ifdef DYNAMIC_LTR_SUPPORT
+	if (test_bit(__E1000_DOWN, &adapter->state)) {
+		if (adapter->c10_demote_ltr) {
+			adapter->c10_demote_ltr = false;
+			e1000_demote_ltr(hw, adapter->c10_demote_ltr, false);
+		}
+		return;
+	}
+#else
+	if (test_bit(__E1000_DOWN, &adapter->state))
+		return;
+#endif /* DYNAMIC_LTR_SUPPORT */
+
 	link = e1000e_has_link(adapter);
 	
 	//e_dbg("timeout link:%d, preLinkStatus:%d.\n", (int)link, (int)preLinkStatus);
@@ -4213,7 +4335,19 @@ void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 	}
 	
 link_up:
-	// e1000e_update_stats(adapter);
+#ifdef DYNAMIC_LTR_SUPPORT
+	if (((hw->adapter->pdev->device == E1000_DEV_ID_PCH_I218_LM3) ||
+	     (hw->adapter->pdev->device == E1000_DEV_ID_PCH_I218_V3)) &&
+	    adapter->c10_demote_ltr &&
+	    (adapter->stats.mpc <= adapter->c10_mpc_count) &&
+	    ((adapter->c10_rx_bytes - adapter->stats.gorc) <
+	     adapter->c10_pba_bytes)) {
+			adapter->c10_demote_ltr = false;
+			e1000_demote_ltr(hw, adapter->c10_demote_ltr, link);
+		}
+	adapter->c10_rx_bytes = adapter->total_rx_bytes;
+	
+#endif /* DYNAMIC_LTR_SUPPORT */
 	/* If the link is lost the controller stops DMA, but
 	 * if there is queued Tx work it cannot be done.  So
 	 * reset the controller to flush the Tx packet buffers.
@@ -4288,7 +4422,7 @@ link_up:
 		e1000_get_phy_info(hw);
 
 		/* Enable EEE on 82579 after link up */
-		if (hw->phy.type == e1000_phy_82579)
+		if (hw->phy.type >= e1000_phy_82579)
 			e1000_set_eee_pchlan(hw);
 	}
 #if 0
@@ -5028,11 +5162,7 @@ int AppleIntelE1000e::__e1000_shutdown(bool *enable_wake, bool runtime)
 	if (adapter->hw.phy.type == e1000_phy_igp_3) {
 		e1000e_igp3_phy_powerdown_workaround_ich8lan(&adapter->hw);
 	} else if (hw->mac.type == e1000_pch_lpt) {
-		/* Disable ULP in S5; enable in other Sx and RPM */
-		if (test_bit(__E1000_SHUTDOWN, &adapter->state))
-			retval = e1000_disable_ulp_lpt_lp(hw, true);
-		else if (!(wufc & (E1000_WUFC_EX | E1000_WUFC_MC |
-				   E1000_WUFC_BC)))
+		if (!(wufc & (E1000_WUFC_EX | E1000_WUFC_MC | E1000_WUFC_BC)))
 			/* ULP does not support wake from unicast, multicast
 			 * or broadcast.
 			 */
@@ -5041,6 +5171,33 @@ int AppleIntelE1000e::__e1000_shutdown(bool *enable_wake, bool runtime)
 		if (retval)
 			return retval;
 	}
+	/* Ensure that the appropriate bits are set in LPI_CTRL
+	 * for EEE in Sx
+	 */
+	if ((hw->phy.type >= e1000_phy_i217) &&
+	    adapter->eee_advert && hw->dev_spec.ich8lan.eee_lp_ability) {
+		u16 lpi_ctrl = 0;
+		retval = hw->phy.ops.acquire(hw);
+		if (!retval) {
+			retval = e1e_rphy_locked(hw, I82579_LPI_CTRL,
+									 &lpi_ctrl);
+			if (!retval) {
+				if (adapter->eee_advert &
+				    hw->dev_spec.ich8lan.eee_lp_ability &
+				    I82579_EEE_100_SUPPORTED)
+					lpi_ctrl |= I82579_LPI_CTRL_100_ENABLE;
+				if (adapter->eee_advert &
+				    hw->dev_spec.ich8lan.eee_lp_ability &
+				    I82579_EEE_1000_SUPPORTED)
+					lpi_ctrl |= I82579_LPI_CTRL_1000_ENABLE;
+				
+				retval = e1e_wphy_locked(hw, I82579_LPI_CTRL,
+										 lpi_ctrl);
+			}
+		}
+		hw->phy.ops.release(hw);
+	}
+	
 
 	/* Release control of h/w to f/w.  If f/w is AMT enabled, this
 	 * would have already happened in close and is redundant.
