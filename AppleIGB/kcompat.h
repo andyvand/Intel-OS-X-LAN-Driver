@@ -137,7 +137,22 @@ struct work_struct {
 	struct timer_list timer;
 };
 
-//typedef unsigned gfp_t;
+#ifndef rcu_head
+struct __kc_callback_head {
+	struct __kc_callback_head *next;
+	void (*func)(struct callback_head *head);
+};
+#define rcu_head __kc_callback_head
+#endif
+
+#ifndef rounddown_pow_of_two
+#define rounddown_pow_of_two(n) \
+__builtin_constant_p(n) ? ( \
+(n == 1) ? 0 : \
+(1UL << ilog2(n))) : \
+(1UL << (fls_long(n) - 1))
+#endif
+
 
 #define ETH_ALEN		6			/* Octets in one ethernet addr   */
 #define ETH_HLEN		14			/* Total octets in header.       */
@@ -378,7 +393,7 @@ static inline void random_ether_addr(u8 *addr)
 	addr [0] |= 0x02;       /* set local assignment bit (IEEE802) */
 }
 
-static inline unsigned compare_ether_addr(const u8 *addr1, const u8 *addr2)
+static inline unsigned ether_addr_equal(const u8 *addr1, const u8 *addr2)
 {
 	const u16 *a = (const u16 *) addr1;
 	const u16 *b = (const u16 *) addr2;
@@ -397,5 +412,6 @@ struct vlan_group {
 
 
 #endif
+
 
 #endif /* _KCOMPAT_H_ */
