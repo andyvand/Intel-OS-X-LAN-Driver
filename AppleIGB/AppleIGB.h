@@ -112,6 +112,7 @@ private:
 	
 	bool enabledForNetif;
 	bool bSuspended;
+	bool useTSO;
 	UInt32 iff_flags;
 	UInt32 _features;
 	UInt32 preLinkStatus;
@@ -151,6 +152,9 @@ private:
 
 	bool igb_probe();
 	void igb_remove();
+
+	bool getBoolOption(const char *name, bool defVal);
+	int getIntOption(const char *name, int defVal, int maxVal, int minVal );
 
 public:
 	static void interruptHandler(OSObject * target,

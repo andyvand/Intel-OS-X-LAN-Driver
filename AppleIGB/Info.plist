@@ -26,6 +26,8 @@
 	<dict>
 		<key>dh89xxcc</key>
 		<dict>
+			<key>NETIF_F_TSO</key>
+			<true/>
 			<key>CFBundleIdentifier</key>
 			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
 			<key>IOClass</key>
@@ -37,6 +39,8 @@
 		</dict>
 		<key>i210/i211</key>
 		<dict>
+			<key>NETIF_F_TSO</key>
+			<true/>
 			<key>CFBundleIdentifier</key>
 			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
 			<key>IOClass</key>
@@ -48,6 +52,8 @@
 		</dict>
 		<key>i350</key>
 		<dict>
+			<key>NETIF_F_TSO</key>
+			<true/>
 			<key>CFBundleIdentifier</key>
 			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
 			<key>IOClass</key>
@@ -59,6 +65,8 @@
 		</dict>
 		<key>i354</key>
 		<dict>
+			<key>NETIF_F_TSO</key>
+			<true/>
 			<key>CFBundleIdentifier</key>
 			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
 			<key>IOClass</key>
@@ -70,6 +78,8 @@
 		</dict>
 		<key>82575</key>
 		<dict>
+			<key>NETIF_F_TSO</key>
+			<false/>
 			<key>CFBundleIdentifier</key>
 			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
 			<key>IOClass</key>
@@ -81,6 +91,8 @@
 		</dict>
 		<key>82576</key>
 		<dict>
+			<key>NETIF_F_TSO</key>
+			<false/>
 			<key>CFBundleIdentifier</key>
 			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
 			<key>IOClass</key>
@@ -92,6 +104,8 @@
 		</dict>
 		<key>82580</key>
 		<dict>
+			<key>NETIF_F_TSO</key>
+			<true/>
 			<key>CFBundleIdentifier</key>
 			<string>com.insanelymac.driver.${PRODUCT_NAME}</string>
 			<key>IOClass</key>

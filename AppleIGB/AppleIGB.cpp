@@ -8858,7 +8858,29 @@ bool AppleIGB::igb_probe()
 	return success;
 }
 		
-
+bool AppleIGB::getBoolOption(const char *name, bool defVal)
+{
+	OSBoolean* rc = OSDynamicCast( OSBoolean, getProperty(name));
+	if( rc ){
+		return (rc == kOSBooleanTrue );
+	}
+	return defVal;
+}
+	
+int AppleIGB::getIntOption(const char *name, int defVal, int maxVal, int minVal )
+{
+	int val = defVal;
+	OSNumber* numObj = OSDynamicCast( OSNumber, getProperty(name) );
+	if ( numObj ){
+		val = (int)numObj->unsigned32BitValue();
+		if( val < minVal )
+			val = minVal;
+		else if(val > maxVal )
+			val = maxVal;
+	}
+	return val;
+}
+		
 bool AppleIGB::start(IOService* provider)
 {
 	DEBUGOUT("start()\n");
@@ -8874,6 +8896,12 @@ bool AppleIGB::start(IOService* provider)
 	pdev->retain();
 	if (pdev->open(this) == false)
 		return false;
+
+#ifdef NETIF_F_TSO
+	useTSO = getBoolOption("NETIF_F_TSO", TRUE);
+#else
+	useTSO = FALSE;
+#endif
 	
 	if(!initEventSources(provider))
 		return false;
@@ -9020,7 +9048,7 @@ UInt32 AppleIGB::outputPacket(mbuf_t skb, void * param)
 	do {
         struct igb_ring *tx_ring = igb_tx_queue_mapping(adapter, skb);
         struct igb_tx_buffer *first;
-        int tso;
+        int tso = 0;
         u32 tx_flags = 0;
         u8 hdr_len = 0;
         /* need: 1 descriptor per page,
@@ -9065,7 +9093,8 @@ UInt32 AppleIGB::outputPacket(mbuf_t skb, void * param)
         /* record initial flags and protocol */
         first->tx_flags = tx_flags;
         
-        tso = igb_tso(tx_ring, first, &hdr_len);
+		if(useTSO)
+			tso = igb_tso(tx_ring, first, &hdr_len);
         if (tso < 0){
             igb_unmap_and_free_tx_resource(tx_ring, first);
             break;
@@ -9754,17 +9783,14 @@ IOReturn AppleIGB::getPacketFilters(const OSSymbol * group, UInt32 * filters) co
 }
 
 UInt32 AppleIGB::getFeatures() const {
-#ifdef NETIF_F_TSO
-	#ifdef NETIF_F_TSO6
-	return kIONetworkFeatureMultiPages | kIONetworkFeatureHardwareVlan |
-		kIONetworkFeatureTSOIPv4 | kIONetworkFeatureTSOIPv6;
-	#else
-	return kIONetworkFeatureMultiPages | kIONetworkFeatureHardwareVlan |
-		kIONetworkFeatureTSOIPv4;
-	#endif
+	UInt32 f = kIONetworkFeatureMultiPages | kIONetworkFeatureHardwareVlan;
+	if(useTSO)
+#ifdef NETIF_F_TSO6
+		f |= kIONetworkFeatureTSOIPv4 | kIONetworkFeatureTSOIPv6;
 #else
-	return kIONetworkFeatureMultiPages | kIONetworkFeatureHardwareVlan;
+		f |= kIONetworkFeatureTSOIPv4;
 #endif
+	return f;
 }
     
     
