@@ -11,10 +11,6 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  * The full GNU General Public License is included in this distribution in
  * the file called "COPYING".
  *
@@ -230,7 +226,6 @@
 #define I82579_LPI_CTRL_100_ENABLE		0x2000
 #define I82579_LPI_CTRL_1000_ENABLE		0x4000
 #define I82579_LPI_CTRL_ENABLE_MASK		0x6000
-#define I82579_LPI_CTRL_FORCE_PLL_LOCK_COUNT	0x80
 
 /* 82579 DFT Control */
 #define I82579_DFT_CTRL			PHY_REG(769, 20)

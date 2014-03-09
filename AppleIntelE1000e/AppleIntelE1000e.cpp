@@ -2557,7 +2557,8 @@ UInt32 AppleIntelE1000e::outputPacket(mbuf_t skb, void * param)
 	
 	if (mbuf_pkthdr_len(skb) <= 0) {
 		IOLog("skb <=0 in outputPacket.\n");
-		return kIOReturnOutputDropped;
+		freePacket(skb);
+		return kIOReturnOutputSuccess;
 	}
 
 	UInt32 vlan;
@@ -2569,8 +2570,10 @@ UInt32 AppleIntelE1000e::outputPacket(mbuf_t skb, void * param)
 	first = tx_ring->next_to_use;
 	
 	tso = e1000_tso(tx_ring, skb, &segs, &hdrLen);
-    if(tso < 0)
-        return kIOReturnOutputDropped;
+    if(tso < 0){
+		freePacket(skb);
+        return kIOReturnOutputSuccess;
+	}
     if(tso){
 		tx_flags |= E1000_TX_FLAGS_TSO;
     } else if (e1000_tx_csum(skb)){
@@ -2590,12 +2593,12 @@ UInt32 AppleIntelE1000e::outputPacket(mbuf_t skb, void * param)
 	
 	if (count <= 0) {
 		IOLog("failed to getphysicalsegment in outputPacket.\n");
+		freePacket(skb);
 		tx_ring->buffer_info[first].time_stamp = 0;
 		tx_ring->next_to_use = first;
-		return kIOReturnOutputDropped;
+	} else {
+		e1000_tx_queue(tx_ring, tx_flags, count);
 	}
-
-	e1000_tx_queue(tx_ring, tx_flags, count);
 	
 	return kIOReturnOutputSuccess;
 }
@@ -4184,7 +4187,7 @@ void AppleIntelE1000e::e1000_clean_rx_ring()
 #ifdef CONFIG_E1000E_NAPI
 	/* there also may be some cached data from a chained receive */
 	if (rx_ring->rx_skb_top) {
-		dev_kfree_skb(rx_ring->rx_skb_top);
+		freePacket(rx_ring->rx_skb_top);
 		rx_ring->rx_skb_top = NULL;
 	}
 #endif

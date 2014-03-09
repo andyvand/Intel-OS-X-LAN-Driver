@@ -11,10 +11,6 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  * The full GNU General Public License is included in this distribution in
  * the file called "COPYING".
  *
@@ -738,7 +734,6 @@ static inline void __ew32(struct e1000_hw *hw, unsigned long reg, u32 val)
 
 #define E1000_WRITE_REG_ARRAY(a, reg, offset, value) \
 	(__ew32((a), (reg + ((offset) << 2)), (value)))
-
 
 #define E1000_READ_REG_ARRAY(a, reg, offset) \
 (readl((u8*)((a)->hw_addr) + reg + ((offset) << 2)))

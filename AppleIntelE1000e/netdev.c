@@ -11,10 +11,6 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  * The full GNU General Public License is included in this distribution in
  * the file called "COPYING".
  *
@@ -58,7 +54,7 @@
 #define DRV_EXTRAVERSION ""
 #endif
 
-#define DRV_VERSION "3.0.4" DRV_EXTRAVERSION
+#define DRV_VERSION "3.0.4.1" DRV_EXTRAVERSION
 char e1000e_driver_name[] = "e1000e";
 const char e1000e_driver_version[] = DRV_VERSION;
 
@@ -7526,23 +7522,17 @@ static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		return err;
 
 	pci_using_dac = 0;
-	err = dma_set_mask(pci_dev_to_dev(pdev), DMA_BIT_MASK(64));
+	err = dma_set_mask_and_coherent(pci_dev_to_dev(pdev), DMA_BIT_MASK(64));
 	if (!err) {
-		err =
-		    dma_set_coherent_mask(pci_dev_to_dev(pdev),
-					  DMA_BIT_MASK(64));
-		if (!err)
-			pci_using_dac = 1;
+		pci_using_dac = 1;
 	} else {
-		err = dma_set_mask(pci_dev_to_dev(pdev), DMA_BIT_MASK(32));
+		err =
+		    dma_set_mask_and_coherent(pci_dev_to_dev(pdev),
+					      DMA_BIT_MASK(32));
 		if (err) {
-			err = dma_set_coherent_mask(pci_dev_to_dev(pdev),
-						    DMA_BIT_MASK(32));
-			if (err) {
-				dev_err(pci_dev_to_dev(pdev),
-					"No usable DMA configuration, aborting\n");
-				goto err_dma;
-			}
+			dev_err(pci_dev_to_dev(pdev),
+				"No usable DMA configuration, aborting\n");
+			goto err_dma;
 		}
 	}
 

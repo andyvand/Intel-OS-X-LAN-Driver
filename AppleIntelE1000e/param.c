@@ -11,10 +11,6 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  * The full GNU General Public License is included in this distribution in
  * the file called "COPYING".
  *
@@ -30,7 +26,6 @@
 #include <linux/module.h>
 #include <linux/pci.h>
 #endif
-
 
 #include "e1000.h"
 
@@ -48,7 +43,7 @@ unsigned int copybreak = COPYBREAK_DEFAULT;
 #ifndef	__APPLE__
 module_param(copybreak, uint, 0644);
 MODULE_PARM_DESC(copybreak,
-                 "Maximum size of packet that is copied to a new buffer on receive");
+		 "Maximum size of packet that is copied to a new buffer on receive");
 #endif
 /* All parameters are treated the same, as an integer array of values.
  * This macro just reduces the need to repeat the same declaration code
@@ -89,7 +84,6 @@ MODULE_PARM_DESC(copybreak,
 #define E1000_PARAM(X, desc) static const int X[E1000_MAX_NIC+1] = E1000_PARAM_INIT; \
 static unsigned int num_##X;
 #endif
-
 
 /* Transmit Interrupt Delay in units of 1.024 microseconds
  * Tx interrupt delay needs to typically be set to something non-zero
@@ -437,8 +431,8 @@ void e1000e_check_options(struct e1000_adapter *adapter)
 			break;
 		case 2:
 			dev_info(pci_dev_to_dev(adapter->pdev),
-					 "%s Invalid mode - setting default\n",
-					 opt.name);
+				 "%s Invalid mode - setting default\n",
+				 opt.name);
 			adapter->itr_setting = opt.def;
 			/* fall-through */
 		case 3:
