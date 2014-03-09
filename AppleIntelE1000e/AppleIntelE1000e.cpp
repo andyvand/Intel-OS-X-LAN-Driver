@@ -59,7 +59,7 @@ static inline struct tcphdr* tcp6_hdr(mbuf_t skb)
 	return (struct tcphdr*)(ip6+1);
 }
 
-#define TBDS_PER_TCB 32
+#define TBDS_PER_TCB 40	// suggested by Mieze
 #define super IOEthernetController
 
 #define E1000_TX_FLAGS_CSUM		0x00000001
@@ -2373,7 +2373,10 @@ IOReturn AppleIntelE1000e::disable(IONetworkInterface * netif)
 	if (adapter->hw.mac.type == e1000_pch2lan)
         ;
 #endif
-
+	// suggested by diddl14
+	e1000_power_down_phy(adapter);
+	bool wake;
+	__e1000_shutdown( &wake, false);
 	pciDevice->close(this);
 
 	return kIOReturnSuccess;
