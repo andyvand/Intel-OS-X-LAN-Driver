@@ -9059,7 +9059,8 @@ UInt32 AppleIGB::outputPacket(mbuf_t skb, void * param)
 		if (igb_maybe_stop_tx(tx_ring, MAX_SKB_FRAGS + 3)) {
             /* this is a hard error */
 			//IOLog("igb_maybe_stop_tx() returns TRUE\n");
-			rc = kIOReturnOutputDropped;
+			netStats->outputErrors += 1;
+			freePacket(skb);
 			break;
         }
         /* record the location of the first descriptor for this packet */
@@ -9101,15 +9102,15 @@ UInt32 AppleIGB::outputPacket(mbuf_t skb, void * param)
         } else if (!tso)
             igb_tx_csum(tx_ring, first);
 
-        if(!igb_tx_map(tx_ring, first, hdr_len))
-			return kIOReturnOutputDropped;
+        if(!igb_tx_map(tx_ring, first, hdr_len)){
+			netStats->outputErrors += 1;
+			freePacket(skb);
+		}
 
 		/* Make sure there is space in the ring for the next send. */
 		//igb_maybe_stop_tx(tx_ring, MAX_SKB_FRAGS + 4);
     } while(false);
 
-    if(rc != kIOReturnOutputSuccess)
-		netStats->outputErrors += 1;
 	return rc;
 }
 
