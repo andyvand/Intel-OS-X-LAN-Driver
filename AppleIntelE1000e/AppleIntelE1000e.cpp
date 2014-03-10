@@ -1361,18 +1361,27 @@ static int e1000_tx_map(struct e1000_adapter *adapter, mbuf_t skb,
 	unsigned int count = 0, i, len, size, offset;
 	unsigned int f, bytecount;
 
+	if ( e1000_desc_unused(tx_ring) < 2){
+		IOLog("e1000_tx_map: descriptor < 2.\n");
+		return -1;
+	}
+	
 	unsigned int nr_frags, nBlocks;
 	IOPhysicalSegment tx_segments[TBDS_PER_TCB];
 	nr_frags = txMbufCursor->getPhysicalSegmentsWithCoalesce(skb, &tx_segments[0], TBDS_PER_TCB);
-	if (nr_frags == 0 )
+	if (nr_frags == 0 ){
+		IOLog("e1000_tx_map: failed to getphysicalsegment.\n");
 		return -1;
+	}
 
     nBlocks = 0;
     for(f = 0; f < nr_frags; f++){
         nBlocks += (tx_segments[f].length + (max_per_txd-1))/max_per_txd;
     }
-	if ( e1000_desc_unused(adapter->tx_ring) < nBlocks+2)
+	if ( e1000_desc_unused(tx_ring) < nBlocks+2){
+		IOLog("e1000_tx_map: descriptor full.\n");
 		return -1;
+	}
 
 	i = tx_ring->next_to_use - 1; // incremented at loop top
 
@@ -2595,7 +2604,6 @@ UInt32 AppleIntelE1000e::outputPacket(mbuf_t skb, void * param)
                          txMbufCursor, segs, hdrLen);
 	
 	if (count <= 0) {
-		IOLog("failed to getphysicalsegment in outputPacket.\n");
 		freePacket(skb);
 		tx_ring->buffer_info[first].time_stamp = 0;
 		tx_ring->next_to_use = first;
