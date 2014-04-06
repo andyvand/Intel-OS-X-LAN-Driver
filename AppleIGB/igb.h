@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel(R) Gigabit Ethernet Linux driver
-  Copyright(c) 2007-2013 Intel Corporation.
+  Copyright(c) 2007-2014 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -13,8 +13,7 @@
   more details.
 
   You should have received a copy of the GNU General Public License along with
-  this program; if not, write to the Free Software Foundation, Inc.,
-  51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
+  this program; if not, see <htt;://www.gnu.org/licenses/>.
 
   The full GNU General Public License is included in this distribution in
   the file called "COPYING".
@@ -598,6 +597,7 @@ struct igb_adapter {
 	/* Interrupt Throttle Rate */
 	u32 rx_itr_setting;
 	u32 tx_itr_setting;
+
 #ifdef	__APPLE__
 	IOTimerEventSource* reset_task;
 	IOTimerEventSource* watchdog_task;
@@ -713,10 +713,10 @@ struct igb_adapter {
 	struct i2c_client *i2c_client;
 #endif /* HAVE_I2C_SUPPORT */
 	unsigned long link_check_timeout;
-    
-    
+
+
 	int devrc;
-    
+
 	int copper_tries;
 	u16 eee_advert;
 #ifdef ETHTOOL_GRXFHINDIR
@@ -921,5 +921,7 @@ int igb_procfs_topdir_init(void);
 void igb_procfs_topdir_exit(void);
 #endif /* IGB_PROCFS */
 #endif /* IGB_HWMON */
+
+
 
 #endif /* _IGB_H_ */

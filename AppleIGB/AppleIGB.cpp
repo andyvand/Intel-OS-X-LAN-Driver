@@ -273,6 +273,7 @@ static irqreturn_t igb_intr(int irq, void *);
 static irqreturn_t igb_intr_msi(int irq, void *);
 static irqreturn_t igb_msix_other(int irq, void *);
 static void igb_rar_set_qsel(struct igb_adapter *, u8 *, u32, u8);
+static void igb_rar_set_qsel(struct igb_adapter *, u8 *, u32, u8);
 static irqreturn_t igb_msix_ring(int irq, void *);
 #ifdef IGB_DCA
 static void igb_update_dca(struct igb_q_vector *);
@@ -367,6 +368,8 @@ static void igb_init_fw(struct igb_adapter *adapter);
 static void igb_init_dmac(struct igb_adapter *adapter, u32 pba);
 
 
+u32 e1000_read_reg(struct e1000_hw *hw, u32 reg);
+
 static void igb_vfta_set(struct igb_adapter *adapter, u32 vid, bool add)
 {
 	struct e1000_hw *hw = &adapter->hw;
@@ -432,6 +435,28 @@ static void igb_cache_ring_register(struct igb_adapter *adapter)
 				adapter->tx_ring[j]->reg_idx = rbase_offset + j;
 			break;
 	}
+}
+
+u32 e1000_read_reg(struct e1000_hw *hw, u32 reg)
+{
+	//struct igb_adapter *igb = container_of(hw, struct igb_adapter, hw);
+	u8 __iomem *hw_addr = ACCESS_ONCE(hw->hw_addr);
+	u32 value = 0;
+	
+	if (E1000_REMOVED(hw_addr))
+		return ~value;
+	
+	value = readl(&hw_addr[reg]);
+	
+	/* reads should not return all F's */
+	if (!(~value) && (!reg || !(~readl(hw_addr)))) {
+		//AppleIGB *netdev = igb->netdev;
+		hw->hw_addr = NULL;
+		//netif_device_detach(netdev);
+		IOLog("PCIe link lost, device now detached\n");
+	}
+	
+	return value;
 }
 
 static void igb_configure_lli(struct igb_adapter *adapter)
@@ -7372,6 +7397,20 @@ static int igb_ioctl(IOEthernetController *netdev, struct ifreq *ifr, int cmd)
 	}
 }
 #endif
+
+void e1000_read_pci_cfg(struct e1000_hw *hw, u32 reg, u16 *value)
+{
+	struct igb_adapter *adapter = (igb_adapter *)hw->back;
+	
+	*value = adapter->pdev->configRead16(reg);
+}
+		
+void e1000_write_pci_cfg(struct e1000_hw *hw, u32 reg, u16 *value)
+{
+	struct igb_adapter *adapter = (igb_adapter*)hw->back;
+
+	adapter->pdev->configWrite16(reg,*value);
+}
 
 s32 e1000_read_pcie_cap_reg(struct e1000_hw *hw, u32 reg, u16 *value)
 {

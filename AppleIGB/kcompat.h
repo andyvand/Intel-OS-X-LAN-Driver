@@ -413,5 +413,10 @@ struct vlan_group {
 
 #endif
 
+#define container_of(ptr, type, member) ({ \
+	const typeof( ((type *)0)->member ) *__mptr = (ptr); \
+	(type *)( (char *)__mptr - offsetof(type,member) );})
+
+#define ACCESS_ONCE(x) (*(volatile typeof(x) *)&(x))
 
 #endif /* _KCOMPAT_H_ */

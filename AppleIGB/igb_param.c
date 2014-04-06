@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel(R) Gigabit Ethernet Linux driver
-  Copyright(c) 2007-2013 Intel Corporation.
+  Copyright(c) 2007-2014 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -13,8 +13,7 @@
   more details.
 
   You should have received a copy of the GNU General Public License along with
-  this program; if not, write to the Free Software Foundation, Inc.,
-  51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
+  this program; if not, see <htt;://www.gnu.org/licenses/>.
 
   The full GNU General Public License is included in this distribution in
   the file called "COPYING".
@@ -570,6 +569,7 @@ void igb_check_options(struct igb_adapter *adapter)
 			adapter->vmdq_pools = 0;
 		}
 #endif
+
 	} else {
 		DPRINTK(PROBE, INFO, "VMDq option is not supported.\n");
 		adapter->vmdq_pools = opt.def;
@@ -616,7 +616,7 @@ void igb_check_options(struct igb_adapter *adapter)
 #endif /* CONFIG_IGB_VMDQ_NETDEV */
 		case e1000_82580:
 		case e1000_i350:
-        case e1000_i354:
+		case e1000_i354:
 		default:
 			if (!!adapter->vmdq_pools)
 				opt.arg.r.max = 1;

@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel(R) Gigabit Ethernet Linux driver
-  Copyright(c) 2007-2013 Intel Corporation.
+  Copyright(c) 2007-2014 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -13,8 +13,7 @@
   more details.
 
   You should have received a copy of the GNU General Public License along with
-  this program; if not, write to the Free Software Foundation, Inc.,
-  51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
+  this program; if not, see <htt;://www.gnu.org/licenses/>.
 
   The full GNU General Public License is included in this distribution in
   the file called "COPYING".
@@ -756,8 +755,12 @@ int _kc_pci_save_state(struct pci_dev *pdev)
 
 void _kc_pci_restore_state(struct pci_dev *pdev)
 {
+#if defined(DRIVER_IXGBE) || defined(DRIVER_I40E) || defined(DRIVER_IXGBEVF)
+	struct adapter_struct *adapter = pci_get_drvdata(pdev);
+#else
 	struct net_device *netdev = pci_get_drvdata(pdev);
 	struct adapter_struct *adapter = netdev_priv(netdev);
+#endif
 	int size = PCI_CONFIG_SPACE_LEN, i;
 	u16 pcie_cap_offset;
 	u16 pcie_link_status;
@@ -985,6 +988,8 @@ out_err:
 /*****************************************************************************/
 #if ( LINUX_VERSION_CODE < KERNEL_VERSION(2,6,24) )
 #ifdef NAPI
+#if defined(DRIVER_IXGBE) || defined(DRIVER_IGB) || defined(DRIVER_I40E) || \
+	defined(DRIVER_IXGBEVF)
 struct net_device *napi_to_poll_dev(const struct napi_struct *napi)
 {
 	struct adapter_q_vector *q_vector = container_of(napi,
@@ -992,13 +997,20 @@ struct net_device *napi_to_poll_dev(const struct napi_struct *napi)
 	                                                napi);
 	return &q_vector->poll_dev;
 }
+#endif
 
 int __kc_adapter_clean(struct net_device *netdev, int *budget)
 {
 	int work_done;
 	int work_to_do = min(*budget, netdev->quota);
+#if defined(DRIVER_IXGBE) || defined(DRIVER_IGB) || defined(DRIVER_I40E) || \
+	defined(E1000E_MQ) || defined(DRIVER_IXGBEVF)
 	/* kcompat.h netif_napi_add puts napi struct in "fake netdev->priv" */
 	struct napi_struct *napi = netdev->priv;
+#else
+	struct adapter_struct *adapter = netdev_priv(netdev);
+	struct napi_struct *napi = &adapter->rx_ring[0].napi;
+#endif
 	work_done = napi->poll(napi, work_to_do);
 	*budget -= work_done;
 	netdev->quota -= work_done;
@@ -1166,6 +1178,8 @@ int _kc_pci_num_vf(struct pci_dev *dev)
 #endif /* < 2.6.34 */
 
 #if ( LINUX_VERSION_CODE < KERNEL_VERSION(2,6,35) )
+#if defined(DRIVER_IXGBE) || defined(DRIVER_IGB) || defined(DRIVER_I40E) || \
+	defined(DRIVER_IXGBEVF)
 #ifdef HAVE_TX_MQ
 #if (!(RHEL_RELEASE_CODE && RHEL_RELEASE_CODE >= RHEL_RELEASE_VERSION(6,0)))
 #ifndef CONFIG_NETDEVICES_MULTIQUEUE
@@ -1215,6 +1229,7 @@ ssize_t _kc_simple_write_to_buffer(void *to, size_t available, loff_t *ppos,
         return count;
 }
 
+#endif /* defined(DRIVER_IXGBE) || defined(DRIVER_IGB) || defined(DRIVER_I40E) */
 #endif /* < 2.6.35 */
 
 /*****************************************************************************/
@@ -1270,7 +1285,6 @@ int _kc_simple_open(struct inode *inode, struct file *file)
 
 /******************************************************************************/
 #if ( LINUX_VERSION_CODE < KERNEL_VERSION(3,7,0) )
-#if !(SLE_VERSION_CODE && SLE_VERSION_CODE >= SLE_VERSION(11,3,0))
 static inline int __kc_pcie_cap_version(struct pci_dev *dev)
 {
 	int pos;
@@ -1425,7 +1439,12 @@ int __kc_pcie_capability_clear_and_set_word(struct pci_dev *dev, int pos,
 
 	return ret;
 }
-#endif /* !(SLE_VERSION_CODE && SLE_VERSION_CODE >= SLE_VERSION(11,3,0)) */
+
+int __kc_pcie_capability_clear_word(struct pci_dev *dev, int pos,
+					     u16 clear)
+{
+	return __kc_pcie_capability_clear_and_set_word(dev, pos, clear, 0);
+}
 #endif /* < 3.7.0 */
 
 /******************************************************************************/
@@ -1478,3 +1497,42 @@ int __kc_pci_vfs_assigned(struct pci_dev *dev)
 
 #endif /* CONFIG_PCI_IOV */
 #endif /* 3.10.0 */
+
+#if ( LINUX_VERSION_CODE < KERNEL_VERSION(3,13,0) )
+int __kc_dma_set_mask_and_coherent(struct device *dev, u64 mask)
+{
+	int err = dma_set_mask(dev, mask);
+
+	if (!err)
+		/* coherent mask for the same size will always succeed if
+		 * dma_set_mask does
+		 */
+		dma_set_coherent_mask(dev, mask);
+	return err;
+}
+#endif /* 3.13.0 */
+
+#if ( LINUX_VERSION_CODE < KERNEL_VERSION(3,14,0) )
+int __kc_pci_enable_msix_range(struct pci_dev *dev, struct msix_entry *entries,
+			       int minvec, int maxvec)
+{
+        int nvec = maxvec;
+        int rc;
+
+        if (maxvec < minvec)
+                return -ERANGE;
+
+        do {
+                rc = pci_enable_msix(dev, entries, nvec);
+                if (rc < 0) {
+                        return rc;
+                } else if (rc > 0) {
+                        if (rc < minvec)
+                                return -ENOSPC;
+                        nvec = rc;
+                }
+        } while (rc);
+
+        return nvec;
+}
+#endif /* 3.14.0 */
