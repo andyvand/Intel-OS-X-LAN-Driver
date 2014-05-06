@@ -21,6 +21,7 @@ extern "C" {
 
 #include "AppleIntelE1000e.h"
 
+#define USE_QUEUE_INPUT	0
 #define USE_UDPCSUM	0
 #define CAN_RECOVER_STALL	0
 
@@ -2981,14 +2982,13 @@ void AppleIntelE1000e::interruptOccurred(IOInterruptEventSource * src)
 	adapter->total_rx_packets = 0;
 
 	for (int i = 0; i < E1000_MAX_INTR; i++) {
-		// int rx_cleaned = adapter->clean_rx(adapter);
-		int rx_cleaned = this->clean_rx_irq();
-		if(rx_cleaned){
-			netStats->inputPackets += netif->flushInputQueue();
-		}
-		int tx_cleaned_complete = e1000_clean_tx_irq();
+		bool rx_cleaned = this->clean_rx_irq();
+		bool tx_cleaned_complete = e1000_clean_tx_irq();
 		if (!rx_cleaned && tx_cleaned_complete)
 			break;
+#if USE_QUEUE_INPUT
+		netStats->inputPackets += netif->flushInputQueue();
+#endif
 	}
 	transmitQueue->service();
 
@@ -3616,7 +3616,7 @@ bool AppleIntelE1000e::e1000_clean_rx_irq()
 
 		next_buffer = &rx_ring->buffer_info[i];
 		
-		cleaned = 1;
+		cleaned = true;
 		cleaned_count++;
 		buffer_info->dma = 0;
 
@@ -4864,8 +4864,11 @@ void AppleIntelE1000e::e1000_receive_skb(mbuf_t skb, u32 length, u32 staterr, __
             setVlanTag(skb, tag);
         }
     }
-	
+#if USE_QUEUE_INPUT
 	netStats->inputPackets += netif->inputPacket(skb, length, IONetworkInterface::kInputOptionQueuePacket);
+#else
+	netStats->inputPackets += netif->inputPacket(skb, length);
+#endif
 }
 
 void AppleIntelE1000e::e1000_rx_checksum(mbuf_t skb, u32 status_err)
