@@ -22,6 +22,7 @@ extern "C" {
 #include "AppleIntelE1000e.h"
 
 #define USE_QUEUE_INPUT	0
+#define	USE_ALWAYS_JUMBO	1
 #define USE_UDPCSUM	0
 #define CAN_RECOVER_STALL	0
 
@@ -488,7 +489,7 @@ int e1000e_setup_rx_resources(struct e1000_ring *rx_ring)
 	if (!rx_ring->buffer_info)
 		goto err;
 	bzero(rx_ring->buffer_info, size);
-	
+#ifndef	__APPLE__
 	for (i = 0; i < rx_ring->count; i++) {
 		buffer_info = &rx_ring->buffer_info[i];
 		buffer_info->ps_pages = (e1000_ps_page*)IOMalloc(PS_PAGE_BUFFERS * sizeof(struct e1000_ps_page));
@@ -496,7 +497,7 @@ int e1000e_setup_rx_resources(struct e1000_ring *rx_ring)
 			goto err_pages;
 		bzero(buffer_info->ps_pages, PS_PAGE_BUFFERS * sizeof(struct e1000_ps_page));
 	}
-	
+#endif
 	desc_len = sizeof(union e1000_rx_desc_packet_split);
 	
 	/* Round up to nearest 4K */
@@ -514,10 +515,12 @@ int e1000e_setup_rx_resources(struct e1000_ring *rx_ring)
 	return 0;
 	
 err_pages:
+#ifndef	__APPLE__
 	for (i = 0; i < rx_ring->count; i++) {
 		buffer_info = &rx_ring->buffer_info[i];
 		IOFree(buffer_info->ps_pages, PS_PAGE_BUFFERS * sizeof(struct e1000_ps_page));
 	}
+#endif
 err:
 	IOFree(rx_ring->buffer_info, size);
 	e_err("Unable to allocate memory for the receive descriptor ring\n");
@@ -3266,6 +3269,7 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	 * a lot of memory, since we allocate 3 pages at all times
 	 * per packet.
 	 */
+#ifndef	__APPLE__
 	pages = PAGE_USE_COUNT(adapter->netdev->mtu);
 	if ((pages <= 3) && (PAGE_SIZE <= 16384) && (rctl & E1000_RCTL_LPE))
 		adapter->rx_ps_pages = pages;
@@ -3294,7 +3298,8 @@ void AppleIntelE1000e::e1000_setup_rctl()
 		
 		ew32(PSRCTL, psrctl);
 	}
-	
+#endif
+
 	/* This is useful for sniffing bad packets. */
 	if (netdev_features & NETIF_F_RXALL) {
 		/* UPE and MPE will be handled by normal PROMISC logic
@@ -3330,7 +3335,10 @@ void AppleIntelE1000e::e1000_configure_rx()
 	struct e1000_ring *rx_ring = adapter->rx_ring;
 	u64 rdba;
 	u32 rdlen, rctl, rxcsum, ctrl_ext;
-	
+
+#ifdef	__APPLE__
+	rdlen = rx_ring->count * sizeof(union e1000_rx_desc_extended);
+#else
 	if (adapter->rx_ps_pages) {
 		/* this is a 32 byte descriptor */
 		e_dbg("32 byte descriptor.\n");
@@ -3339,7 +3347,8 @@ void AppleIntelE1000e::e1000_configure_rx()
 	} else {
 		rdlen = rx_ring->count * sizeof(union e1000_rx_desc_extended);
 	}
-	
+#endif
+
 	/* disable receives while setting up the descriptors */
 	rctl = er32(RCTL);
 	if (!(adapter->flags2 & FLAG2_NO_DISABLE_RX))
@@ -3531,31 +3540,30 @@ void AppleIntelE1000e::e1000_alloc_jumbo_rx_buffers( int cleaned_count )
 	union e1000_rx_desc_extended *rx_desc;
 	struct e1000_ring *rx_ring = adapter->rx_ring;
 	struct e1000_buffer *buffer_info;
-	struct e1000_ps_page *ps_page;
 	unsigned int i;
 	
 	i = rx_ring->next_to_use;
 	buffer_info = &rx_ring->buffer_info[i];
 	
 	while (cleaned_count--) {
-		ps_page = &buffer_info->ps_pages[0];
 		rx_desc = E1000_RX_DESC_EXT(*rx_ring, i);
-		if (!ps_page->page) {
+		if (!buffer_info->page) {
 
-			ps_page->page = IOBufferMemoryDescriptor::inTaskWithOptions( kernel_task, kIODirectionInOut | kIOMemoryPhysicallyContiguous,
+			buffer_info->page = IOBufferMemoryDescriptor::inTaskWithOptions( kernel_task, kIODirectionInOut | kIOMemoryPhysicallyContiguous,
 																			adapter->rx_buffer_len, PAGE_SIZE );
-			if (!ps_page->page) {
+			if (!buffer_info->page) {
 				adapter->alloc_rx_buff_failed++;
 				goto no_buffers;
 			}
-			ps_page->page->prepare();
-			ps_page->dma = ps_page->page->getPhysicalAddress();
-			/* Refresh the desc even if buffer_addrs
-			 * didn't change because each write-back
-			 * erases this info.
-			 */
-			rx_desc->read.buffer_addr = cpu_to_le64(ps_page->dma);
+			buffer_info->page->prepare();
+			buffer_info->dma = buffer_info->page->getPhysicalAddress();
 		}
+		/* Refresh the desc even if buffer_addrs
+		 * didn't change because each write-back
+		 * erases this info.
+		 */
+		rx_desc->read.buffer_addr = cpu_to_le64(buffer_info->dma);
+		//bzero(buffer_info->page->getBytesNoCopy(),adapter->rx_buffer_len);
 
 		if (unlikely(!(i & (E1000_RX_BUFFER_WRITE - 1)))) {
 			/* Force memory writes to complete before letting h/w
@@ -3642,7 +3650,7 @@ bool AppleIntelE1000e::e1000_clean_rx_irq()
 						 !(netdev_features & NETIF_F_RXALL))) {
 			/* recycle */
 			buffer_info->skb = skb;
-		} else if(length > 4) {
+		} else {
 			/* adjust length to remove Ethernet CRC */
 			if (!(adapter->flags2 & FLAG2_CRC_STRIPPING)) {
 				/* If configured to store CRC, don't subtract FCS,
@@ -3654,7 +3662,7 @@ bool AppleIntelE1000e::e1000_clean_rx_irq()
 				else
 					length -= 4;
 			}
-			
+
 			total_rx_bytes += length;
 			total_rx_packets++;
 			
@@ -3668,8 +3676,6 @@ bool AppleIntelE1000e::e1000_clean_rx_irq()
 					buffer_info->skb = skb;
 					skb = new_skb;
 				}
-			} else {
-				;
 			}
 			/* end copybreak code */
 			
@@ -3715,7 +3721,6 @@ bool AppleIntelE1000e::e1000_clean_jumbo_rx_irq()
 	struct e1000_ring *rx_ring = adapter->rx_ring;
 	union e1000_rx_desc_extended *rx_desc, *next_rxd;
 	struct e1000_buffer *buffer_info, *next_buffer;
-	struct e1000_ps_page *ps_page;
 	mbuf_t skb;
 	u32 length, staterr;
 	unsigned int i;
@@ -3767,7 +3772,7 @@ bool AppleIntelE1000e::e1000_clean_jumbo_rx_irq()
 		 * this whole operation can get a little cpu intensive
 		 */
 		if (!(adapter->flags2 & FLAG2_CRC_STRIPPING))
-			length -=4;
+			length -= 4;
 		
 		skb = allocatePacket(length);
 		if(skb == NULL){
@@ -3775,8 +3780,7 @@ bool AppleIntelE1000e::e1000_clean_jumbo_rx_irq()
 		}
 
 		/* Good Receive */
-		ps_page = &buffer_info->ps_pages[0];
-		mbuf_copyback(skb, 0, length, ps_page->page->getBytesNoCopy(), MBUF_WAITOK);
+		mbuf_copyback(skb, 0, length, buffer_info->page->getBytesNoCopy(), MBUF_WAITOK);
 		
 		total_rx_bytes += length;
 		total_rx_packets++;
@@ -3785,7 +3789,7 @@ bool AppleIntelE1000e::e1000_clean_jumbo_rx_irq()
 		
 		e1000_receive_skb(skb, length, staterr, rx_desc->wb.upper.vlan);
 		
-	next_desc:
+next_desc:
 		rx_desc->wb.upper.status_error &= cpu_to_le32(~0xFF);
 		
 		/* return some buffers to hardware, one at a time is too slow */
@@ -4134,11 +4138,11 @@ void AppleIntelE1000e::e1000e_free_rx_resources()
 	int i;
 	
 	e1000_clean_rx_ring();
-	
+#ifndef	__APPLE__
 	for (i = 0; i < rx_ring->count; i++) {
 		IOFree(rx_ring->buffer_info[i].ps_pages, PS_PAGE_BUFFERS * sizeof(struct e1000_ps_page));
 	}
-
+#endif
 	vm_size_t size = sizeof(struct e1000_buffer) * rx_ring->count;
 	IOFree(rx_ring->buffer_info, size);
 	rx_ring->buffer_info = NULL;
@@ -4161,7 +4165,6 @@ void AppleIntelE1000e::e1000_clean_rx_ring()
 	struct e1000_adapter *adapter = &priv_adapter;
 	struct e1000_ring *rx_ring = adapter->rx_ring;
 	struct e1000_buffer *buffer_info;
-	struct e1000_ps_page *ps_page;
 	unsigned int i, j;
 	
 	/* Free all the Rx ring sk_buffs */
@@ -4172,7 +4175,12 @@ void AppleIntelE1000e::e1000_clean_rx_ring()
 		}
 		
 		if (buffer_info->page) {
+#ifdef	__APPLE__
+			buffer_info->page->complete();
+			buffer_info->page->release();
+#else
 			//put_page(buffer_info->page);
+#endif
 			buffer_info->page = NULL;
 		}
 		
@@ -4181,6 +4189,7 @@ void AppleIntelE1000e::e1000_clean_rx_ring()
 			buffer_info->skb = NULL;
 		}
 		
+#ifndef	__APPLE__
 		for (j = 0; j < PS_PAGE_BUFFERS; j++) {
 			ps_page = &buffer_info->ps_pages[j];
 			if (!ps_page->page)
@@ -4193,6 +4202,7 @@ void AppleIntelE1000e::e1000_clean_rx_ring()
 			//put_page(ps_page->page);
 			ps_page->page = NULL;
 		}
+#endif
 	}
 	
 #ifdef CONFIG_E1000E_NAPI
@@ -5259,18 +5269,26 @@ int AppleIntelE1000e::__e1000_shutdown(bool *enable_wake, bool runtime)
 
 bool AppleIntelE1000e::clean_rx_irq()
 {
+#if	USE_ALWAYS_JUMBO
+	return e1000_clean_jumbo_rx_irq();
+#else
 	if(priv_adapter.rx_buffer_len > PAGE_SIZE)
 		return e1000_clean_jumbo_rx_irq();
 
 	return e1000_clean_rx_irq();
+#endif
 }
 
 void AppleIntelE1000e::alloc_rx_buf(int cleaned_count)
 {
+#if	USE_ALWAYS_JUMBO
+	e1000_alloc_jumbo_rx_buffers(cleaned_count);
+#else
 	if(priv_adapter.rx_buffer_len > PAGE_SIZE)
 		e1000_alloc_jumbo_rx_buffers(cleaned_count);
 	else
 		e1000_alloc_rx_buffers(cleaned_count);
+#endif
 }
 
 

@@ -181,14 +181,12 @@ enum e1000_boards {
 	board_pch_lpt,
 };
 
+#ifndef	__APPLE__
 struct e1000_ps_page {
-#ifdef	__APPLE__
-	IOBufferMemoryDescriptor* page;
-#else
 	struct page *page;
-#endif
 	u64 dma; /* must be u64 - written to hw */
 };
+#endif
 
 /* wrappers around a pointer to a socket buffer,
  * so a DMA handle can be stored along with the buffer
@@ -207,11 +205,15 @@ struct e1000_buffer {
 			u16 mapped_as_page;
 		};
 		/* Rx */
+#ifdef	__APPLE__
+		IOBufferMemoryDescriptor* page;
+#else
 		struct {
 			/* arrays of page information for packet split */
 			struct e1000_ps_page *ps_pages;
 			struct page *page;
 		};
+#endif
 	};
 };
 
