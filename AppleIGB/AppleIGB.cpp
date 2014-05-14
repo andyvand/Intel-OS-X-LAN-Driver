@@ -95,7 +95,7 @@ static void* vzalloc(size_t size)
 	if(p){
 		bzero(p, size);
 	} else {
-	IOLog("vzalloc: failed size = %d\n", (int)size );
+		IOLog("vzalloc: failed size = %d\n", (int)size );
 	}
 	return p;
 }
@@ -9012,6 +9012,8 @@ bool AppleIGB::initEventSources( IOService* provider )
 	// other devices that are sharing the interrupt line, the event source
 	// is enabled immediately.
 	interruptSource->enable();
+	resetSource->enable();
+	dmaErrSource->enable();
 	
 	
 	if (!publishMediumDictionary(mediumDict)) {
