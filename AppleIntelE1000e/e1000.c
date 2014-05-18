@@ -79,6 +79,10 @@ static struct {
 	{ E1000_DEV_ID_PCH_LPT_I217_V, board_pch_lpt},
 	{ E1000_DEV_ID_PCH_LPTLP_I218_LM, board_pch_lpt},
 	{ E1000_DEV_ID_PCH_LPTLP_I218_V, board_pch_lpt},
+	{ E1000_DEV_ID_PCH_I218_LM2, board_pch_lpt },
+	{ E1000_DEV_ID_PCH_I218_V2, board_pch_lpt },
+	{ E1000_DEV_ID_PCH_I218_LM3, board_pch_lpt },
+	{ E1000_DEV_ID_PCH_I218_V3, board_pch_lpt },
 
 	{ 0, 0 }	/* terminate list */
 };
