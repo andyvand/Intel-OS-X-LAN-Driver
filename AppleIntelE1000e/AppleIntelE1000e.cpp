@@ -2554,9 +2554,10 @@ UInt32 AppleIntelE1000e::outputPacket(mbuf_t skb, void * param)
 	int tso, segs = 1, hdrLen = 0;
 	int count = 0;
 	
-	if (enabledForNetif == false) {             // drop the packet.
+	if (enabledForNetif == false || test_bit(__E1000_DOWN, &adapter->state)) {             // drop the packet.
 		e_dbg("not enabledForNetif in outputPacket.\n");
-		return kIOReturnOutputDropped;
+		freePacket(skb);
+		return kIOReturnOutputSuccess;
 	}
 
 	if (adapter->hw.mac.tx_pkt_filtering)
@@ -2567,7 +2568,8 @@ UInt32 AppleIntelE1000e::outputPacket(mbuf_t skb, void * param)
 		stalled = true;
 		return kIOReturnOutputStall;
 #else
-		return kIOReturnOutputDropped;
+		freePacket(skb);
+		return kIOReturnOutputSuccess;
 #endif
 	}
 	
