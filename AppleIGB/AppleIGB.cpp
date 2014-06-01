@@ -9068,17 +9068,12 @@ UInt32 AppleIGB::outputPacket(mbuf_t skb, void * param)
 	struct igb_adapter *adapter = &priv_adapter;
     UInt32 rc = kIOReturnOutputSuccess;
 	
-	if (enabledForNetif == false) {             // drop the packet.
-		return kIOReturnOutputDropped;
-	}
-	if(txMbufCursor == NULL){
-		return kIOReturnOutputDropped;
-	}
-
-	if (test_bit(__IGB_DOWN, &adapter->state)) {
+	if (!enabledForNetif || !txMbufCursor || test_bit(__IGB_DOWN, &adapter->state)) {
+		// drop the packet.
 		freePacket(skb);
 		return kIOReturnOutputSuccess;
 	}
+
 
 	/*
 	 * The minimum packet size with TCTL.PSP set is 17 so pad the skb
