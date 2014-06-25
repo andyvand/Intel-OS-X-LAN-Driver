@@ -84,6 +84,8 @@ static struct {
 	{ E1000_DEV_ID_PCH_I218_LM3, board_pch_lpt },
 	{ E1000_DEV_ID_PCH_I218_V3, board_pch_lpt },
 
+	{ E1000_DEV_ID_PCH_SPT_I219_LM, board_pch_spt },
+	{ E1000_DEV_ID_PCH_SPT_I219_V, board_pch_spt },
 	{ 0, 0 }	/* terminate list */
 };
 

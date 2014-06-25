@@ -98,10 +98,14 @@
 
 #define E1000_FEXTNVM7_DISABLE_SMB_PERST	0x00000020
 
+#define NVM_SIZE_MULTIPLIER 4096	/*multiplier for NVMS field */
+#define E1000_FLASH_BASE_ADDR 0xE000	/*offset of NVM access regs */
+#define E1000_CTRL_EXT_NVMVS 0x3	/*NVM valid sector */
+
 #define PCIE_ICH8_SNOOP_ALL	PCIE_NO_SNOOP_ALL
 
 #define E1000_ICH_RAR_ENTRIES	7
-#define E1000_PCH2_RAR_ENTRIES	11	/* RAR[0-6], SHRA[0-3] */
+#define E1000_PCH2_RAR_ENTRIES	5	/* RAR[0], SHRA[0-3] */
 #define E1000_PCH_LPT_RAR_ENTRIES	12	/* RAR[0], SHRA[0-10] */
 
 #define PHY_PAGE_SHIFT		5
@@ -239,12 +243,14 @@
 #define I82577_MSE_THRESHOLD	0x0887	/* 82577 Mean Square Error Threshold */
 #define I82579_MSE_LINK_DOWN	0x2411	/* MSE count before dropping link */
 #define I82579_RX_CONFIG		0x3412	/* Receive configuration */
+#define I82579_LPI_PLL_SHUT		0x4412	/* LPI PLL Shut Enable */
 #define I82579_EEE_PCS_STATUS		0x182E	/* IEEE MMD Register 3.1 >> 8 */
 #define I82579_EEE_CAPABILITY		0x0410	/* IEEE MMD Register 3.20 */
 #define I82579_EEE_ADVERTISEMENT	0x040E	/* IEEE MMD Register 7.60 */
 #define I82579_EEE_LP_ABILITY		0x040F	/* IEEE MMD Register 7.61 */
 #define I82579_EEE_100_SUPPORTED	(1 << 1)	/* 100BaseTx EEE */
 #define I82579_EEE_1000_SUPPORTED	(1 << 2)	/* 1000BaseTx EEE */
+#define I82579_LPI_100_PLL_SHUT	(1 << 2)	/* 100M LPI PLL Shut Enabled */
 #define I217_EEE_PCS_STATUS	0x9401	/* IEEE MMD Register 3.1 */
 #define I217_EEE_CAPABILITY	0x8000	/* IEEE MMD Register 3.20 */
 #define I217_EEE_ADVERTISEMENT	0x8001	/* IEEE MMD Register 7.60 */

@@ -61,7 +61,7 @@ MODULE_PARM_DESC(copybreak,
  * "Extensions to the C Language Family" of the GCC documentation.
  */
 #define E1000_PARAM(X, desc) \
-	static const int X[E1000_MAX_NIC+1] __devinitdata = E1000_PARAM_INIT; \
+	static const int X[E1000_MAX_NIC+1] __devinitconst = E1000_PARAM_INIT; \
 	static unsigned int num_##X;				 \
 	MODULE_PARM(X, "1-" __MODULE_STRING(E1000_MAX_NIC) "i"); \
 	MODULE_PARM_DESC(X, desc);

@@ -404,6 +404,7 @@ typedef void IOBufferMemoryDescriptor;
 #define	BUG()
 #define	wmb()	OSSynchronizeIO()
 #define	mmiowb()	OSSynchronizeIO()
+#define	rmb()
 
 #define	__MODULE_STRING(s)	"x"
 #define synchronize_irq(x)

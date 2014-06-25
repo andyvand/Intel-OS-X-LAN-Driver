@@ -331,6 +331,7 @@ static void e1000_irq_disable(struct e1000_adapter *adapter)
 	
 	if (adapter->msix_entries) {
 		int i;
+
 		for (i = 0; i < adapter->num_vectors; i++)
 			synchronize_irq(adapter->msix_entries[i].vector);
 	} else {
@@ -795,7 +796,7 @@ void e1000e_reset(struct e1000_adapter *adapter)
 
 #ifdef HAVE_HW_TIME_STAMP
 	/* initialize systim and reset the ns time counter */
-	e1000e_config_hwtstamp(adapter);
+	e1000e_config_hwtstamp(adapter, &adapter->hwtstamp_config);
 #endif
 	
 	/* Set EEE advertisement as appropriate */
@@ -882,8 +883,10 @@ static int e1000e_write_uc_addr_list(struct net_device *netdev)
 {
 	struct e1000_adapter *adapter = netdev_priv(netdev);
 	struct e1000_hw *hw = &adapter->hw;
-	unsigned int rar_entries = hw->mac.rar_entry_count;
+	unsigned int rar_entries;
 	int count = 0;
+	
+	rar_entries = hw->mac.ops.rar_get_count(hw);
 	
 	/* save a rar entry for our hardware address */
 	rar_entries--;
@@ -907,13 +910,17 @@ static int e1000e_write_uc_addr_list(struct net_device *netdev)
 		 * combining
 		 */
 		netdev_for_each_uc_addr(ha, netdev) {
+			int rval;
+			
 			if (!rar_entries)
 				break;
 #ifdef NETDEV_HW_ADDR_T_UNICAST
-			hw->mac.ops.rar_set(hw, ha->addr, rar_entries--);
+			rval = hw->mac.ops.rar_set(hw, ha->addr, rar_entries--);
 #else
-			hw->mac.ops.rar_set(hw, ha->da_addr, rar_entries--);
+			rval = hw->mac.ops.rar_set(hw, ha->da_addr, rar_entries--);
 #endif
+			if (rval < 0)
+				return -ENOMEM;
 			count++;
 		}
 	}
@@ -970,6 +977,7 @@ static void e1000e_update_rdt_wa(struct e1000_ring *rx_ring, unsigned int i)
 	
 	if (unlikely(!ret_val && (i != readl(rx_ring->tail)))) {
 		u32 rctl = er32(RCTL);
+
 		ew32(RCTL, rctl & ~E1000_RCTL_EN);
 		e_err("ME firmware caused invalid RDT - resetting\n");
 		schedule_work(&adapter->reset_task);
@@ -986,6 +994,7 @@ static void e1000e_update_tdt_wa(struct e1000_ring *tx_ring, unsigned int i)
 	
 	if (unlikely(!ret_val && (i != readl(tx_ring->tail)))) {
 		u32 tctl = er32(TCTL);
+
 		ew32(TCTL, tctl & ~E1000_TCTL_EN);
 		e_err("ME firmware caused invalid TDT - resetting\n");
 		schedule_work(&adapter->reset_task);
@@ -2958,6 +2967,7 @@ void AppleIntelE1000e::interruptOccurred(IOInterruptEventSource * src)
 		if (adapter->flags & FLAG_RX_NEEDS_RESTART) {
 			/* disable receives */
 			rctl = er32(RCTL);
+
 			ew32(RCTL, rctl & ~E1000_RCTL_EN);
 			adapter->flags |= FLAG_RESTART_NOW;
 		}
@@ -3103,6 +3113,7 @@ void AppleIntelE1000e::e1000_configure_tx()
 
 	if (adapter->flags2 & FLAG2_DMA_BURST) {
 		u32 txdctl = er32(TXDCTL(0));
+
 		txdctl &= ~(E1000_TXDCTL_PTHRESH | E1000_TXDCTL_HTHRESH |
                     E1000_TXDCTL_WTHRESH);
 		/* set up some performance related parameters to encourage the
@@ -3180,12 +3191,18 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	u32 pages = 0;
 
 	/* Workaround Si errata on PCHx - configure jumbo frame flow */
-	if ((hw->mac.type >= e1000_pch2lan) &&
-		(adapter->netdev->mtu > ETH_DATA_LEN) &&
-		e1000_lv_jumbo_workaround_ich8lan(hw, true)){
+	if (hw->mac.type >= e1000_pch2lan) {
+		s32 ret_val;
+		
+		if (adapter->netdev->mtu > ETH_DATA_LEN)
+			ret_val = e1000_lv_jumbo_workaround_ich8lan(hw, true);
+		else
+			ret_val = e1000_lv_jumbo_workaround_ich8lan(hw, false);
+		
+		if (ret_val)
 			e_dbg("failed to enable jumbo frame workaround mode\n");
 	}
-
+	
 	/* Program MC offset vector base */
 	rctl = er32(RCTL);
 	rctl &= ~(3 << E1000_RCTL_MO_SHIFT);
@@ -3421,6 +3438,7 @@ void AppleIntelE1000e::e1000_configure_rx()
 	if (adapter->netdev->mtu > ETH_DATA_LEN) {
 		if (adapter->flags & FLAG_IS_ICH) {
 			u32 rxdctl = er32(RXDCTL(0));
+
 			ew32(RXDCTL(0), rxdctl | 0x3);
 		}
 #if 0
@@ -3923,9 +3941,6 @@ static void e1000e_tx_hwtstamp_work(struct work_struct *work)
 												 tx_hwtstamp_work);
 	struct e1000_hw *hw = &adapter->hw;
 	
-	if (!adapter->tx_hwtstamp_skb)
-		return;
-	
 	if (er32(TSYNCTXCTL) & E1000_TSYNCTXCTL_VALID) {
 		struct skb_shared_hwtstamps shhwtstamps;
 		u64 txstmp;
@@ -3938,6 +3953,12 @@ static void e1000e_tx_hwtstamp_work(struct work_struct *work)
 		skb_tstamp_tx(adapter->tx_hwtstamp_skb, &shhwtstamps);
 		dev_kfree_skb_any(adapter->tx_hwtstamp_skb);
 		adapter->tx_hwtstamp_skb = NULL;
+	} else if (time_after(jiffies, adapter->tx_hwtstamp_start
+						  + adapter->tx_timeout_factor * HZ)) {
+		dev_kfree_skb_any(adapter->tx_hwtstamp_skb);
+		adapter->tx_hwtstamp_skb = NULL;
+		adapter->tx_hwtstamp_timeouts++;
+		e_warn("clearing Tx timestamp hang\n");
 	} else {
 		/* reschedule to check later */
 		schedule_work(&adapter->tx_hwtstamp_work);
@@ -3971,7 +3992,8 @@ bool AppleIntelE1000e::e1000_clean_tx_irq()
 	while ((eop_desc->upper.data & cpu_to_le32(E1000_TXD_STAT_DD)) &&
 	       (count < tx_ring->count)) {
 		bool cleaned = false;
-		//rmb();
+
+		rmb();		/* read buffer_info after eop_desc */
 		for (; !cleaned; count++) {
 			tx_desc = E1000_TX_DESC(*tx_ring, i);
 			buffer_info = &tx_ring->buffer_info[i];
@@ -4050,6 +4072,7 @@ void AppleIntelE1000e::e1000e_enable_receives()
 	    (adapter->flags & FLAG_RESTART_NOW)) {
 		struct e1000_hw *hw = &adapter->hw;
 		u32 rctl = er32(RCTL);
+
 		ew32(RCTL, rctl | E1000_RCTL_EN);
 		adapter->flags &= ~FLAG_RESTART_NOW;
 	}
@@ -4270,6 +4293,8 @@ void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 	
 #endif
 	if (link) {
+		bool txb2b = true;
+
 		mac->ops.get_link_up_info(hw,
 								  &adapter->link_speed,
 								  &adapter->link_duplex);
@@ -4286,7 +4311,7 @@ void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 		 */
 		if ((hw->phy.type == e1000_phy_igp_3 ||
 		     hw->phy.type == e1000_phy_bm) &&
-		    (hw->mac.autoneg) &&
+		    hw->mac.autoneg &&
 		    (adapter->link_speed == SPEED_10 ||
 		     adapter->link_speed == SPEED_100) &&
 		    (adapter->link_duplex == HALF_DUPLEX)) {
@@ -4305,13 +4330,27 @@ void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 		adapter->tx_timeout_factor = 1;
 		switch (adapter->link_speed) {
 			case SPEED_10:
+				txb2b = false;
 				adapter->tx_timeout_factor = 16;
 				break;
 			case SPEED_100:
+				txb2b = false;
 				adapter->tx_timeout_factor = 10;
 				break;
 		}
 		
+		/* workaround: re-program speed mode bit after
+		 * link-up event
+		 */
+		if ((adapter->flags & FLAG_TARC_SPEED_MODE_BIT) &&
+			!txb2b) {
+			u32 tarc0;
+			
+			tarc0 = er32(TARC(0));
+			tarc0 &= ~SPEED_MODE_BIT;
+			ew32(TARC(0), tarc0);
+		}
+
 		/* enable transmits in the hardware, need to do this
 		 * after setting TARC(0)
 		 */
@@ -4663,10 +4702,10 @@ s32 e1000e_get_base_timinca(struct e1000_adapter *adapter, u32 *timinca)
  * specified. Matching the kind of event packet is not supported, with the
  * exception of "all V2 events regardless of level 2 or 4".
  **/
-static int e1000e_config_hwtstamp(struct e1000_adapter *adapter)
+static int e1000e_config_hwtstamp(struct e1000_adapter *adapter,
+								  struct hwtstamp_config *config)
 {
 	struct e1000_hw *hw = &adapter->hw;
-	struct hwtstamp_config *config = &adapter->hwtstamp_config;
 	u32 tsync_tx_ctl = E1000_TSYNCTXCTL_ENABLED;
 	u32 tsync_rx_ctl = E1000_TSYNCRXCTL_ENABLED;
 #ifdef HAVE_PTP_1588_CLOCK
@@ -4772,6 +4811,8 @@ static int e1000e_config_hwtstamp(struct e1000_adapter *adapter)
 		default:
 			return -ERANGE;
 	}
+	
+	adapter->hwtstamp_config = *config;
 	
 	/* enable/disable Tx h/w time stamping */
 	regval = er32(TSYNCTXCTL);
@@ -5028,7 +5069,7 @@ IOReturn AppleIntelE1000e::getMinPacketSize (UInt32 *minSize) const {
  **/
 
 void AppleIntelE1000e::e1000_change_mtu(UInt32 new_mtu){
-	UInt32 max_frame = new_mtu;
+	UInt32 max_frame = new_mtu + VLAN_HLEN + ETH_HLEN + ETH_FCS_LEN;;
 	e1000_adapter *adapter = &priv_adapter;
 
 
