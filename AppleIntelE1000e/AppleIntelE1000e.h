@@ -174,7 +174,7 @@ private:
 	void e1000e_down(bool reset);
 	void e1000_change_mtu(UInt32 maxSize);
 	
-	int __e1000_shutdown(bool *enable_wake, bool runtime);
+	int __e1000_shutdown(bool runtime);
 
 	bool getBoolOption(const char *name, bool defVal);
 	int getIntOption(const char *name, int defVal, int maxVal, int minVal );

@@ -1901,17 +1901,10 @@ void AppleIntelE1000e::stop(IOService* provider)
 		}
 	}
 #endif
-
-	e1000_power_down_phy(adapter);
-#if 1		// WOL
-	bool wake;
-	__e1000_shutdown( &wake, false);
-#endif
-	
-	/* Release control of h/w to f/w.  If f/w is AMT enabled, this
-	 * would have already happened in close and is redundant.
-	 */
-	e1000e_release_hw_control(adapter);
+    /* Release control of h/w to f/w.  If f/w is AMT enabled, this
+     * would have already happened in close and is redundant.
+     */
+    e1000e_release_hw_control(adapter);
 	
 	e1000e_reset_interrupt_capability(adapter);
 	IOFree(adapter->tx_ring, sizeof(e1000_ring));
@@ -2367,7 +2360,7 @@ IOReturn AppleIntelE1000e::disable(IONetworkInterface * netif)
 		//e1000_free_irq(adapter);
 		//e1000_power_down_phy(adapter);
 	}
-	e1000e_free_tx_resources();
+	///();
 	e1000e_free_rx_resources();
 	
 #if defined(NETIF_F_HW_VLAN_TX) || defined(NETIF_F_HW_VLAN_CTAG_TX)
@@ -2396,9 +2389,8 @@ IOReturn AppleIntelE1000e::disable(IONetworkInterface * netif)
         ;
 #endif
 	// suggested by diddl14
-	e1000_power_down_phy(adapter);
-	bool wake;
-	__e1000_shutdown( &wake, false);
+	//e1000_power_down_phy(adapter);
+	__e1000_shutdown(false);
 	pciDevice->close(this);
 
 	return kIOReturnSuccess;
@@ -5163,7 +5155,7 @@ IOReturn AppleIntelE1000e::getPacketFilters(const OSSymbol * group, UInt32 * fil
 }
 
 
-int AppleIntelE1000e::__e1000_shutdown(bool *enable_wake, bool runtime)
+int AppleIntelE1000e::__e1000_shutdown(bool runtime)
 {
 	e1000_adapter *adapter = &priv_adapter;
 	struct e1000_hw *hw = &adapter->hw;
