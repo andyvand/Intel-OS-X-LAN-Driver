@@ -292,8 +292,8 @@ typedef void AppleIGB;
 #define mb()
 
 #define	__MODULE_STRING(s)	"x"
-#define KERN_DEBUG
-#define	printk(args...)	IOLog(args)
+#define	pr_debug(args...)	IOLog(args)
+#define	pr_err(args...)	IOLog(args)
 #define	dev_warn(dev,args...)	IOLog(args)
 #define	dev_info(dev,args...)	IOLog(args)
 #define	in_interrupt()	(0)
