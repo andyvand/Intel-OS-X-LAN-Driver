@@ -39,7 +39,7 @@
 			<key>E1000_DEFAULT_RXD</key>
 			<integer>256</integer>
 			<key>NETIF_F_TSO</key>
-			<true/>
+			<false/>
 			<key>E1000_CTRL_TFCE</key>
 			<true/>
 		</dict>

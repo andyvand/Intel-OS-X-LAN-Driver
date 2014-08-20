@@ -1258,6 +1258,24 @@ in_pseudo6(struct ip6_hdr *ip6, int nxt, u_int32_t len)
 	return (u_short)sum;
 }
 
+/* The pseudo header checksum provided by the network stack includes
+ * the IP payload length but Microsoft's specification says that only
+ * source and destination address as well as the protocol number
+ * should be included so that we have to adjust the checksum first.
+ *
+ * See: http://msdn.microsoft.com/en-us/library/windows/hardware/ff568840(v=vs.85).aspx
+ */
+
+static inline UInt16 adjustPseudoHdrCSumV6(struct ip6_hdr *ip6Hdr, struct tcphdr *tcpHdr)
+{
+    UInt32 plen = ntohs(ip6Hdr->ip6_ctlun.ip6_un1.ip6_un1_plen);
+    UInt32 csum = ntohs(tcpHdr->th_sum) - plen;
+    
+    csum += (csum >> 16);
+    
+    return htons((UInt16)csum);
+}
+
 static int e1000_tso(struct e1000_ring *tx_ring, struct sk_buff *skb,
                      int* pSegs, int* pHdrLen)
 {
@@ -1296,9 +1314,13 @@ static int e1000_tso(struct e1000_ring *tx_ring, struct sk_buff *skb,
 	} else if (request & MBUF_TSO_IPV6) {
 		struct ip6_hdr *iph = ip6_hdr(skb);
 		tcph = tcp6_hdr(skb);
+#if 1
+		csum = adjustPseudoHdrCSumV6(iph, tcph);
+#else
+		csum = in_pseudo6(iph, IPPROTO_TCP, 0);
+#endif
 		ip_hlen = ((u8*)tcph - (u8*)iph);
 		iph->ip6_ctlun.ip6_un1.ip6_un1_plen = 0;
-		csum = in_pseudo6(iph, IPPROTO_TCP, 0);
 		ipcse = 0;
         ipcso = 0;
         rc = 6;
