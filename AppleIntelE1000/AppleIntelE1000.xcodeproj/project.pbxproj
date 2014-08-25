@@ -345,7 +345,10 @@
 		4DD82BAC1179AFAF007FC087 /* Release_Leo */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ARCHS = "$(NATIVE_ARCH)";
+				ARCHS = (
+					ppc,
+					i386,
+				);
 				GCC_C_LANGUAGE_STANDARD = gnu99;
 				GCC_VERSION = "";
 				GCC_WARN_ABOUT_RETURN_TYPE = YES;

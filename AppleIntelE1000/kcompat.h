@@ -202,36 +202,6 @@ enum {
 
 /************** Ugly macros to compile ich8lan.c *****************************/
 
-static inline unsigned char
-inb (unsigned short port)
-{
-	unsigned char _v;
-	
-	__asm__ __volatile__ ("inb %w1,%0":"=a" (_v):"Nd" (port));
-	return _v;
-}
-
-static inline unsigned int
-inl (unsigned short port)
-{
-	unsigned int _v;
-	
-	__asm__ __volatile__ ("inl %w1,%0":"=a" (_v):"Nd" (port));
-	return _v;
-}
-
-static inline void
-outb (unsigned char value, unsigned short port)
-{
-	__asm__ __volatile__ ("outb %b0,%w1": :"a" (value), "Nd" (port));
-}
-	
-static inline void
-outl (unsigned int value, unsigned short port)
-{
-	__asm__ __volatile__ ("outl %0,%w1": :"a" (value), "Nd" (port));
-}
-
 #define	writel(val, reg)	_OSWriteInt32(reg, 0, val)
 #define	writew(val, reg)	_OSWriteInt16(reg, 0, val)
 #define	readl(reg)	_OSReadInt32(reg, 0)

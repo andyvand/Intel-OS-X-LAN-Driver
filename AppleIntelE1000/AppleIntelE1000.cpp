@@ -37,6 +37,7 @@
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/IOFilterInterruptEventSource.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
+#include <IOKit/IOLib.h>
 #include <IOKit/assert.h>
 
 extern "C" {
@@ -53,8 +54,10 @@ extern "C" {
 #define	USE_RX_UDP_CHECKSUM	0
 #define	CAN_RECOVER_STALL	0
 
+#if !defined(MAC_OS_X_VERSION_10_5)
 #define NETIF_F_TSO
 #define NETIF_F_TSO6
+#endif
 
 #define super IOEthernetController
 
