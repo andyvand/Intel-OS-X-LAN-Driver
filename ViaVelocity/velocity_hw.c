@@ -659,7 +659,7 @@ void velocity_rx_reset(struct velocity_hw *hw)
         hw->aRDRing[i].rdesc0 |= cpu_to_le32(RDESC0_OWN);
 
     CSR_WRITE_2(hw, hw->sOpts.nRxDescs, MAC_REG_RBRDU);
-    CSR_WRITE_4(hw, hw->rd_pool_dma, MAC_REG_RDBASE_LO);
+    CSR_WRITE_4(hw, (uint32_t)hw->rd_pool_dma, MAC_REG_RDBASE_LO);
     CSR_WRITE_2(hw, 0, MAC_REG_RDINDX);
     CSR_WRITE_2(hw, hw->sOpts.nRxDescs-1, MAC_REG_RDCSIZE);
 }
@@ -933,7 +933,7 @@ void velocity_init_register_cold(struct velocity_hw *hw, struct pci_dev* pcid)
         }
     }
 
-    CSR_WRITE_4(hw, hw->rd_pool_dma, MAC_REG_RDBASE_LO);
+    CSR_WRITE_4(hw, (uint32_t)hw->rd_pool_dma, MAC_REG_RDBASE_LO);
     CSR_WRITE_2(hw, hw->sOpts.nRxDescs-1, MAC_REG_RDCSIZE);
     mac_rx_queue_run(hw);
     mac_rx_queue_wake(hw);
@@ -941,7 +941,7 @@ void velocity_init_register_cold(struct velocity_hw *hw, struct pci_dev* pcid)
     CSR_WRITE_2(hw, hw->sOpts.nTxDescs-1, MAC_REG_TDCSIZE);
 
     for (i=0;i<hw->nTxQueues;i++) {
-        CSR_WRITE_4(hw, hw->td_pool_dma[i], (MAC_REG_TDBASE_LO+(i*4)) );
+        CSR_WRITE_4(hw, (uint32_t)hw->td_pool_dma[i], (MAC_REG_TDBASE_LO+(i*4)) );
         mac_tx_queue_run(hw,i);
     }
 

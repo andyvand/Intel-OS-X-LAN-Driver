@@ -1251,7 +1251,7 @@ UInt32 ViaVelocity::outputPacket(mbuf_t skb, void * param)
 	pTD->tdesc1 |= cpu_to_le32(TCR_TIC);
 	pTD->aTdBufs[0].dwBufaddrHi &= cpu_to_le32(~TDTXBUF_QUE);
 	
-	int pktlen = mbuf_pkthdr_len(skb);
+	size_t pktlen = mbuf_pkthdr_len(skb);
 	PU8 buf;
 	dma_addr_t buf_dma;
 	if(pktlen > PKT_BUF_SZ){

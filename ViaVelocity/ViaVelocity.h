@@ -206,7 +206,7 @@ public:
     mediumType_t                   currentMediumType;
 	
     /* power management support */
-    UInt32                         pmPowerState;
+    unsigned long                  pmPowerState;
 	
     static void interruptHandler( OSObject* target, IOInterruptEventSource* src, int count );
     static bool interruptFilter( OSObject* target, IOFilterInterruptEventSource* src );
