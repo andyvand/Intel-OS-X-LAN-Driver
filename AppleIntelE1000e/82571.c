@@ -1,6 +1,6 @@
 /*
  * Intel PRO/1000 Linux driver
- * Copyright(c) 1999 - 2014 Intel Corporation.
+ * Copyright(c) 1999 - 2015 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -1340,8 +1340,12 @@ static void e1000_clear_vfta_82571(struct e1000_hw *hw)
 static bool e1000_check_mng_mode_82574(struct e1000_hw *hw)
 {
 	u16 data;
+	s32 ret_val;
 
-	e1000_read_nvm(hw, NVM_INIT_CONTROL2_REG, 1, &data);
+	ret_val = e1000_read_nvm(hw, NVM_INIT_CONTROL2_REG, 1, &data);
+	if (ret_val)
+		return false;
+
 	return (data & E1000_NVM_INIT_CTRL2_MNGM) != 0;
 }
 

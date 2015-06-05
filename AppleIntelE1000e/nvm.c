@@ -1,6 +1,6 @@
 /*
  * Intel PRO/1000 Linux driver
- * Copyright(c) 1999 - 2014 Intel Corporation.
+ * Copyright(c) 1999 - 2015 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -332,6 +332,9 @@ s32 e1000e_read_nvm_eerd(struct e1000_hw *hw, u16 offset, u16 words, u16 *data)
 
 		data[i] = (er32(EERD) >> E1000_NVM_RW_REG_DATA);
 	}
+
+	if (ret_val)
+		e_dbg("NVM read error: %d\n", ret_val);
 
 	return ret_val;
 }

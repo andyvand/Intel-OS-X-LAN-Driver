@@ -1,6 +1,6 @@
 /*
  * Intel PRO/1000 Linux driver
- * Copyright(c) 1999 - 2014 Intel Corporation.
+ * Copyright(c) 1999 - 2015 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -716,11 +716,15 @@ static s32 e1000_reset_hw_80003es2lan(struct e1000_hw *hw)
 	ret_val = e1000_read_kmrn_reg_80003es2lan(hw,
 						  E1000_KMRNCTRLSTA_INBAND_PARAM,
 						  &kum_reg_data);
-	if (ret_val)
-		return ret_val;
-	kum_reg_data |= E1000_KMRNCTRLSTA_IBIST_DISABLE;
-	e1000_write_kmrn_reg_80003es2lan(hw, E1000_KMRNCTRLSTA_INBAND_PARAM,
-					 kum_reg_data);
+	if (!ret_val) {
+		kum_reg_data |= E1000_KMRNCTRLSTA_IBIST_DISABLE;
+		ret_val = e1000_write_kmrn_reg_80003es2lan(hw,
+							   E1000_KMRNCTRLSTA_INBAND_PARAM,
+							   kum_reg_data);
+		if (ret_val)
+			e_dbg("Error disabling far-end loopback\n");
+	} else
+		e_dbg("Error disabling far-end loopback\n");
 
 	ret_val = e1000e_get_auto_rd_done(hw);
 	if (ret_val)
@@ -774,11 +778,18 @@ static s32 e1000_init_hw_80003es2lan(struct e1000_hw *hw)
 		return ret_val;
 
 	/* Disable IBIST slave mode (far-end loopback) */
-	e1000_read_kmrn_reg_80003es2lan(hw, E1000_KMRNCTRLSTA_INBAND_PARAM,
-					&kum_reg_data);
-	kum_reg_data |= E1000_KMRNCTRLSTA_IBIST_DISABLE;
-	e1000_write_kmrn_reg_80003es2lan(hw, E1000_KMRNCTRLSTA_INBAND_PARAM,
-					 kum_reg_data);
+	ret_val =
+	    e1000_read_kmrn_reg_80003es2lan(hw, E1000_KMRNCTRLSTA_INBAND_PARAM,
+					    &kum_reg_data);
+	if (!ret_val) {
+		kum_reg_data |= E1000_KMRNCTRLSTA_IBIST_DISABLE;
+		ret_val = e1000_write_kmrn_reg_80003es2lan(hw,
+							   E1000_KMRNCTRLSTA_INBAND_PARAM,
+							   kum_reg_data);
+		if (ret_val)
+			e_dbg("Error disabling far-end loopback\n");
+	} else
+		e_dbg("Error disabling far-end loopback\n");
 
 	/* Set the transmit descriptor write-back policy */
 	reg_data = er32(TXDCTL(0));

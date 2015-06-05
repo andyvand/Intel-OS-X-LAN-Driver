@@ -349,7 +349,8 @@ static void e1000_irq_enable(struct e1000_adapter *adapter)
 	if (adapter->msix_entries) {
 		ew32(EIAC_82574, adapter->eiac_mask & E1000_EIAC_MASK_82574);
 		ew32(IMS, adapter->eiac_mask | E1000_IMS_OTHER | E1000_IMS_LSC);
-	} else if (hw->mac.type == e1000_pch_lpt) {
+	} else if ((hw->mac.type == e1000_pch_lpt) ||
+			   (hw->mac.type == e1000_pch_spt)) {
 		ew32(IMS, IMS_ENABLE_MASK | E1000_IMS_ECCER);
 	} else {
 		ew32(IMS, IMS_ENABLE_MASK);
@@ -370,9 +371,9 @@ static int e1000_sw_init(struct e1000_adapter *adapter)
 {
 	struct net_device *netdev = adapter->netdev;
 	
-	adapter->rx_buffer_len = ETH_FRAME_LEN + VLAN_HLEN + ETH_FCS_LEN;
+	adapter->rx_buffer_len = VLAN_ETH_FRAME_LEN + ETH_FCS_LEN;
 	adapter->rx_ps_bsize0 = 128;
-	adapter->max_frame_size = netdev->mtu + ETH_HLEN + ETH_FCS_LEN;
+	adapter->max_frame_size = netdev->mtu + VLAN_ETH_HLEN + ETH_FCS_LEN;
 	adapter->min_frame_size = ETH_ZLEN + ETH_FCS_LEN;
 	
 	e1000e_set_interrupt_capability(adapter);
@@ -384,7 +385,11 @@ static int e1000_sw_init(struct e1000_adapter *adapter)
 	/* Setup hardware time stamping cyclecounter */
 	if (adapter->flags & FLAG_HAS_HW_TIMESTAMP) {
 		adapter->cc.read = e1000e_cyclecounter_read;
+#ifdef HAVE_INCLUDE_LINUX_TIMECOUNTER_H
+		adapter->cc.mask = CYCLECOUNTER_MASK(64);
+#else
 		adapter->cc.mask = CLOCKSOURCE_MASK(64);
+#endif
 		adapter->cc.mult = 1;
 		/* cc.shift set in e1000e_get_base_tininca() */
 		
@@ -612,6 +617,115 @@ static void e1000_power_down_phy(struct e1000_adapter *adapter)
 }
 
 /**
+ * e1000_flush_tx_ring - remove all descriptors from the tx_ring
+ *
+ * We want to clear all pending descriptors from the TX ring.
+ * zeroing happens when the HW reads the regs. We  assign the ring itself as
+ * the data of the next descriptor. We don't care about the data we are about
+ * to reset the HW.
+ */
+static void e1000_flush_tx_ring(struct e1000_adapter *adapter)
+{
+	struct e1000_hw *hw = &adapter->hw;
+	struct e1000_ring *tx_ring = adapter->tx_ring;
+	struct e1000_tx_desc *tx_desc = NULL;
+	u32 tdt, tctl, txd_lower = E1000_TXD_CMD_IFCS;
+	u16 size = 512;
+	
+	tctl = er32(TCTL);
+	ew32(TCTL, tctl | E1000_TCTL_EN);
+	tdt = er32(TDT(0));
+	BUG_ON(tdt != tx_ring->next_to_use);
+	tx_desc =  E1000_TX_DESC(*tx_ring, tx_ring->next_to_use);
+	tx_desc->buffer_addr = tx_ring->dma;
+	
+	tx_desc->lower.data = cpu_to_le32(txd_lower | size);
+	tx_desc->upper.data = 0;
+	/* flush descriptors to memory before notifying the HW */
+	wmb();
+	tx_ring->next_to_use++;
+	if (tx_ring->next_to_use == tx_ring->count)
+		tx_ring->next_to_use = 0;
+	ew32(TDT(0), tx_ring->next_to_use);
+	mmiowb();
+	usleep_range(200, 250);
+}
+
+/**
+ * e1000_flush_rx_ring - remove all descriptors from the rx_ring
+ *
+ * Mark all descriptors in the RX ring as consumed and disable the rx ring
+ */
+static void e1000_flush_rx_ring(struct e1000_adapter *adapter)
+{
+	u32 rctl, rxdctl;
+	struct e1000_hw *hw = &adapter->hw;
+	
+	rctl = er32(RCTL);
+	ew32(RCTL, rctl & ~E1000_RCTL_EN);
+	e1e_flush();
+	usleep_range(100, 150);
+	
+	rxdctl = er32(RXDCTL(0));
+	/* zero the lower 14 bits (prefetch and host thresholds) */
+	rxdctl &= 0xffffc000;
+	
+	/* update thresholds: prefetch threshold to 31, host threshold to 1
+	 * and make sure the granularity is "descriptors" and not "cache lines"
+	 */
+	rxdctl |= (0x1F | (1 << 8) | E1000_RXDCTL_THRESH_UNIT_DESC);
+	
+	ew32(RXDCTL(0), rxdctl);
+	/* momentarily enable the RX ring for the changes to take effect */
+	ew32(RCTL, rctl | E1000_RCTL_EN);
+	e1e_flush();
+	usleep_range(100, 150);
+	ew32(RCTL, rctl & ~E1000_RCTL_EN);
+}
+
+/**
+ * e1000_flush_desc_rings - remove all descriptors from the descriptor rings
+ *
+ * In i219, the descriptor rings must be emptied before resetting the HW
+ * or before changing the device state to D3 during runtime (runtime PM).
+ *
+ * Failure to do this will cause the HW to enter a unit hang state which can
+ * only be released by PCI reset on the device
+ *
+ */
+
+static void e1000_flush_desc_rings(struct e1000_adapter *adapter)
+{
+	u16 hang_state;
+	u32 fext_nvm11, tdlen;
+	struct e1000_hw *hw = &adapter->hw;
+	
+	/* First, disable MULR fix in FEXTNVM11 */
+	fext_nvm11 = er32(FEXTNVM11);
+	fext_nvm11 |= E1000_FEXTNVM11_DISABLE_MULR_FIX;
+	ew32(FEXTNVM11, fext_nvm11);
+	/* do nothing if we're not in faulty state, or if the queue is empty */
+	tdlen = er32(TDLEN(0));
+	pci_read_config_word(adapter->pdev, PCICFG_DESC_RING_STATUS,
+						 &hang_state);
+	if (!(hang_state & FLUSH_DESC_REQUIRED) || !tdlen)
+		return;
+#if	0
+	if (!netif_running(adapter->netdev)) {
+		e_err("Descriptor rings are not allocated but HW hang reported."
+		      " REBOOT will be required\n");
+		return;
+	}
+#endif
+	e1000_flush_tx_ring(adapter);
+	/* recheck, maybe the fault is caused by the rx ring */
+	pci_read_config_word(adapter->pdev, PCICFG_DESC_RING_STATUS,
+						 &hang_state);
+	if (hang_state & FLUSH_DESC_REQUIRED)
+		e1000_flush_rx_ring(adapter);
+}
+
+/**
  * e1000e_reset - bring the hardware into a known good state
  *
  * This function boots the hardware and enables some settings that
@@ -631,7 +745,7 @@ void e1000e_reset(struct e1000_adapter *adapter)
 	/* reset Packet Buffer Allocation to default */
 	ew32(PBA, pba);
 	
-	if (adapter->max_frame_size > ETH_FRAME_LEN + ETH_FCS_LEN) {
+	if (adapter->max_frame_size > (VLAN_ETH_FRAME_LEN + ETH_FCS_LEN)) {
 		/* To maintain wire speed transmits, the Tx FIFO should be
 		 * large enough to accommodate two full transmit packets,
 		 * rounded up to the next 1KB and expressed in KB.  Likewise,
@@ -723,6 +837,7 @@ void e1000e_reset(struct e1000_adapter *adapter)
 			break;
 		case e1000_pch2lan:
 		case e1000_pch_lpt:
+		case e1000_pch_spt:
 			fc->refresh_time = 0x0400;
 
             if (adapter->netdev->mtu > ETH_DATA_LEN) {
@@ -764,6 +879,8 @@ void e1000e_reset(struct e1000_adapter *adapter)
 		}
 	}
 
+	if (hw->mac.type == e1000_pch_spt)
+		e1000_flush_desc_rings(adapter);
 	/* Allow time for pending master requests to run */
 	mac->ops.reset_hw(hw);
 	
@@ -849,6 +966,19 @@ void e1000e_reset(struct e1000_adapter *adapter)
 		e1e_rphy(hw, IGP02E1000_PHY_POWER_MGMT, &phy_data);
 		phy_data &= ~IGP02E1000_PM_SPD;
 		e1e_wphy(hw, IGP02E1000_PHY_POWER_MGMT, phy_data);
+	}
+	if (hw->mac.type == e1000_pch_spt && adapter->int_mode == 0) {
+		u32 reg;
+		/* Fextnvm7 @ 0xe4[2] = 1 */
+		reg = er32(FEXTNVM7);
+		reg |= E1000_FEXTNVM7_SIDE_CLK_UNGATE;
+		ew32(FEXTNVM7, reg);
+		/* Fextnvm9 @ 0x5bb4[13:12] = 11 */
+		reg = er32(FEXTNVM9);
+		reg |=
+		E1000_FEXTNVM9_IOSFSB_CLKGATE_DIS |
+		E1000_FEXTNVM9_IOSFSB_CLKREQ_DIS;
+		ew32(FEXTNVM9, reg);
 	}
 }
 
@@ -1529,9 +1659,6 @@ static void e1000_tx_queue(struct e1000_ring *tx_ring, int tx_flags, int count)
 	else
 		writel(i, tx_ring->tail);
 	
-	/* we need this if more than one processor can write to our tail
-	 * at a time, it synchronizes IO on IA64/Altix systems
-	 */
 	mmiowb();
 }
 
@@ -1715,7 +1842,6 @@ static void e1000e_flush_lpic(struct pci_dev *pdev)
 fl_out:
 	pm_runtime_put_sync(netdev->dev.parent);
 	
-	return;
 #endif
 }
 
@@ -1966,6 +2092,7 @@ bool AppleIntelE1000e::start(IOService* provider)
 	int err, i;
 	u16 eeprom_data = 0;
 	u16 eeprom_apme_mask = E1000_EEPROM_APME;
+	s32 rval = 0;
 	struct e1000_adapter *adapter = &priv_adapter;
 	struct e1000_hw *hw = &adapter->hw;
 
@@ -2147,15 +2274,19 @@ bool AppleIntelE1000e::start(IOService* provider)
 		} else if (adapter->flags & FLAG_APME_IN_CTRL3) {
 			if (adapter->flags & FLAG_APME_CHECK_PORT_B &&
 				(adapter->hw.bus.func == 1))
-				e1000_read_nvm(&adapter->hw, NVM_INIT_CONTROL3_PORT_B,
-							   1, &eeprom_data);
+				rval = e1000_read_nvm(&adapter->hw,
+									  NVM_INIT_CONTROL3_PORT_B,
+									  1, &eeprom_data);
 			else
-				e1000_read_nvm(&adapter->hw, NVM_INIT_CONTROL3_PORT_A,
-							   1, &eeprom_data);
+				rval = e1000_read_nvm(&adapter->hw,
+									  NVM_INIT_CONTROL3_PORT_A,
+									  1, &eeprom_data);
 		}
 		
 		/* fetch WoL from EEPROM */
-		if (eeprom_data & eeprom_apme_mask)
+		if (rval)
+			e_dbg("NVM read error getting WoL initial values: %d\n", rval);
+		else if (eeprom_data & eeprom_apme_mask)
 			adapter->eeprom_wol |= E1000_WUFC_MAG;
 		
 		/* now that we have the eeprom settings, apply the special cases
@@ -2187,7 +2318,12 @@ bool AppleIntelE1000e::start(IOService* provider)
 			/*device_wakeup_enable(pci_dev_to_dev(pdev))*/;
 		
 		/* save off EEPROM version number */
-		e1000_read_nvm(&adapter->hw, 5, 1, &adapter->eeprom_vers);
+		rval = e1000_read_nvm(&adapter->hw, 5, 1, &adapter->eeprom_vers);
+
+		if (rval) {
+			e_dbg("NVM read error getting EEPROM version: %d\n", rval);
+			adapter->eeprom_vers = 0;
+		}
 		
 		/* reset the hardware with the new settings */
 		e1000e_reset(adapter);
@@ -2461,6 +2597,7 @@ void AppleIntelE1000e::e1000e_down(bool reset)
 	 */
 	set_bit(__E1000_DOWN, &adapter->state);
 	
+	//netif_carrier_off(netdev);
 #ifdef DYNAMIC_LTR_SUPPORT
 	adapter->c10_demote_ltr = false;
 	e1000_demote_ltr(hw, false, false);
@@ -2500,9 +2637,6 @@ void AppleIntelE1000e::e1000e_down(bool reset)
 	preLinkStatus = 0;
     
 	e1000e_flush_descriptors(adapter);
-	e1000_clean_tx_ring();
-	e1000_clean_rx_ring();
-    
 
 	adapter->link_speed = 0;
 	adapter->link_duplex = 0;
@@ -2513,12 +2647,21 @@ void AppleIntelE1000e::e1000e_down(bool reset)
 	    e1000_lv_jumbo_workaround_ich8lan(hw, false))
 		e_dbg("failed to disable jumbo frame workaround mode\n");
 
+#ifdef HAVE_PCI_ERS
+	if (!pci_channel_offline(adapter->pdev)) {
+		if (reset)
+			e1000e_reset(adapter);
+		else if (hw->mac.type == e1000_pch_spt)
+			e1000_flush_desc_rings(adapter);
+	}
+#else
 	if (reset)
 		e1000e_reset(adapter);
-
-	/* TODO: for power management, we could drop the link and
-	 * pci_disable_device here.
-	 */
+	else if (hw->mac.type == e1000_pch_spt)
+		e1000_flush_desc_rings(adapter);
+#endif
+	e1000_clean_tx_ring();
+	e1000_clean_rx_ring();
 }
 
 #ifdef HAVE_HW_TIME_STAMP
@@ -2531,12 +2674,21 @@ static cycle_t e1000e_cyclecounter_read(const struct cyclecounter *cc)
 	struct e1000_adapter *adapter = container_of(cc, struct e1000_adapter,
 												 cc);
 	struct e1000_hw *hw = &adapter->hw;
-	cycle_t systim;
+	cycle_t systim, systim_next;
+	/* SYSTIMH latching upon SYSTIML read does not work well. to fix that
+	 * we don't want to allow overflow of SYSTIML and a change to SYSTIMH
+	 * to occur between reads, so if we read a vale close to overflow, we
+	 * wait for overflow to occur and read both registers when its safe.
+	 * clock on pch_lpt HW is 100 MHz. on pch_spt and other parts,
+	 * its 24 MHz, hence the different number of cycles to wait.
+	 */
+	u32 systim_overflow_latch_fix = 0x3FFFFFFF;
 	
-	/* latch SYSTIMH on read of SYSTIML */
-	systim = (cycle_t)er32(SYSTIML);
+	do {
+		systim = (cycle_t)er32(SYSTIML);
+	} while (systim > systim_overflow_latch_fix);
 	systim |= (cycle_t)er32(SYSTIMH) << 32;
-
+	
 	if ((hw->mac.type == e1000_82574) || (hw->mac.type == e1000_82583)) {
 		u64 incvalue, time_delta, rem, temp;
 		int i;
@@ -2989,7 +3141,8 @@ void AppleIntelE1000e::interruptOccurred(IOInterruptEventSource * src)
 	}
 	
 	/* Reset on uncorrectable ECC error */
-	if ((icr & E1000_ICR_ECCER) && (hw->mac.type == e1000_pch_lpt)) {
+	if ((icr & E1000_ICR_ECCER) && ((hw->mac.type == e1000_pch_lpt) ||
+									(hw->mac.type == e1000_pch_spt))) {
 		u32 pbeccsts = er32(PBECCSTS);
 		
 		adapter->corr_errors +=
@@ -3149,7 +3302,7 @@ void AppleIntelE1000e::e1000_configure_tx()
 	tctl = er32(TCTL);
 	tctl &= ~E1000_TCTL_CT;
 	tctl |= E1000_TCTL_PSP | E1000_TCTL_RTLC |
-	(E1000_COLLISION_THRESHOLD << E1000_CT_SHIFT);
+		(E1000_COLLISION_THRESHOLD << E1000_CT_SHIFT);
 	
 	if (adapter->flags & FLAG_TARC_SPEED_MODE_BIT) {
 		tarc = er32(TARC(0));
@@ -3184,6 +3337,19 @@ void AppleIntelE1000e::e1000_configure_tx()
 	ew32(TCTL, tctl);
 	
 	hw->mac.ops.config_collision_dist(hw);
+	
+	/* SPT Si errata workaround to avoid data corruption */
+	if (hw->mac.type == e1000_pch_spt) {
+		u32 reg_val;
+		
+		reg_val = er32(IOSFPC);
+		reg_val |= E1000_RCTL_RDMTS_HEX;
+		ew32(IOSFPC, reg_val);
+		
+		reg_val = er32(TARC(0));
+		reg_val |= E1000_TARC0_CB_MULTIQ_3_REQ;
+		ew32(TARC(0), reg_val);
+	}
 }
 
 /**
@@ -3204,7 +3370,10 @@ void AppleIntelE1000e::e1000_setup_rctl()
 	u32 rctl, rfctl;
 	u32 pages = 0;
 
-	/* Workaround Si errata on PCHx - configure jumbo frame flow */
+	/* Workaround Si errata on PCHx - configure jumbo frame flow.
+	 * If jumbo frames not set, program related MAC/PHY registers
+	 * to h/w defaults
+	 */
 	if (hw->mac.type >= e1000_pch2lan) {
 		s32 ret_val;
 		
@@ -3214,7 +3383,7 @@ void AppleIntelE1000e::e1000_setup_rctl()
 			ret_val = e1000_lv_jumbo_workaround_ich8lan(hw, false);
 		
 		if (ret_val)
-			e_dbg("failed to enable jumbo frame workaround mode\n");
+			e_dbg("failed to enable|disable jumbo frame workaround mode\n");
 	}
 	
 	/* Program MC offset vector base */
@@ -3460,20 +3629,20 @@ void AppleIntelE1000e::e1000_configure_rx()
 		((er32(PBA) & E1000_PBA_RXA_MASK) * 1024 -
 		 adapter->max_frame_size) * 8 / 1000;
 		
-#ifdef HAVE_PM_QOS_REQUEST_ACTIVE
-		pm_qos_update_request(&adapter->netdev->pm_qos_req, lat);
+#ifdef HAVE_PM_QOS_REQUEST_LIST_NEW
+		pm_qos_update_request(&adapter->pm_qos_req, lat);
 #elif defined(HAVE_PM_QOS_REQUEST_LIST)
-		pm_qos_update_request(adapter->netdev->pm_qos_req, lat);
+		pm_qos_update_request(adapter->pm_qos_req, lat);
 #else
 		pm_qos_update_requirement(PM_QOS_CPU_DMA_LATENCY,
 								  adapter->netdev->name, lat);
 #endif
 	} else {
-#ifdef HAVE_PM_QOS_REQUEST_ACTIVE
-		pm_qos_update_request(&adapter->netdev->pm_qos_req,
+#ifdef HAVE_PM_QOS_REQUEST_LIST_NEW
+		pm_qos_update_request(&adapter->pm_qos_req,
 							  PM_QOS_DEFAULT_VALUE);
 #elif defined(HAVE_PM_QOS_REQUEST_LIST)
-		pm_qos_update_request(adapter->netdev->pm_qos_req,
+		pm_qos_update_request(adapter->pm_qos_req,
 							  PM_QOS_DEFAULT_VALUE);
 #else
 		pm_qos_update_requirement(PM_QOS_CPU_DMA_LATENCY,
@@ -4393,7 +4562,12 @@ void AppleIntelE1000e::timeoutOccurred(IOTimerEventSource* src)
 			adapter->link_speed = 0;
 			adapter->link_duplex = 0;
 			e_info("Link is Down\n");
-			
+#if	0
+			netif_carrier_off(netdev);
+			if (!test_bit(__E1000_DOWN, &adapter->state))
+				mod_timer(&adapter->phy_info_timer,
+						  round_jiffies(jiffies + 2 * HZ));
+#endif
 			/* 8000ES2LAN requires a Rx packet buffer work-around
 			 * on link down event; reset the controller to flush
 			 * the Rx packet buffer.
@@ -4606,15 +4780,12 @@ static void e1000e_setup_rss_hash(struct e1000_adapter *adapter)
 {
 	struct e1000_hw *hw = &adapter->hw;
 	u32 mrqc, rxcsum;
+	u32 rss_key[10];
 	int i;
-	static const u32 rsskey[10] = {
-		0xda565a6d, 0xc20e5b25, 0x3d256741, 0xb08fa343, 0xcb2bcad0,
-		0xb4307bae, 0xa32dcb77, 0x0cf23080, 0x3bb7426a, 0xfa01acbe
-	};
 	
-	/* Fill out hash function seed */
+	netdev_rss_key_fill(rss_key, sizeof(rss_key));
 	for (i = 0; i < 10; i++)
-		ew32(RSSRK(i), rsskey[i]);
+		ew32(RSSRK(i), rss_key[i]);
 	
 	/* Direct all traffic to queue 0 */
 	for (i = 0; i < 32; i++)
@@ -4655,8 +4826,11 @@ s32 e1000e_get_base_timinca(struct e1000_adapter *adapter, u32 *timinca)
 	struct e1000_hw *hw = &adapter->hw;
 	u32 incvalue, incperiod, shift;
 	
-	/* Make sure clock is enabled on I217 before checking the frequency */
-	if ((hw->mac.type == e1000_pch_lpt) &&
+	/* Make sure clock is enabled on I217/I218/I219  before checking
+	 * the frequency
+	 */
+	if (((hw->mac.type == e1000_pch_lpt) ||
+	     (hw->mac.type == e1000_pch_spt)) &&
 	    !(er32(TSYNCTXCTL) & E1000_TSYNCTXCTL_ENABLED) &&
 	    !(er32(TSYNCRXCTL) & E1000_TSYNCRXCTL_ENABLED)) {
 		u32 fextnvm7 = er32(FEXTNVM7);
@@ -4670,18 +4844,30 @@ s32 e1000e_get_base_timinca(struct e1000_adapter *adapter, u32 *timinca)
 	switch (hw->mac.type) {
 		case e1000_pch2lan:
 		case e1000_pch_lpt:
-			/* On I217, the clock frequency is 25MHz or 96MHz as
-			 * indicated by the System Clock Frequency Indication
-			 */
-			if ((hw->mac.type != e1000_pch_lpt) ||
-				(er32(TSYNCRXCTL) & E1000_TSYNCRXCTL_SYSCFI)) {
+			if (er32(TSYNCRXCTL) & E1000_TSYNCRXCTL_SYSCFI) {
 				/* Stable 96MHz frequency */
 				incperiod = INCPERIOD_96MHz;
 				incvalue = INCVALUE_96MHz;
 				shift = INCVALUE_SHIFT_96MHz;
 				adapter->cc.shift = shift + INCPERIOD_SHIFT_96MHz;
-				break;
+			} else {
+				/* Stable 96MHz frequency */
+				incperiod = INCPERIOD_25MHz;
+				incvalue = INCVALUE_25MHz;
+				shift = INCVALUE_SHIFT_25MHz;
+				adapter->cc.shift = shift;
 			}
+			break;
+		case e1000_pch_spt:
+			if (er32(TSYNCRXCTL) & E1000_TSYNCRXCTL_SYSCFI) {
+				/* Stable 96MHz frequency */
+				incperiod = INCPERIOD_24MHz;
+				incvalue = INCVALUE_24MHz;
+				shift = INCVALUE_SHIFT_24MHz;
+				adapter->cc.shift = shift;
+				break;
+			} else
+				return -EINVAL;
 			/* fall-through */
 		case e1000_82574:
 		case e1000_82583:
@@ -5083,7 +5269,7 @@ IOReturn AppleIntelE1000e::getMinPacketSize (UInt32 *minSize) const {
  **/
 
 void AppleIntelE1000e::e1000_change_mtu(UInt32 new_mtu){
-	UInt32 max_frame = new_mtu + VLAN_HLEN + ETH_HLEN + ETH_FCS_LEN;;
+	UInt32 max_frame = new_mtu + VLAN_ETH_HLEN + ETH_FCS_LEN;;
 	e1000_adapter *adapter = &priv_adapter;
 
 
@@ -5117,9 +5303,8 @@ void AppleIntelE1000e::e1000_change_mtu(UInt32 new_mtu){
 		adapter->rx_buffer_len = 16384;
 	
 	/* adjust allocation if LPE protects us, and we aren't using SBP */
-	if ((max_frame == ETH_FRAME_LEN + ETH_FCS_LEN) ||
-		(max_frame == ETH_FRAME_LEN + VLAN_HLEN + ETH_FCS_LEN))
-		adapter->rx_buffer_len = ETH_FRAME_LEN + VLAN_HLEN
+	if (max_frame <= VLAN_ETH_FRAME_LEN + ETH_FCS_LEN)
+		adapter->rx_buffer_len = VLAN_ETH_FRAME_LEN
 		+ ETH_FCS_LEN;
 
 	RELEASE(rxMbufCursor);
@@ -5245,7 +5430,8 @@ int AppleIntelE1000e::__e1000_shutdown(bool runtime)
 	
 	if (adapter->hw.phy.type == e1000_phy_igp_3) {
 		e1000e_igp3_phy_powerdown_workaround_ich8lan(&adapter->hw);
-	} else if (hw->mac.type == e1000_pch_lpt) {
+	} else if ((hw->mac.type == e1000_pch_lpt) ||
+			   (hw->mac.type == e1000_pch_spt)) {
 		if (!(wufc & (E1000_WUFC_EX | E1000_WUFC_MC | E1000_WUFC_BC)))
 			/* ULP does not support wake from unicast, multicast
 			 * or broadcast.
@@ -5298,6 +5484,10 @@ int AppleIntelE1000e::__e1000_shutdown(bool runtime)
 	 * correctable error when the MAC transitions from D0 to D3.  To
 	 * prevent this we need to mask off the correctable errors on the
 	 * downstream port of the pci-e switch.
+	 *
+	 * We don't have the associated upstream bridge while assigning
+	 * the PCI device into guest. For example, the KVM on power is
+	 * one of the cases.
 	 */
 	if (adapter->flags & FLAG_IS_QUAD_PORT) {
 		u8 pos;

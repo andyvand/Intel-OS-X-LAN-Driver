@@ -181,7 +181,8 @@ struct work_struct {
 #define VLAN_ETH_ALEN	6			/* Octets in one ethernet addr   */
 #define VLAN_ETH_HLEN	18			/* Total octets in header.       */
 #define VLAN_ETH_ZLEN	64			/* Min. octets in frame sans FCS */
-#define VLAN_N_VID              4096
+#define	VLAN_ETH_FRAME_LEN	1518	/* Max. octets in frame sans FCS */
+#define VLAN_N_VID          4096
 
 /* Generic MII registers. */
 #define MII_BMCR                0x00    /* Basic mode control register */
@@ -402,6 +403,7 @@ typedef void IOBufferMemoryDescriptor;
 #define	unlikely(x)	(x)
 #define	likely(x)	(x)
 #define	BUG()
+#define	BUG_ON(x)
 #define	wmb()	OSSynchronizeIO()
 #define	mmiowb()	OSSynchronizeIO()
 #define	rmb()

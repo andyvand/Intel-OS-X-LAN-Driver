@@ -86,6 +86,10 @@ static struct {
 
 	{ E1000_DEV_ID_PCH_SPT_I219_LM, board_pch_spt },
 	{ E1000_DEV_ID_PCH_SPT_I219_V, board_pch_spt },
+
+	{ E1000_DEV_ID_PCH_SPT_I219_LM2, board_pch_spt },
+	{ E1000_DEV_ID_PCH_SPT_I219_V2, board_pch_spt },
+
 	{ 0, 0 }	/* terminate list */
 };
 
@@ -102,6 +106,7 @@ static const struct e1000_info *e1000_info_tbl[] = {
 	[board_pchlan] = &e1000_pch_info,
 	[board_pch2lan] = &e1000_pch2_info,
 	[board_pch_lpt] = &e1000_pch_lpt_info,
+	[board_pch_spt]		= &e1000_pch_spt_info,
 };
 
 

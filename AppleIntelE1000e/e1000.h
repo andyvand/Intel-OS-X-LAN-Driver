@@ -1,6 +1,6 @@
 /*
  * Intel PRO/1000 Linux driver
- * Copyright(c) 1999 - 2014 Intel Corporation.
+ * Copyright(c) 1999 - 2015 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -48,7 +48,7 @@
 #ifdef HAVE_HW_TIME_STAMP
 #include <linux/clocksource.h>
 #include <linux/net_tstamp.h>
-#endif
+#endif /* HAVE_HW_TIME_STAMP */
 #ifdef HAVE_PTP_1588_CLOCK
 #include <linux/ptp_clock_kernel.h>
 #include <linux/ptp_classify.h>
@@ -127,9 +127,6 @@ IOLog("AppleIntelE1000e(Notice): " format, ## arg)
 
 #define E1000_MNG_VLAN_NONE		(-1)
 
-/* Number of packet split data buffers (not including the header buffer) */
-#define PS_PAGE_BUFFERS			(MAX_PS_BUFFERS - 1)
-
 #define DEFAULT_JUMBO			9234
 
 /* Time to wait before putting the device into D3 if there's no link (in ms). */
@@ -144,6 +141,8 @@ IOLog("AppleIntelE1000e(Notice): " format, ## arg)
 #define DEFAULT_RADV			8
 #define BURST_RDTR			0x20
 #define BURST_RADV			0x20
+#define PCICFG_DESC_RING_STATUS		0xe4
+#define FLUSH_DESC_REQUIRED		0x100
 
 /* in the case of WTHRESH, it appears at least the 82571/2 hardware
  * writes back 4 descriptors when WTHRESH=5, and 3 descriptors when
@@ -333,12 +332,12 @@ struct e1000_adapter {
 #ifndef	__APPLE__
 #ifdef CONFIG_E1000E_NAPI
 	bool (*clean_rx)(struct e1000_ring *ring, int *work_done,
-			  int work_to_do) ____cacheline_aligned_in_smp;
+			 int work_to_do) ____cacheline_aligned_in_smp;
 #else
 	bool (*clean_rx)(struct e1000_ring *ring) ____cacheline_aligned_in_smp;
 #endif
 	void (*alloc_rx_buf)(struct e1000_ring *ring, int cleaned_count,
-			      gfp_t gfp);
+			     gfp_t gfp);
 #endif
 	struct e1000_ring *rx_ring;
 
@@ -445,6 +444,11 @@ struct e1000_adapter {
 	struct ptp_clock *ptp_clock;
 	struct ptp_clock_info ptp_clock_info;
 #endif
+#ifdef HAVE_PM_QOS_REQUEST_LIST_NEW
+	struct pm_qos_request pm_qos_req;
+#elif defined(HAVE_PM_QOS_REQUEST_LIST)
+	struct pm_qos_request_list pm_qos_req;
+#endif
 
 	u16 eee_advert;
 };
@@ -487,6 +491,10 @@ s32 e1000e_get_base_timinca(struct e1000_adapter *adapter, u32 *timinca);
 #define INCVALUE_SHIFT_25MHz	18
 #define INCPERIOD_25MHz		1
 
+#define INCVALUE_24MHz		125
+#define INCVALUE_SHIFT_24MHz	14
+#define INCPERIOD_24MHz		3
+
 /* Another drawback of scaling the incvalue by a large factor is the
  * 64-bit SYSTIM register overflows more quickly.  This is dealt with
  * by simply reading the clock before it overflows.
@@ -497,8 +505,8 @@ s32 e1000e_get_base_timinca(struct e1000_adapter *adapter, u32 *timinca);
  * 25MHz	46-bit	2^46 / 10^9 / 3600 = 19.55 hours
  */
 #define E1000_SYSTIM_OVERFLOW_PERIOD	(HZ * 60 * 60 * 4)
-#define E1000_MAX_82574_SYSTIM_REREADS 50
-#define E1000_82574_SYSTIM_EPSILON (1ULL << 35ULL)
+#define E1000_MAX_82574_SYSTIM_REREADS	50
+#define E1000_82574_SYSTIM_EPSILON	(1ULL << 35ULL)
 #endif /* HAVE_HW_TIME_STAMP */
 
 /* hardware capability, feature, and workaround flags */
@@ -600,8 +608,7 @@ extern void e1000e_free_rx_resources(struct e1000_ring *ring);
 extern void e1000e_free_tx_resources(struct e1000_ring *ring);
 #ifdef HAVE_NDO_GET_STATS64
 extern struct rtnl_link_stats64 *e1000e_get_stats64(struct net_device *netdev,
-						    struct rtnl_link_stats64
-						    *stats);
+					     struct rtnl_link_stats64 *stats);
 #else /* HAVE_NDO_GET_STATS64 */
 extern void e1000e_update_stats(struct e1000_adapter *adapter);
 #endif /* HAVE_NDO_GET_STATS64 */
@@ -624,6 +631,7 @@ extern const struct e1000_info e1000_ich10_info;
 extern const struct e1000_info e1000_pch_info;
 extern const struct e1000_info e1000_pch2_info;
 extern const struct e1000_info e1000_pch_lpt_info;
+extern const struct e1000_info e1000_pch_spt_info;
 extern const struct e1000_info e1000_es2_info;
 
 #ifdef HAVE_PTP_1588_CLOCK
@@ -742,7 +750,6 @@ static inline void __ew32(struct e1000_hw *hw, unsigned long reg, u32 val)
 
 #define E1000_READ_REG_ARRAY(a, reg, offset) \
 (readl((u8*)((a)->hw_addr) + reg + ((offset) << 2)))
-
 
 #ifdef	__APPLE__
 extern IOLock* nvm_mutex;

@@ -1,6 +1,6 @@
 /*
  * Intel PRO/1000 Linux driver
- * Copyright(c) 1999 - 2014 Intel Corporation.
+ * Copyright(c) 1999 - 2015 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -88,8 +88,10 @@ struct e1000_hw;
 #define E1000_DEV_ID_PCH_I218_V2		0x15A1
 #define E1000_DEV_ID_PCH_I218_LM3		0x15A2	/* Wildcat Point PCH */
 #define E1000_DEV_ID_PCH_I218_V3		0x15A3	/* Wildcat Point PCH */
-#define E1000_DEV_ID_PCH_SPT_I219_LM	0x156F	/* Sunrise Point PCH */
+#define E1000_DEV_ID_PCH_SPT_I219_LM		0x156F	/* Sunrise Point PCH */
 #define E1000_DEV_ID_PCH_SPT_I219_V		0x1570	/* Sunrise Point PCH */
+#define E1000_DEV_ID_PCH_SPT_I219_LM2		0x15B7	/* Sunrise Point-H PCH */
+#define E1000_DEV_ID_PCH_SPT_I219_V2		0x15B8	/* Sunrise Point-H PCH */
 
 #define E1000_REVISION_4	4
 
